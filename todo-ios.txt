@@ -1,0 +1,154 @@
+* This is AI generated and has no significant thought put into it yet. Feel free to modify.*
+
+# Danbot iOS VoIP App – Detailed Implementation Plan (LiveKit, Data-Only, Bluetooth Friendly)
+
+## 1. Goals & Guardrails
+- Build a **personal-use** iOS client that joins/leaves a LiveKit room representing the active ConversationRelay call, streaming audio entirely over data.
+- UI remains minimal: a single-screen SwiftUI layout with status text plus **Call**/**Hang Up** buttons; expose route selection & debug telemetry via secondary sheets only if required.
+- Reuse the existing backend ConversationRelay + CallState flows; iOS client must cooperate with the Twilio POTS bridge but never invoke Twilio Programmable Voice APIs directly.
+- Favor native audio routing so Bluetooth headsets / car kits Just Work™ (CallKit + AVAudioSession categories, media controls).
+- Track precise dependency versions and doc links to simplify long-term maintenance.
+
+## 2. Research Snapshot (2025-09-30)
+- LiveKit iOS Swift Package latest release = `2.8.1` (see <https://raw.githubusercontent.com/livekit/client-sdk-ios/main/CHANGELOG.md> or run `swift package show-dependencies --format json | jq '.dependencies[] | select(.identity=="LiveKit")'`).
+- LiveKit server Docker stable tag still `v1.9.1` (`curl -s https://hub.docker.com/v2/repositories/livekit/livekit-server/tags?page_size=20 | jq -r '.results[0].name'`).
+- `livekit` / `livekit-api` Python wheels remain `0.6.0` (confirm via `pip index versions livekit`).
+- Apple CallKit + AVAudioSession routing doc (latest, iOS 18): <https://developer.apple.com/documentation/callkit> and <https://developer.apple.com/documentation/avfaudio/avaudiosession> — ensure category `.playAndRecord`, mode `.voiceChat`, preferred IO buffer duration `0.02` for 50 fps audio frames.
+
+## 3. Context: Existing Backend Flow (Repo Review)
+1. `app/api/twilio.py` responds with ConversationRelay TwiML. The LiveKit bridge must not disrupt webhook semantics.
+2. `app/api/websocket.py::websocket_endpoint` manages PCM ingress/egress for the Twilio side; LiveKit bridge should inject audio into the same queues to stay interoperable.
+3. `app/call_state.py` holds `CallSession`; reuse `CallSession.bridge_context` (new dict) for LiveKit metadata and expose status to the UI if needed.
+4. Audio synthesis helpers (`app/audio.py`, `app/chat.py::stream_response`) assume mono 16 kHz PCM; iOS client and bridge must send/receive the same.
+5. Concurrency guard `agent_is_active` prevents double-booking. The LiveKit bridge should toggle this flag exactly once per call lifecycle.
+
+## 4. Host Environment Setup (Windows + Remote macOS)
+1. **Obtain macOS**
+   - iOS development requires macOS 14+ with Xcode 16 (release 2024-09). Options:
+     - Rent a managed macOS cloud VM (e.g. MacStadium, AWS EC2 Mac, or CodeMagic virtual Mac).
+     - Purchase/refurbish a Mac mini and expose it via Remote Desktop / Tailscale.
+   - Ensure at least 200 GB free disk for Xcode + simulators.
+2. **Install Xcode 16.0 (or latest patch)**
+   - Download from the Mac App Store or <https://developer.apple.com/download/all/>.
+   - After installation, accept the license: `sudo xcodebuild -license`.
+   - Install command-line tools: `xcode-select --install` (or `sudo xcode-select -switch /Applications/Xcode.app/Contents/Developer`).
+   - Validate: `xcodebuild -version` → should output `Xcode 16.0` (or newer) and `Build version 16A...`.
+3. **Swift Toolchain**
+   - Xcode bundles Swift 6; confirm with `swift --version`.
+   - Homebrew (optional) for utilities: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`.
+4. **VS Code Remote Workflow**
+   - On Windows, install VS Code + Remote Development extension pack.
+   - Configure SSH to the Mac (`ssh-keygen` → copy `~/.ssh/id_rsa.pub` to `~/.ssh/authorized_keys` on Mac).
+   - In VS Code, use `Remote-SSH: Connect to Host...` targeting the Mac to edit the project.
+   - Install VS Code extensions on the Mac host: *Swift*, *Xcode*, *SourceKit-LSP*, *Swift Format*.
+5. **Device Provisioning**
+   - Enroll in Apple Developer Program (Individual) to deploy to physical iPhone.
+   - In Xcode, add Apple ID → create a personal team provisioning profile.
+   - Enable developer mode on the iPhone (Settings → Privacy & Security → Developer Mode).
+   - Trust the Mac when connecting via USB (or use wireless debugging via Xcode’s Devices window).
+
+## 5. Backend Work Required for LiveKit Interop
+*(If not already completed for Android, these tasks must be shared across clients.)*
+
+### 5.1 LiveKit Service
+- Extend `docker-compose.yaml` with `livekit` service (image `livekit/livekit-server:v1.9.1`) exposing TCP 7880 + UDP 50000-50100.
+- Document TURN configuration for NAT-ed clients; consider enabling `--turn.external-urls turn:turn.example.com:3478?transport=udp` for reliability.
+
+### 5.2 Python Dependencies
+- Add to `pyproject.toml` and lockfile: `livekit = "^0.6.0"`, `livekit-api = "^0.6.0"`, `aiohttp = "^3.12"`.
+- Update `README.md` with install notes: `uv pip install livekit livekit-api aiohttp`.
+
+### 5.3 Token Minting API
+- Implement `/api/livekit/token` FastAPI route returning JWT minted via `livekit.api.AccessToken` with room grants (`room_join`, `can_publish`, `can_subscribe`).
+- Guard the endpoint with same token/bearer verification as Twilio webhooks (`require_token_guard`).
+- Config keys in `.env`: `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_HOST` (e.g. `https://livekit.internal:7880`).
+
+### 5.4 Bridge Worker
+- Create `app/livekit/bridge.py` to connect to LiveKit using `livekit.rtc.Room` and mediate PCM frames:
+  - Publish microphone audio from the iOS client via REST/WebSocket feed into `rtc.AudioSource(sample_rate=16000, num_channels=1)`.
+  - Subscribe to agent audio using `rtc.AudioStream` and push frames back into `CallSession.tts_audio_queue` after `remix_and_resample(16000, 1)`.
+  - Emit lifecycle callbacks for CallState and handle disconnect/hangup parity with ConversationRelay.
+- Provide integration test harness spinning up ephemeral LiveKit container; validate round-trip frames.
+
+### 5.5 Documentation
+- Update `README.md`, `config.example.yaml`, and `todo-oss.txt` with LiveKit config, port ranges, TURN requirements, and the new token route.
+
+## 6. iOS App Architecture & Libraries
+### 6.1 Project Layout
+- Single Xcode project `DanbotVoice.xcodeproj` targeting iOS 16+ (min iOS 16 keeps Swift Concurrency stable while covering older devices).
+- Swift Package Manager dependencies:
+  ```swift
+  .package(url: "https://github.com/livekit/client-sdk-ios.git", from: "2.8.1"),
+  .package(url: "https://github.com/pointfreeco/swift-composable-architecture.git", from: "1.13.3"), // optional for state mgmt
+  .package(url: "https://github.com/kean/Nuke", from: "12.5.0") // only if avatar images required
+  ```
+- Targets: `DanbotVoice` (app) + `DanbotVoiceTests` (unit) + `DanbotVoiceUITests`.
+
+### 6.2 Core Components
+- `LiveKitService`: wraps `LiveKit.Room` and `AudioHandler`, exposes async functions `connect(token:)`, `disconnect()`, `publishMicrophone(samples:)`, `onRemoteAudioFrame`.
+- `TokenClient`: uses `URLSession` + `JSONDecoder` to POST to `/api/livekit/token` with shared secret.
+- `CallCoordinator`: `@Observable` view model managing `CallState` enum (Idle → RequestingToken → Connecting → InCall → Ending → Error).
+- `BluetoothRouteManager`: integrates `CallKit`, `AVAudioSession` route change notifications, and optional `AVRoutePickerView` bridging for UI.
+- `CallService`: background-friendly `ObservableObject` bridging to `CallKit` for system-level controls and headphone button support.
+
+### 6.3 SwiftUI UX
+- Primary view: `CallScreen` with status text, `Button("Call")`, `Button("Hang Up")`, plus optional route button (system-provided `Menu` showing available devices).
+- Use `.animation(.easeInOut, value: state)` for state transitions; keep layout accessible with `DynamicTypeSize` support.
+
+### 6.4 Call Lifecycle
+1. **Call** tapped:
+   - Validate backend availability (ping `/health` or rely on `TokenClient`).
+   - Fetch LiveKit token (`TokenRequest(identity: uuid, room: call_sid)`).
+   - Activate CallKit transaction: create `CXStartCallAction`, configure `CXProvider` with `supportsVideo = false`, `supportedHandleTypes = [.generic]`.
+   - Upon backend confirmation, call `LiveKitService.connect(url: config.livekitHost, token: token)`.
+2. **Connecting → InCall**
+   - On `RoomDelegate` `didUpdate connectionState == .connected`, set AVAudioSession category `.playAndRecord`, mode `.voiceChat`, `setPreferredSampleRate(16000)`, `setPreferredIOBufferDuration(0.02)`.
+   - Publish microphone track via `room.localParticipant.setMicrophone(enabled: true)` (LiveKit iOS handles hardware capture) or custom `AudioSource` if bridging PCM manually.
+   - Subscribe to remote audio tracks; convert frames to PCM 16 kHz before forwarding to backend if necessary.
+3. **Hang Up**
+   - Trigger `CXEndCallAction`, call `LiveKitService.disconnect()`, inform backend to tear down ConversationRelay (reuse existing REST hook or Twilio `call_sid` end event).
+   - Release CallKit audio session (set category to `.soloAmbient` or deactivate session).
+4. **Error Handling**
+   - Map `RoomError`, network failures, or token expiry to user-friendly copy; auto-retry token if `LiveKitError.tokenInvalid`.
+
+### 6.5 Audio Capture & Routing Notes
+- Prefer LiveKit’s built-in `AudioHandler` to manage microphone capture; set `room.audioHandler.preferredAudioCodec = .opus` and `preferredAudioQuality = .speech`.
+- For Bluetooth toggles, rely on `CallKit` + `AVAudioSessionPortOverride`. Provide quick actions for `.bluetoothA2DP` vs `.bluetoothLE`.
+- Handle route change notifications: observe `AVAudioSession.routeChangeNotification`, update `BluetoothRouteManager.availableRoutes`.
+- Support headset button events via `MPRemoteCommandCenter.shared().answerCallCommand` / `endCallCommand` tied to `CXProvider` actions.
+
+### 6.6 Background & Interruptions
+- Enable `Audio`, `Voice over IP` background modes in Xcode Signing & Capabilities.
+- Register `CXProvider` to keep call UI visible during lock screen.
+- Respond to interruptions (`AVAudioSessionInterruptionNotification`) by muting microphone and resuming when interruption ends.
+
+## 7. Networking & Security
+- Store backend base URL + shared secret in `Configuration.plist`; never hardcode secrets in source. Load via environment-specific `.xcconfig` (Debug vs Release).
+- Pin TLS certificates if hosting LiveKit internally (evaluate `TrustKit` or custom `SecTrustEvaluateWithError`).
+- Use `NWPathMonitor` to surface network availability status pre-call.
+
+## 8. Testing Strategy
+1. **Unit Tests**
+   - Mock `TokenClient` to ensure `CallCoordinator` state transitions behave on success/failure.
+   - Use LiveKit’s `MockAudioSource` to validate PCM forwarding.
+2. **Integration Tests**
+   - Launch local LiveKit server via Docker on the Mac, run simulator scenario verifying connection and remote audio playback (`xcrun simctl`).
+   - End-to-end dry run: start ConversationRelay call, bridge via LiveKit, join from simulator, confirm agent audio arrives.
+3. **Bluetooth Regression**
+   - Pair AirPods / BT headset, verify route toggling, microphone switching, and hardware buttons.
+   - Test CarPlay scenario using Apple’s CarPlay simulator (`Xcode → Open Developer Tool → CarPlay Simulator`).
+4. **CallKit Compliance**
+   - Validate push notifications not required (app is pull-based). Ensure CallKit UI appears, `CXProvider` actions respond.
+
+## 9. Build, Distribution, & Deployment
+- Development builds: `xcodebuild -scheme DanbotVoice -destination 'platform=iOS Simulator,name=iPhone 16'`.
+- Physical install: plug iPhone, select personal team, press Run. For wireless install, enable `Connect via network` in Devices window.
+- Optional TestFlight: archive via `Product → Archive`, upload with `xcodebuild -exportArchive` using App Store Connect credentials (only if sharing builds with trusted testers).
+- Automate builds with `fastlane gym` or GitHub Actions macOS runner once stable.
+
+## 10. Maintenance & Follow-Up Tasks
+- Monitor LiveKit release notes (subscribe to GitHub releases) and schedule quarterly SDK updates.
+- Document known issues (latency, bridging edge cases) in repo `docs/livekit-ios.md`.
+- Evaluate push-to-talk UI or noise suppression toggles if future demand arises.
+- Coordinate backend scaling (TURN, LiveKit SFU cluster) before increasing concurrency.
+

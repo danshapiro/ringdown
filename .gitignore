@@ -1,0 +1,41 @@
+# Byte-code, virtualenvs and secrets
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+config.yaml
+secrets/
+venv/
+.venv/
+.venv*/
+.pytest_cache/
+logs/
+*.sqlite3
+*.db
+
+# Docker & runtime artifacts
+*.log
+*.mp3
+sounds/
+tests/live_test_file.mp3
+
+# macOS cruft
+.DS_Store
+
+# VS Code / PyCharm
+.vscode/
+.idea/
+
+# Python Build Artifacts
+*.egg-info/
+dist/
+build/
+temp*
+
+# Local development leftovers
+.keys.*
+.keys/
+.data/
+.claude/
+.venv-wsl/

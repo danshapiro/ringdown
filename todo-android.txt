@@ -1,0 +1,347 @@
+* This is AI generated and has no significant thought put into it yet. Feel free to modify.*
+
+# Danbot Android VoIP App – Updated Implementation Plan (Data-Only w/ Bluetooth)
+
+## 1. Goals & Guardrails
+- Personal-use Android client that starts/stops a **data-only** full-duplex session against the existing Ringdown backend.
+- UI remains minimal: status text + **Call** / **Hang Up** buttons; any extra chrome (route picker, timers) lives in secondary surfaces.
+- Must interoperate with the Twilio ConversationRelay pipeline on the server while avoiding Programmable Voice in the Android build.
+- Bluetooth headsets / car kits must work through the standard Android audio stack, including headset button events.
+- Prefer stable, well-documented APIs so maintenance is low; track the exact versions verified below.
+
+## 2. Research Snapshot (2025-09-30)
+- LiveKit Android client SDK latest = `2.20.2` (`curl https://dl.google.com/dl/android/maven2/androidx/compose/compose-bom/maven-metadata.xml`, `curl https://repo1.maven.org/maven2/io/livekit/livekit-android/maven-metadata.xml`).
+- LiveKit server Docker tags show `v1.9.1` as current stable (`curl https://hub.docker.com/v2/repositories/livekit/livekit-server/tags?page_size=20 | jq '.results[].name'`).
+- Python packages: `livekit==0.6.0` (RTC server SDK) and `livekit-api==0.6.0` (AccessToken helpers) install cleanly via `pip` and expose `rtc.Room`, `rtc.AudioStream`, `api.AccessToken`, etc.
+- Twilio ConversationRelay flow already implemented under `app/api/twilio.py` and `app/api/websocket.py`; keep webhook semantics intact when bridging.
+
+## 3. Understand the Existing Backend Flow
+1. `app/api/twilio.py` issues TwiML `<Connect><ConversationRelay/></Connect>`; voice ingress hits `/api/websocket.py::websocket_endpoint` where media/text frames arrive.
+2. `app/call_state.py` stores the active `CallSession` tuple. Reuse this data (agent routing, synthesis voices, call SID) when injecting LiveKit audio.
+3. Audio out to the agent flows through `app/audio.py` helpers (`apply_prosody`, `merge_prosody`) and the async generator in `app/chat.py::stream_response`.
+4. ConversationRelay expects mono 16 kHz PCM buffers and call control events. The LiveKit bridge must present equivalent buffers to avoid regressions in `CallSession` consumers.
+5. Existing concurrency guard (`agent_is_active`) prevents double-booking; LiveKit bridge should respect the same agent flag.
+
+## 4. Windows + VS Code Environment Setup
+1. **Toolchain**
+   - Install Android Studio Ladybug+ (provides SDK Manager & emulators) from <https://developer.android.com/studio>.
+   - Use SDK Manager to grab:
+     - Android 15 (API 35) Platform + Google Play system image.
+     - Build-tools `35.0.0`, Platform-Tools, Emulator, and **Command-line Tools (latest)**.
+   - Install Eclipse Temurin JDK 21 (LTS) and set JAVA_HOME; Android Gradle Plugin 8.7.x requires 17+, we standardise on 21.
+   - (Optional) Install the Android NDK side-by-side if we need the LiveKit WebRTC native libs to rebuild; not required for standard consumption.
+2. **VS Code**
+   - Extensions: *Kotlin*, *Android*, *Gradle for Java*, *Debugger for Java*, *XML*, *YAML*.
+   - `settings.json` sample:
+     ```json
+     {
+       "java.configuration.runtimes": [
+         {
+           "name": "JavaSE-21",
+           "path": "C:/Program Files/Eclipse Adoptium/jdk-21",
+           "default": true
+         }
+       ]
+     }
+     ```
+   - Generate the project in Android Studio (`Empty Compose Activity`, package `com.danbot.ringdown`, minSdk 26), then open the folder in VS Code for editing.
+3. **Device Prep**
+   - Enable Developer Options + USB debugging on the phone.
+   - Install Google USB driver via SDK Manager (if using Pixel) and trust the PC when prompted.
+   - For Wi-Fi ADB, pair from Android Studio (**Pair using QR code**) then connect via `adb connect <ip>:37099`.
+
+## 5. Backend Tasks to Support LiveKit
+### 5.1 Compose a LiveKit service
+- Extend `docker-compose.yaml` with:
+  ```yaml
+  livekit:
+    image: livekit/livekit-server:v1.9.1
+    command: >
+      --bind 0.0.0.0:7880
+      --rtc.port-range 50000-50100
+      --rtc.use-external-ip
+    ports:
+      - "7880:7880"
+      - "50000-50100:50000-50100/udp"
+    env_file:
+      - .env
+    environment:
+      - LIVEKIT_KEYS=${LIVEKIT_API_KEY}:${LIVEKIT_API_SECRET}
+      - LIVEKIT_WEBHOOKS=${LIVEKIT_WEBHOOK_URL:-}
+  ```
+- Document firewall rules (allow UDP 50000-50100) and note that TURN is bundled; for strict NAT consider enabling `--turn`. 
+
+### 5.2 Python dependencies
+- Add to `pyproject.toml` / `uv.lock`:
+  ```toml
+  livekit = "^0.6.0"
+  livekit-api = "^0.6.0"
+  aiohttp = "^3.12"
+  ```
+- `livekit` pulls the FFI bridge; ensure `setuptools<81` while pkg_resources is required (already satisfied in this repo via `uv`).
+
+### 5.3 Token minting endpoint
+- Create `app/api/livekit.py` router:
+  ```python
+  from datetime import timedelta
+  from fastapi import APIRouter, Depends, HTTPException
+  from livekit import api
+
+  router = APIRouter(prefix="/api/livekit", tags=["livekit"])
+
+  @router.post("/token", response_model=TokenResponse)
+  async def issue_token(payload: TokenRequest, guard: Guard = Depends(require_token_guard)):
+      token = (
+          api.AccessToken()
+          .with_identity(payload.identity)
+          .with_name(payload.display_name or payload.identity)
+          .with_ttl(timedelta(minutes=10))
+          .with_grants(
+              api.VideoGrants(
+                  room_join=True,
+                  room=payload.room,
+                  can_publish=True,
+                  can_subscribe=True,
+              )
+          )
+      )
+      return TokenResponse(token=token.to_jwt(), expires_at=int(time.time()) + 600)
+  ```
+- Reuse the existing bearer guard used for Twilio webhook validation (see `app/validators.py`) to avoid exposing token minting publicly.
+- Update `app/main.py` to include the new router, add config wiring (`LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_HOST`).
+
+### 5.4 LiveKit ↔ Twilio bridge worker
+- Create `app/livekit/bridge.py` with a class roughly:
+  ```python
+  from livekit import rtc
+  class LiveKitBridge:
+      def __init__(self, call_sid: str, room_name: str, identity: str):
+          self._room = rtc.Room()
+          self._call_sid = call_sid
+          self._room_name = room_name
+          self._identity = identity
+
+      async def start(self, url: str, token: str):
+          await self._room.connect(url, token, rtc.RoomOptions())
+          self._room.on("track_subscribed", self._on_track_subscribed)
+          self._room.on("disconnected", self._on_disconnected)
+          await self._room.local_participant.publish_track(
+              self._create_mic_track(),
+              TrackPublishOptions(name="danbot-mic", source=TrackSource.SOURCE_MICROPHONE)
+          )
+  ```
+- **Publishing microphone audio to the agent**
+  - Instantiate `rtc.AudioSource(sample_rate=16000, num_channels=1)` and `rtc.LocalAudioTrack.create_audio_track("danbot-mic", source)`.
+  - Feed PCM frames captured from the Android client via REST control plane (`/api/livekit/control` or reuse the WebSocket) into `AudioSource.capture_frame(AudioFrame(...))`.
+  - Use the existing `CallSession` ingestion helper (e.g. `app/api/websocket.py::safe_send_json`) to keep Twilio-compatible transforms.
+- **Receiving synthesized agent audio**
+  - When `track_subscribed` fires for a remote audio track, build `rtc.AudioStream(remote_track)`.
+  - Async-iterate the stream and push frames into the existing TTS output queue: convert to PCM 16k mono using `frame.remix_and_resample(16000, 1)` and pass into `CallSession` so `websocket_endpoint` can send Twilio `play` frames.
+- **Lifecycle**
+  - Align with `CallState`: on `start`, call `mark_agent_active`, on cleanup call `release_agent` and hang up the Twilio call if the bridge failed.
+  - Surface status events through a lightweight channel (e.g. set `CallSession[status_dict]["livekit"] = {...}`) so UI debugging is easier.
+- **Testing**
+  - Unit test token issuance with `TokenVerifier` (`api.TokenVerifier().verify(token)`).
+  - Integration test LiveKit bridge with the `livekit-server` Docker image in CI (spin up ephemeral server and ensure a round-trip PCM frame reaches the in-memory CallSession queue).
+
+### 5.5 Documentation & config
+- Update `README.md` + `config.example.yaml` with LiveKit settings and mention the new token route.
+- Record the port mapping + NAT requirements in `todo-oss.txt` for infra parity.
+
+## 6. Android App Architecture
+### 6.1 Modules & layers
+- Single `app/` module using Jetpack Compose.
+- Core components:
+  - `TokenRepository` (OkHttp + Kotlinx Serialization) → POST `/api/livekit/token` with shared secret.
+  - `LiveKitClient` (wraps `io.livekit.android.Room`, `AudioHandler`, `CoroutineScope`).
+  - `CallCoordinator` (ViewModel + `MutableStateFlow<CallUiState>` describing Idle/Requesting/Connecting/InCall/Ending/Error).
+  - `BluetoothRouteStore` (adapts `room.audioSwitchHandler?.availableAudioDevices` into Compose state).
+  - `CallService` (foreground `Service`) ensures process priority + persistent notification.
+
+### 6.2 Call state machine
+| State | Entry Action | Exit Trigger |
+| --- | --- | --- |
+| `Idle` | Buttons enabled (`Call` active). | User taps Call.
+| `RequestingToken` | Disable Call, show spinner. | Token success → `Connecting`; failure → `Error`.
+| `Connecting` | Invoke `room.prepareConnection()` then `room.connect(...)` with `ConnectOptions(audio = true)`. | `room.state == CONNECTED` → `InCall`; failure → `Error`.
+| `InCall` | Start `CallService`, begin duration ticker, register headset button intents. | User taps Hang Up or `room.state == DISCONNECTED`.
+| `Ending` | Call `room.disconnect()`, stop service, clear notification. | When `room.state == DISCONNECTED`.
+| `Error` | Surface message + retry affordance. | User taps Retry → `RequestingToken`.
+
+### 6.3 UI skeleton (Compose)
+```kotlin
+@Composable
+fun CallScreen(state: CallUiState, onCall: () -> Unit, onHangup: () -> Unit) {
+    val buttonModifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+    Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Text(text = state.statusMessage, style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(32.dp))
+        Button(
+            modifier = buttonModifier,
+            enabled = state is CallUiState.Idle || state is CallUiState.Error,
+            onClick = onCall,
+        ) { Text("Call") }
+        OutlinedButton(
+            modifier = buttonModifier,
+            enabled = state is CallUiState.InCall || state is CallUiState.Ending,
+            onClick = onHangup,
+        ) { Text("Hang Up") }
+        state.audioRoute?.let { Text("Route: ${it.label}") }
+        state.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    }
+}
+```
+
+## 7. Gradle Configuration (verified versions)
+```kotlin
+plugins {
+    id("com.android.application") version "8.7.2"
+    id("org.jetbrains.kotlin.android") version "2.0.21"
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.0.21"
+}
+
+android {
+    namespace = "com.danbot.ringdown"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.danbot.ringdown"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = "0.1.0"
+
+        buildConfigField("String", "BACKEND_BASE_URL", '"https://<ngrok-subdomain>.ngrok.app"')
+        buildConfigField("String", "LIVEKIT_URL", '"wss://<livekit-host>:7880"')
+        buildConfigField("String", "TOKEN_AUTH_KEY", '"<shared-secret>"')
+        buildConfigField("String", "ROOM_NAME", '"ringdown"')
+        buildConfigField("String", "PARTICIPANT_IDENTITY", '"danbot-android"')
+    }
+
+    buildFeatures { compose = true }
+    composeOptions { kotlinCompilerExtensionVersion = "1.5.15" }
+    packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+}
+
+dependencies {
+    val composeBom = platform("androidx.compose:compose-bom:2025.09.01")
+    implementation(composeBom)
+    androidTestImplementation(composeBom)
+
+    implementation("io.livekit:livekit-android:2.20.2")
+    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.media3:media3-session:1.5.1")
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+}
+```
+- `media3-session` provides `MediaSessionService` + headset action helpers while staying modern.
+- LiveKit SDK bundles the WebRTC native libs; no need to add `org.webrtc` manually.
+
+## 8. Android Implementation Steps
+1. **Permission gate**
+   - Request `RECORD_AUDIO`, `POST_NOTIFICATIONS` (API 33+), `BLUETOOTH_CONNECT` & `BLUETOOTH_SCAN` (API 31+). Wrap in a small utility that surfaces `PermissionsState` to the ViewModel.
+2. **Token call**
+   - `TokenRepository.fetchToken()` uses OkHttp: POST JSON `{ identity, room }` with `Authorization: Bearer <TOKEN_AUTH_KEY>`.
+   - Retry with exponential backoff (e.g. `1s, 2s, 4s`, max 3 tries) using `repeatWhen` on a coroutine flow.
+3. **LiveKit session**
+   - `LiveKitClient.connect()`:
+     ```kotlin
+     val room = Room(
+         context = appContext,
+         options = RoomOptions(
+             audioTrackCaptureDefaults = LocalAudioTrackOptions(
+                 noiseSuppression = true,
+                 echoCancellation = true,
+                 autoGainControl = true,
+                 highPassFilter = true,
+             )
+         )
+     )
+     room.audioSwitchHandler?.start()
+     room.addListener(object : Room.Listener {
+         override fun onConnectionStateChanged(state: Room.State) {
+             stateFlow.value = CallUiState.fromRoom(state)
+         }
+         override fun onTrackSubscribed(
+             track: Track,
+             publication: RemoteTrackPublication,
+             participant: RemoteParticipant,
+         ) {
+             if (track is RemoteAudioTrack) {
+                 liveKitAudioPlayer.attach(track)
+             }
+         }
+     })
+     room.prepareConnection(liveKitUrl, token)
+     room.connect(liveKitUrl, token, ConnectOptions(audio = true))
+     room.localParticipant?.setMicrophoneEnabled(true)
+     ```
+   - `liveKitAudioPlayer` simply holds onto the remote audio track; the SDK handles playout automatically once subscribed.
+4. **Bluetooth & media controls**
+   - Instantiate `MediaSessionCompat` in `CallService`:
+     ```kotlin
+     mediaSession = MediaSessionCompat(this, "CallSession").apply {
+         setCallback(object : MediaSessionCompat.Callback() {
+             override fun onPlay() = viewModel.toggleCall()
+             override fun onPause() = viewModel.toggleCall()
+         })
+         setPlaybackState(
+             PlaybackStateCompat.Builder()
+                 .setActions(
+                     PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE
+                 )
+                 .build()
+         )
+         isActive = true
+     }
+     ```
+   - Register a `BroadcastReceiver` for `AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED` to observe headset SCO transitions and mirror them in UI state.
+5. **Foreground notification**
+   - Use `NotificationCompat.Builder` with channel `call-session`. Add actions for Hang Up (pending intent to `CallService.ACTION_HANGUP`).
+6. **Error handling**
+   - Map LiveKit exceptions to friendly messages (e.g. `ConnectException` → network issue). Provide a `Retry` button that re-enters `RequestingToken`.
+7. **Logging**
+   - Integrate [Timber](https://github.com/JakeWharton/timber) (debug tree only) for structured logging.
+   - On-call toggles log session IDs + audio device events for debugging.
+
+## 9. Build, Install & Test Checklist
+1. **Assemble & install**
+   ```powershell
+   cd android
+   .\gradlew.bat clean assembleDebug
+   .\gradlew.bat installDebug
+   ```
+2. **Smoke test**
+   - `docker compose up livekit backend services`.
+   - Expose FastAPI over ngrok when off-LAN: `ngrok http 8000`.
+   - Launch app, grant permissions, tap **Call**, verify state flow transitions to `InCall`, observe Twilio logs for matching `CallSession` entries.
+3. **Bluetooth scenarios**
+   - Pair headset, start call, confirm LiveKit switches route automatically (`audioSwitchHandler?.availableAudioDevices`).
+   - Press headset hook → `MediaSessionCompat.Callback.onPlay` should toggle hang up.
+4. **Failure drills**
+   - Stop LiveKit container → ensure ViewModel surfaces reconnect attempts and eventual error.
+   - Expire token (set TTL to 30s) → confirm the app re-requests a token and rejoins.
+5. **Regression checks**
+   - Unit tests: `./gradlew.bat test`.
+   - Instrumented: `./gradlew.bat connectedDebugAndroidTest` on device.
+   - Backend: `pytest tests/livekit` (new suite) + `pytest tests/twilio` to confirm PSTN flow unaffected.
+
+## 10. Distribution & Maintenance
+- Keep debug-only distribution; if signing becomes necessary, generate a keystore and use `./gradlew assembleRelease` with local signing configs.
+- When updating LiveKit SDK:
+  1. Check `maven-metadata.xml` for new `io.livekit:livekit-android` releases.
+  2. Review the LiveKit release notes for API breakages (especially audio handler changes).
+  3. Run end-to-end smoke test with Bluetooth hardware.
+- Monitor the pkg_resources deprecation warning from the Python RTC SDK; pin `setuptools<81` until LiveKit removes the dependency.

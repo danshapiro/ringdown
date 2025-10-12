@@ -1,0 +1,71 @@
+[project]
+name = "ringdown"
+version = "0.2.0"
+description = "Twilio ConversationRelay → configurable LLM voice agents"
+readme = "README.md"
+requires-python = ">=3.12"
+
+# Direct runtime dependencies
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.7.1",
+    "python-dotenv>=1.0.1",
+    "sqlmodel>=0.0.16",
+    "websockets>=12.0",
+    "prometheus-client>=0.20.0",
+    "PyYAML>=6.0.1",
+    "twilio>=9.0.3",
+    "litellm>=1.67.0",
+    "httpx[http2]>=0.27.0",
+    "pydantic-settings>=2.2.1",
+    "tenacity>=8.2.3",
+    "requests>=2.31.0",
+    "google-auth>=2.0.0",
+    "google-api-python-client>=2.0.0",
+    "google-cloud-storage>=2.10.0",
+    "ratelimit>=2.2.1",
+    "click>=8.0.0",
+    "typing-extensions>=4.11.0",
+    "openai>=1.86.0",
+    "tzdata>=2024.1",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# Optional / development dependencies
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "pydub>=0.25.1",
+    "ruff>=0.4.0",
+]
+
+# Tell setuptools to package the FastAPI app package and the shim module (avoid data/ directory)
+[tool.setuptools]
+py-modules = ["log_love"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    'ignore:datetime\.datetime\.utcnow\(\) is deprecated:DeprecationWarning',
+]
+markers = [
+    "integration: tests that contact third-party services",
+    "live: end-to-end Twilio/Tavily exercises",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E203"]
+
+[tool.ruff.format]
+quote-style = "double"

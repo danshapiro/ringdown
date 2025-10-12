@@ -1,0 +1,158 @@
+# Example configuration for Ringdown, an open-source voice automation platform.
+#
+# Copy this file to `config.yaml` and customise the placeholder values to match
+# your deployment.  The runtime loader also honours the RINGDOWN_CONFIG_PATH
+# environment variable so CI can point at alternate configs without copying.
+#
+# Every field includes inline comments describing the purpose and expected
+# values so contributors do not need to inspect the code before editing.
+
+# ---------------------------------------------------------------------------
+# Global defaults inherited by every agent unless overridden
+# ---------------------------------------------------------------------------
+defaults:
+  timezone: America/Los_Angeles     # IANA timezone used for scheduling output.
+  model: gpt-5                      # Primary LLM model identifier.
+  temperature: 1.0                  # Creativity / randomness of LLM calls.
+  max_tokens: 20000                 # Maximum output tokens for the primary model.
+  language: en-US                   # Locale code for speech synthesis.
+  bot_name: ringdown                # Canonical product name used in prompts/logs.
+  default_email: "team@example.com"  # Fallback recipient for SendEmail tool.
+  email_greenlist_enforced: true    # Whether outgoing email must match allow list.
+  admin_emails:                     # Regex or literal addresses that always pass.
+    - "^[^@]+@example\\.com$"       # Allow your organisation's domain.
+    - "team@example.com"             # Allow a specific distribution list.
+  project_name: "ringdown"          # Human-friendly project label shown in logs.
+  calendar_user_name: "Ringdown Operator"  # Name announced when creating calendar events.
+
+  # Secondary LLM configuration used when primary model fails.
+  backup_model: sonnet
+  backup_temperature: 1.0
+  backup_max_tokens: 20000
+
+  max_history: 40                   # Default conversation history depth per agent.
+
+  voice: en-US-Chirp3-HD-Aoede      # Default Text-to-Speech voice (Google Cloud).
+  tts_provider: Google              # TTS backend provider identifier.
+  max_disconnect_seconds: 600       # Idle timeout before disconnecting callers.
+  welcome_greeting: "Hello! This is Ringdown."  # Greeting on inbound calls.
+
+  # Optional SSML prosody overrides applied to every TTS response.
+  tts_prosody:
+    rate: "100%"                    # Speaking rate; keep at 100% for neutrality.
+
+  # ToolRunner orchestrates audible “thinking” loops during long operations.
+  tool_runner:
+    interval_sec: 2                 # Polling interval between tool status updates.
+    status_messages:                # Human-friendly messages announced to callers.
+      TavilySearch: "Searching for information..."
+      TavilyExtract: "Extracting details..."
+      SendEmail: "Preparing email..."
+      default: "Working on it..."
+    thinking_sounds:                # Filler phrases played when tools take time.
+      default:
+        - "Checking the next step."
+        - "Reviewing the information."
+        - "Almost ready for you."
+
+  # Shared instructions appended before any per-tool prompts.
+  tool_header: |-
+    # Tool Usage
+    - Use TavilySearch for open web research when the caller needs fresh information.
+    - Use TavilyExtract to summarise a specific URL provided by the caller.
+    - Use SendEmail only when the caller explicitly requests an email to be sent.
+    - Use GoogleDoc tools exclusively with documentation that is shared with you.
+
+  tools:                            # Default tool set for every agent.
+    - TavilySearch
+    - TavilyExtract
+    - change_llm
+    - reset
+  max_tool_iterations: 6            # Safeguard for runaway tool loops.
+
+  transcription_provider: Google    # Speech-to-text provider used by Twilio relay.
+  speech_model: telephony           # Recognition model; telephony works for PSTN.
+
+# Debugging aids – keep empty in production.
+debug: ""                           # Example: "dtmf speaker-events" to trace digits.
+
+# Terms passed to STT provider to bias recognition for organisation-specific words.
+hints: "Ringdown"  # Comma-separated keywords.
+
+# Global toggle allowing agents to emit SSML in responses.
+allow_ssml: true
+
+# ---------------------------------------------------------------------------
+# Agent catalog. Each agent inherits defaults unless overridden explicitly.
+# Define as many named agents as you need; phone numbers must be unique.
+# ---------------------------------------------------------------------------
+agents:
+  unknown-caller:
+    bot_name: ringdown
+    prompt: |-
+      You are Ringdown, a phone concierge. Speak in short sentences suitable for telephone playback.
+      {ToolPrompts}
+    welcome_greeting: "Hello! How can I help you today?"
+    max_history: 40
+    tools:
+      - TavilySearch
+
+  ringdown-demo:
+    bot_name: Ringdown
+    phone_numbers:
+      - "+15555550100"              # Replace with your Twilio testing number.
+    continue_conversation: true     # Persist conversations across reconnects.
+    continuation_greeting: "Picking up where we left off."
+    tools:
+      - TavilySearch
+      - TavilyExtract
+      - SendEmail
+      - CreateGoogleDoc
+      - ReadGoogleDoc
+      - AppendGoogleDoc
+      - ListGoogleDocs
+      - change_llm
+      - reset
+    email_greenlist_enforced: true
+    email_greenlist:
+      - "^[^@]+@example\\.com$"
+      - "team@example.com"
+    docs_folder_greenlist:
+      - "Ringdown-default"          # Replace with your shared Drive folder name.
+    prompt: |-
+      # Identity
+      -   You are Ringdown, a configurable voice assistant for operations teams.
+      -   Always execute the caller's instructions precisely and efficiently.
+
+      # Behaviour
+      -   Respond using concise, single-paragraph answers with no markdown.
+      -   Confirm actions using the caller's terminology where possible.
+      -   Ask clarifying questions only when information is ambiguous.
+
+      # Context
+      -   Your timezone is {timezone} and the current UTC time is {time_utc}.
+      -   Use documentation in the approved folders when researching policies.
+
+      {ToolPrompts}
+    welcome_greeting: "Thanks for calling Ringdown."
+    max_disconnect_seconds: 900
+    max_history: 200
+
+  sandbox-agent:
+    bot_name: Sandbox
+    phone_numbers:
+      - "+15555550101"
+    continue_conversation: false
+    docs_folder_greenlist:
+      - "Sandbox"
+    prompt: |-
+      You are Sandbox, a minimal demonstration agent for integration tests.
+      Keep responses short and neutral.
+      {ToolPrompts}
+    welcome_greeting: "Sandbox agent ready."
+    tools:
+      - TavilySearch
+
+# Optional shared Drive folders available to agents when not overridden.
+docs_folder_greenlist_defaults:
+  - "Ringdown-default"

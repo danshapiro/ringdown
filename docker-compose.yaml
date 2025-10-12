@@ -1,0 +1,11 @@
+version: "3.9"
+services:
+  ringdown:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data        # SQLite
+    restart: unless-stopped 
