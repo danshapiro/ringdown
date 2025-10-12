@@ -2,7 +2,7 @@
 """End-to-end voice call test that exercises all major Ringdown tools in a **single**
 Twilio call.
 
-The script re-uses the helper functions from ``tests.live_test_call`` so that we
+The script re-uses the helper functions from ``live_test_call`` so that we
 leverage the existing TTS generation, chained-audio logic, Cloud-Run log
 collection and (optional) LLM-based log evaluation.
 
@@ -36,7 +36,7 @@ project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
 
 # pylint: disable=wrong-import-position
-from tests.live_test_call import (
+from live_test_call import (
     generate_tts_audio,
     make_chained_test_call,
     prepare_log_evaluation_prompt,
@@ -88,7 +88,7 @@ def main(
 
     Environment variables such as TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and
     OPENAI_API_KEY need to be set – identical to requirements for
-    ``tests.live_test_call``.
+    ``live_test_call``.
     """
 
     # ------------------------------------------------------------------

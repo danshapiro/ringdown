@@ -35,10 +35,6 @@ import requests
 import tempfile
 from pydub import AudioSegment
 import json
-from click.testing import CliRunner
-import pytest
-
-pytestmark = pytest.mark.live
 
 try:
     from dotenv import load_dotenv
@@ -49,8 +45,14 @@ except ImportError:  # Gracefully continue if python-dotenv is unavailable
 load_dotenv(override=False)
 
 # Ensure project root is on PYTHONPATH regardless of script location
-project_root = Path(__file__).resolve().parents[1]
+project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root))
+
+# Normalise console encoding so log output with emoji does not crash on Windows.
+for stream_name in ("stdout", "stderr"):
+    stream = getattr(sys, stream_name, None)
+    if stream and hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
 
 # Import utils AFTER ensuring the project root is on sys.path
 from utils.mp3_uploader import upload_mp3_to_twilio as upload_mp3_to_twilio_util  # noqa: E402
@@ -1044,7 +1046,7 @@ def evaluate_logs_with_llm(evaluation_prompt: str, model: str) -> str:
         
     except Exception as e:
         logger.error("Failed to evaluate logs with %s: %s", model, e)
-        return f"❌ Log evaluation failed: {e}"
+        return f"Log evaluation failed: {e}"
 
 
 def create_chained_test_twiml(audio_urls: list[str], pause_seconds: int) -> str:
@@ -1266,19 +1268,19 @@ def main(
                     evaluation_result = evaluate_logs_with_llm(evaluation_prompt, model=log_model)
 
                     print("\n" + "="*80)
-                    print(f"🤖 {log_model.upper()} LOG EVALUATION PROMPT")
+                    print(f"{log_model.upper()} LOG EVALUATION PROMPT")
                     print("="*80)
                     print(evaluation_prompt)
                     print("="*80 + "\n")
                     print("\n" + "="*80)
-                    print(f"🤖 {log_model.upper()} LOG EVALUATION RESULTS")
+                    print(f"{log_model.upper()} LOG EVALUATION RESULTS")
                     print("="*80)
                     print(evaluation_result)
                     print("="*80 + "\n")
                     
                 except Exception as e:
                     logger.error("Log evaluation failed: %s", e)
-                    print(f"\n❌ Log evaluation error: {e}\n")
+                    print(f"\nLog evaluation error: {e}\n")
             elif evaluate_logs:
                 logger.warning("Log evaluation requested but no logs available")
                 
@@ -1311,12 +1313,3 @@ def main(
 
 if __name__ == "__main__":
     main()
-
-
-@pytest.mark.live
-def test_live_call_cli():
-    """Invoke the live call script end-to-end."""
-
-    runner = CliRunner()
-    result = runner.invoke(main, [], catch_exceptions=False)
-    assert result.exit_code == 0, result.output

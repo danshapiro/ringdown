@@ -58,7 +58,6 @@ filterwarnings = [
 ]
 markers = [
     "integration: tests that contact third-party services",
-    "live: end-to-end Twilio/Tavily exercises",
 ]
 
 [tool.ruff]

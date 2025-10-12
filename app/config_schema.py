@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, ConfigDict, ValidationInfo, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 class ToolRunnerConfig(BaseModel):
@@ -83,32 +83,43 @@ class AgentConfig(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    @model_validator(mode="after")
+    @model_validator(mode="before")
     def _validate_phone_numbers(
         cls,
-        values: "AgentConfig" | ValidationInfo,
-    ) -> "AgentConfig" | ValidationInfo:
-        numbers = getattr(values, "phone_numbers", None)
-        if numbers is None and hasattr(values, "data"):
-            data = getattr(values, "data") or {}
-            numbers = data.get("phone_numbers")
-        numbers = numbers or []
+        data: "AgentConfig" | Dict[str, Any] | object,
+    ) -> "AgentConfig" | Dict[str, Any] | object:
+        if isinstance(data, AgentConfig):
+            payload = data.model_dump()
+        elif isinstance(data, dict):
+            payload = data
+        elif hasattr(data, "data"):
+            payload = getattr(data, "data") or {}
+        else:
+            payload = {}
+
+        numbers = payload.get("phone_numbers") or []
         if len(numbers) != len(set(numbers)):
             raise ValueError("Agent phone_numbers must be unique per agent")
-        return values
+        return data
 
-    @model_validator(mode="after")
+    @model_validator(mode="before")
     def _validate_tools(
         cls,
-        values: "AgentConfig" | ValidationInfo,
-    ) -> "AgentConfig" | ValidationInfo:
-        tools = getattr(values, "tools", None)
-        if tools is None and hasattr(values, "data"):
-            data = getattr(values, "data") or {}
-            tools = data.get("tools")
+        data: "AgentConfig" | Dict[str, Any] | object,
+    ) -> "AgentConfig" | Dict[str, Any] | object:
+        if isinstance(data, AgentConfig):
+            payload = data.model_dump()
+        elif isinstance(data, dict):
+            payload = data
+        elif hasattr(data, "data"):
+            payload = getattr(data, "data") or {}
+        else:
+            payload = {}
+
+        tools = payload.get("tools")
         if tools is not None and not all(isinstance(t, str) for t in tools):
             raise TypeError("tools entries must be strings")
-        return values
+        return data
 
 
 class ConfigModel(BaseModel):

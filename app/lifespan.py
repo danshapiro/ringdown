@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC  # type: ignore[attr-defined]
+except ImportError:  # Python < 3.11
+    UTC = timezone.utc
 
 from fastapi import FastAPI
 
