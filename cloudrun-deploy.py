@@ -328,7 +328,7 @@ def _add_secret_version(project_id: str, secret_id: str, payload: bytes) -> None
     """Upload *payload* as a new version for *secret_id*."""
 
     cmd = [
-        "gcloud",
+        _gcloud_executable(),
         "secrets",
         "versions",
         "add",
@@ -346,6 +346,21 @@ def _add_secret_version(project_id: str, secret_id: str, payload: bytes) -> None
     if proc.returncode != 0:
         stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
         raise RuntimeError(f"Failed to upload secret {secret_id}: {stderr.strip()}")
+
+
+def _gcloud_executable() -> str:
+    """Return an invocable gcloud command for the current platform."""
+
+    from shutil import which
+
+    exe = which("gcloud")
+    if exe:
+        return exe
+    if os.name == "nt":
+        exe = which("gcloud.cmd")
+        if exe:
+            return exe
+    return "gcloud"
 
 
 def _apply_secret_plans(
