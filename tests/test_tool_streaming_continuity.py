@@ -136,7 +136,7 @@ async def test_websocket_processes_markers():
     
     # Mock stream with tool execution marker
     async def mock_stream():
-        yield "Searching..."
+        # Tool announcement is now handled by ToolRunner, not yielded as text
         yield {"type": "tool_executing", "tool_count": 1}
         yield " Found results."
     
@@ -151,7 +151,7 @@ async def test_websocket_processes_markers():
     
     # Verify correct processing
     assert len(markers_seen) == 1
-    assert "".join(assistant_full) == "Searching... Found results."
+    assert "".join(assistant_full) == " Found results."
     
     # No marker text should be in the assistant output
     assert "tool_executing" not in "".join(assistant_full) 
