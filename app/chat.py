@@ -625,9 +625,7 @@ async def stream_response(
 
                 logger.info(f"⚙️⚙️⚙️ Tool call requested: {name}({args})")
 
-                status_text = get_tool_status_message(name)
-                if status_text:
-                    yield status_text
+                # Tool announcement is handled by ToolRunner as first thinking event
 
                 def _exec_tool(a: dict[str, Any], _n=name):
                     # Wrapper so lambda captures current name
