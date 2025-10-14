@@ -59,7 +59,7 @@ defaults:
   tool_header: |-
     # Tool Usage
     - Use TavilySearch for open web research when the caller needs fresh information.
-    - Use TavilyExtract to summarise a specific URL provided by the caller.
+    - Use TavilyExtract to get a summary of a specific URL provided by the caller suitable for further research or reading aloud.
     - Use SendEmail only when the caller explicitly requests an email to be sent.
     - Use GoogleDoc tools exclusively with documentation that is shared with you.
 
