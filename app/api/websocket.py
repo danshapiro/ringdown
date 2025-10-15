@@ -71,28 +71,6 @@ async def websocket_endpoint(ws: WebSocket):
                 if data.get("type") == "text":
                     data["preemptible"] = False
                     data["interruptible"] = True
-
-                    # If this is the final chunk, queue the chime BEFORE it so Twilio
-                    # receives the play message first and doesn't discard it in case of
-                    # frame reordering on fast networks.
-                    if data.get("last"):
-                        if not ws.scope.get("chime_sent"):
-                            finished_source = os.getenv(
-                                "SOUND_FINISHED_URL", "/sounds/finished.mp3"
-                            )
-                            await ws.send_json(
-                                {
-                                    "type": "play",
-                                    "source": finished_source,
-                                    "loop": 1,
-                                    "preemptible": True,
-                                    "interruptible": True,
-                                }
-                            )
-                            ws.scope["chime_sent"] = True
-                            logger.info(
-                                "🔔 Finished sound queued → %s (pre-emptive)", finished_source
-                            )
                 await ws.send_json(data)
             except (WebSocketDisconnect, RuntimeError) as e:
                 logger.info("User disconnected while sending message: %s", e)
