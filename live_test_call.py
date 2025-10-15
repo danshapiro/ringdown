@@ -1310,6 +1310,8 @@ def main(
             logger.error("Test call failed: %s", e)
             sys.exit(1)
 
+    click.echo("\n✅ live_test_call finished. When you're ready, run the full regression with:\n   python tests/live_test_all_functions.py\n")
+
 
 if __name__ == "__main__":
     main()
