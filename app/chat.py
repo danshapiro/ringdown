@@ -30,6 +30,15 @@ import os
 _THINKING_SOUND_URL = os.getenv("SOUND_THINKING_URL", "/sounds/thinking.mp3")
 _FINISHED_SOUND_URL = os.getenv("SOUND_FINISHED_URL", "/sounds/finished.mp3")
 
+# Classification of tools for usage limits
+def _classify_tool(name: str) -> str:
+    """Return the declared category ('input' or 'output') for *name*."""
+
+    spec = tf.TOOL_REGISTRY.get(name)
+    if spec and getattr(spec, "category", None) in {"input", "output"}:
+        return spec.category
+    return "input"
+
 
 class ThinkingAudioController:
     """Authoritatively control when the looping thinking sound is active."""
@@ -368,11 +377,38 @@ async def stream_response(
 
         return iterator
 
-    max_tool_loops: int = int(agent.get("max_tool_iterations", 3))
+    legacy_max = agent.get("max_tool_iterations")
+    max_input_tools: int = int(agent.get("max_input_tool_iterations", 6))
+    max_output_tools: int = int(agent.get("max_output_tool_iterations", 4))
+    if legacy_max is not None:
+        try:
+            legacy_max_int = int(legacy_max)
+            max_input_tools = min(max_input_tools, legacy_max_int)
+            max_output_tools = min(max_output_tools, legacy_max_int)
+        except (TypeError, ValueError):
+            pass
+
+    max_tool_loops: int = max_input_tools + max_output_tools
     tool_loops = 0
+    input_tools_used = 0
+    output_tools_used = 0
     tools_disabled = False
 
     while True:
+        if (
+            not tools_disabled
+            and tools
+            and input_tools_used >= max_input_tools
+            and output_tools_used >= max_output_tools
+        ):
+            logger.warning(
+                "All tool usage limits reached (input=%d, output=%d); disabling tools for remainder of turn",
+                max_input_tools,
+                max_output_tools,
+            )
+            tools = []
+            tools_disabled = True
+
         if tool_loops >= max_tool_loops and not tools_disabled and tools:
             # Disable tools to force text reply
             logger.warning("Reached max tool iterations (%d); disabling tools for remainder of turn", max_tool_loops)
@@ -591,6 +627,27 @@ async def stream_response(
 
         if tool_call_parts:
             # Model invoked at least one tool – execute them and iterate again.
+            input_calls = sum(
+                1 for tc in tool_call_parts.values() if _classify_tool(tc.get("function", {}).get("name", "")) == "input"
+            )
+            output_calls = sum(
+                1 for tc in tool_call_parts.values() if _classify_tool(tc.get("function", {}).get("name", "")) == "output"
+            )
+
+            limit_issues: list[str] = []
+            if input_calls and (input_tools_used >= max_input_tools or input_tools_used + input_calls > max_input_tools):
+                limit_issues.append(f"input tool limit ({max_input_tools})")
+            if output_calls and (
+                output_tools_used >= max_output_tools or output_tools_used + output_calls > max_output_tools
+            ):
+                limit_issues.append(f"output tool limit ({max_output_tools})")
+
+            if limit_issues:
+                thinking_audio.stop()
+                logger.warning("Tool usage limits reached: %s", ", ".join(limit_issues))
+                yield f" [System: Reached {' and '.join(limit_issues)}. Unable to complete the request.]"
+                return
+
             if tool_loops >= max_tool_loops:
                 logger.warning("Reached max tool iterations (%d); aborting tool loop", max_tool_loops)
                 thinking_audio.stop()
@@ -598,6 +655,8 @@ async def stream_response(
                 return  # give up
 
             tool_loops += 1
+            input_tools_used += input_calls
+            output_tools_used += output_calls
 
             tcs = [tool_call_parts[i] for i in sorted(tool_call_parts)]
 

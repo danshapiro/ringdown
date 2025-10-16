@@ -241,7 +241,8 @@ class CreateDocArgs(BaseModel):
     name="CreateGoogleDoc",
     description="Create a new Google Doc with optional initial content",
     param_model=CreateDocArgs,
-    async_execution=True  # Changed back to async
+    async_execution=True,  # Changed back to async
+    category="output",
 )
 def create_google_doc(args: CreateDocArgs) -> Dict[str, Any]:
     """Create a new Google Doc."""
@@ -391,7 +392,8 @@ class AppendDocArgs(BaseModel):
     name="AppendGoogleDoc",
     description="Append content to a Google Doc (only works with documents in the default folder)",
     param_model=AppendDocArgs,
-    async_execution=True  # Changed back to async  
+    async_execution=True,  # Changed back to async
+    category="output",
 )
 def append_google_doc(args: AppendDocArgs) -> Dict[str, Any]:
     """Append content to a document (only in default folder for security)."""
