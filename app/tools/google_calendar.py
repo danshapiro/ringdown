@@ -256,6 +256,7 @@ def _build_reminders(minutes: int) -> Dict[str, Any]:
     description=f"Create a calendar event (or reminder). Use {_DEFAULT_TZ} unless you know {_CAL_USER_NAME} is somewhere else or they say otherwise.",
     param_model=CreateEventArgs,
     async_execution=True,
+    category="output",
 )
 def create_calendar_event(args: CreateEventArgs) -> Dict[str, Any]:
     try:
@@ -473,6 +474,7 @@ def search_calendar_events(args: SearchEventsArgs) -> Dict[str, Any]:
     description="Update a bot-created calendar event.",
     param_model=UpdateEventArgs,
     async_execution=True,
+    category="output",
 )
 def update_calendar_event(args: UpdateEventArgs) -> Dict[str, Any]:
     try:
@@ -548,6 +550,7 @@ def update_calendar_event(args: UpdateEventArgs) -> Dict[str, Any]:
     description="Delete a bot-created calendar event.",
     param_model=DeleteEventArgs,
     async_execution=True,
+    category="output",
 )
 def delete_calendar_event(args: DeleteEventArgs) -> Dict[str, Any]:
     try:

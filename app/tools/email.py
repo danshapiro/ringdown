@@ -255,7 +255,8 @@ class EmailArgs(BaseModel):
     description="Send an email.",
     param_model=EmailArgs,
     prompt=f"## send_email\nIf asked to email something, use send_email. Choose an appropriate subject. Default recipient is {get_default_email()} unless otherwise specified.",
-    async_execution=True
+    async_execution=True,
+    category="output",
 )
 def send_email(args: EmailArgs) -> Dict[str, Any]:
     """Send email via Gmail API with rate limiting."""

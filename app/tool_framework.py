@@ -47,6 +47,7 @@ class _ToolSpec(BaseModel):
     func: Callable[[BaseModel], Any]
     prompt: str | None = None
     async_execution: bool = False
+    category: str = "input"
 
     model_config = {
         "arbitrary_types_allowed": True,
@@ -119,6 +120,7 @@ def register_tool(
     param_model: Type[BaseModel],
     prompt: str | None = None,
     async_execution: bool = False,
+    category: str = "input",
 ) -> Callable[[Callable[[BaseModel], Any]], Callable[[BaseModel], Any]]:
     """Decorator to register a callable as an LLM tool.
 
@@ -144,6 +146,10 @@ def register_tool(
         if name in TOOL_REGISTRY:
             raise ValueError(f"Tool '{name}' already registered")
 
+        cat_value = category.lower()
+        if cat_value not in {"input", "output"}:
+            raise ValueError(f"Tool '{name}' category must be 'input' or 'output', got '{category}'")
+
         TOOL_REGISTRY[name] = _ToolSpec(
             name=name,
             description=description,
@@ -151,6 +157,7 @@ def register_tool(
             func=func,
             prompt=prompt,
             async_execution=async_execution,
+            category=cat_value,
         )
         logger.debug("Registered tool '%s'", name)
 
