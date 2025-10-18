@@ -276,9 +276,7 @@ async def stream_response(
             else:
                 messages[0]["content"] = template
 
-    # Trim very old context to mitigate runaway prompt growth.  We retain the
-    # system prompt plus the *n* most recent messages.  This naive strategy
-    # works well enough for voice calls that rarely exceed a dozen turns.
+    # Trim very old context to mitigate runaway prompt growth.  We retain the system prompt plus the *n* most recent messages.  This naive strategy works well enough for voice calls that rarely exceed a dozen turns.
     max_history = int(agent["max_history"])  # Required - no fallback
     if len(messages) > max_history:
         # Preserve system prompt (index 0) and last (max_history-1) others.
@@ -338,7 +336,7 @@ async def stream_response(
             stream=True,
         )
 
-        resp = await pending if inspect.isawaitable(pending) else pending
+        resp: Any = await pending if inspect.isawaitable(pending) else pending
 
         iterator = resp
         if hasattr(resp, "__aiter__"):
