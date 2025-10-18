@@ -8,7 +8,8 @@ requires-python = ">=3.12"
 # Direct runtime dependencies
 dependencies = [
     "fastapi>=0.111.0",
-    "uvicorn[standard]>=0.29.0",
+    "uvicorn[standard]>=0.29.0; platform_system != \"Windows\"",
+    "uvicorn>=0.29.0; platform_system == \"Windows\"",
     "pydantic>=2.7.1",
     "python-dotenv>=1.0.1",
     "sqlmodel>=0.0.16",
@@ -16,7 +17,7 @@ dependencies = [
     "prometheus-client>=0.20.0",
     "PyYAML>=6.0.1",
     "twilio>=9.0.3",
-    "litellm>=1.67.0",
+    "litellm>=1.67.0,<1.77.0",
     "httpx[http2]>=0.27.0",
     "pydantic-settings>=2.2.1",
     "tenacity>=8.2.3",
