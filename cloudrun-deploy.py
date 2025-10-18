@@ -6,6 +6,7 @@ import shlex
 import subprocess
 import sys
 import json
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -889,11 +890,29 @@ def _parse_env_vars(values: List[str]) -> dict[str, str]:
 def main(argv: Optional[List[str]] = None) -> None:
     print("[cloudrun-deploy] initializing...")
     load_dotenv(override=False)
+    is_windows = os.name == "nt"
+    is_wsl = not is_windows and (
+        "WSL_DISTRO_NAME" in os.environ or "microsoft" in platform.uname().release.lower()
+    )
+
+    if not os.environ.get("UV_PROJECT_ENVIRONMENT"):
+        os.environ["UV_PROJECT_ENVIRONMENT"] = ".venv" if is_windows else (
+            ".venv-wsl" if is_wsl else ".venv"
+        )
+        print(
+            f"[cloudrun-deploy] UV_PROJECT_ENVIRONMENT defaulted to "
+            f"{os.environ['UV_PROJECT_ENVIRONMENT']} for this session."
+        )
     
     # Check if virtual environment is active
     if not os.environ.get("VIRTUAL_ENV"):
-        print("WARNING: Virtual environment (.venv) is not active.")
-        print("Consider activating it with: .venv\\Scripts\\Activate.ps1")
+        print("WARNING: Virtual environment is not active.")
+        if is_windows:
+            print("Consider activating it with: .venv\\Scripts\\Activate.ps1")
+        elif is_wsl:
+            print("Consider activating it with: source .venv-wsl/bin/activate")
+        else:
+            print("Consider activating it with: source .venv/bin/activate")
         print()
     
     print("[cloudrun-deploy] ensuring gcloud on PATH...")
