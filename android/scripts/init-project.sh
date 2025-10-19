@@ -601,7 +601,6 @@ download_gradle_wrapper() {
   echo "Generating Gradle wrapper..."
   "$gradle_home/bin/gradle" -p "$PROJECT_ROOT" wrapper --gradle-version "$GRADLE_VERSION" --distribution-type bin
 
-  trap - RETURN
 }
 
 download_gradle_wrapper
