@@ -159,13 +159,15 @@ def test_create_document_mock():
     mock_drive_service.files().list().execute.return_value = {
         'files': [{'id': 'folder_123', 'name': 'testbot-default'}]
     }
+    mock_drive_service.files().get().execute.return_value = {
+        'parents': ['root']
+    }
     mock_drive_service.files().update().execute.return_value = {'id': 'test_doc_123'}
     
     with patch('app.tools.google_docs._get_services', return_value=(mock_docs_service, mock_drive_service)):
         result = tf.execute_tool("CreateGoogleDoc", {
             "title": "Test Document",
             "content": "This is test content.",
-            "folder_name": "testbot-default"
         })
         
         # Since CreateGoogleDoc now runs asynchronously, we get an immediate response

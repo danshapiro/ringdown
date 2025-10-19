@@ -116,13 +116,14 @@ def _get_services() -> tuple[Any, Any]:
     return docs_service, drive_service
 
 
-def _find_or_create_folder(folder_name: str) -> str:
+def _find_or_create_folder(folder_name: str, drive_service: Any | None = None) -> str:
     """Find a folder by name or create it if it doesn't exist.
     
     Returns:
         Folder ID
     """
-    _, drive_service = _get_services()
+    if drive_service is None:
+        _, drive_service = _get_services()
     
     # Search for existing folder
     query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
@@ -232,7 +233,6 @@ def _is_document_in_default_folder(doc_id: str) -> bool:
 class CreateDocArgs(BaseModel):
     title: str = Field(..., description="Document title")
     content: str = Field("", description="Initial document content")
-    folder_name: Optional[str] = Field(None, description="Folder to place document in")
     
 
 
@@ -253,68 +253,69 @@ def create_google_doc(args: CreateDocArgs) -> Dict[str, Any]:
     ctx = get_agent_context()
     logger.info(f"CreateGoogleDoc: Agent context at start: {ctx}")
     
-    # Set default folder if not specified
-    folder_name = args.folder_name
-    if folder_name is None:
-        if ctx and ctx.get('bot_name'):
-            folder_name = f"{ctx['bot_name']}-default"
-            logger.info(f"No folder specified, using default: {folder_name}")
-        else:
-            logger.error("No folder specified and no bot_name in agent context")
+    try:
+        allowed_folders = _get_allowed_folders()
+        if not allowed_folders:
+            logger.error("No allowed folders configured for CreateGoogleDoc")
             return {
                 "success": False,
-                "error": "No folder specified and agent context is missing"
+                "error": "No allowed folders configured for document creation"
             }
-    
-    # Enforce folder greenlist inside the tool where context is available
-    if folder_name is not None and not _is_folder_allowed(folder_name):
-        allowed = _get_allowed_folders()
-        allowed_str = ", ".join(f"'{p}'" for p in allowed)
-        return {
-            "success": False,
-            "error": f"Folder '{folder_name}' not in greenlist. Allowed: {allowed_str}"
-        }
-    
-    try:
+
         docs_service, drive_service = _get_services()
-        
+
+        # Resolve the first usable folder from the greenlist
+        target_folder_id: Optional[str] = None
+        target_folder_name: Optional[str] = None
+        for candidate in allowed_folders:
+            try:
+                target_folder_id = _find_or_create_folder(candidate, drive_service=drive_service)
+                target_folder_name = candidate
+                break
+            except Exception as folder_error:
+                logger.error("Failed to resolve folder '%s': %s", candidate, folder_error)
+
+        if target_folder_id is None or target_folder_name is None:
+            logger.error("Unable to resolve any allowed folder for CreateGoogleDoc")
+            return {
+                "success": False,
+                "error": "Unable to resolve an allowed folder for document creation"
+            }
+
         # Create the document
-        doc = docs_service.documents().create(body={'title': args.title}).execute()
-        doc_id = doc['documentId']
-        
-        logger.info(f"Created document '{args.title}' with ID: {doc_id}")
-        
+        doc = docs_service.documents().create(body={"title": args.title}).execute()
+        doc_id = doc["documentId"]
+        logger.info("Created document '%s' with ID: %s", args.title, doc_id)
+
         # Add initial content if provided
         if args.content:
             requests = [{
-                'insertText': {
-                    'location': {'index': 1},
-                    'text': args.content
+                "insertText": {
+                    "location": {"index": 1},
+                    "text": args.content,
                 }
             }]
             docs_service.documents().batchUpdate(
                 documentId=doc_id,
-                body={'requests': requests}
+                body={"requests": requests},
             ).execute()
-        
-        # Move to folder: remove existing parents to ensure document is actually moved
-        folder_id = _find_or_create_folder(folder_name)
-        # Fetch existing parents
-        file_meta = drive_service.files().get(fileId=doc_id, fields='parents').execute()
-        prev_parents = ",".join(file_meta.get('parents', []))
+
+        # Move document into the selected folder
+        file_meta = drive_service.files().get(fileId=doc_id, fields="parents").execute()
+        prev_parents = ",".join(file_meta.get("parents", []))
         drive_service.files().update(
             fileId=doc_id,
-            addParents=folder_id,
+            addParents=target_folder_id,
             removeParents=prev_parents if prev_parents else None,
-            fields='id, parents'
+            fields="id, parents",
         ).execute()
-        logger.info(f"Moved document to folder '{folder_name}'")
-        
+        logger.info("Moved document '%s' to folder '%s'", doc_id, target_folder_name)
+
         return {
             "success": True,
             "document_id": doc_id,
             "title": args.title,
-            "url": f"https://docs.google.com/document/d/{doc_id}/edit"
+            "url": f"https://docs.google.com/document/d/{doc_id}/edit",
         }
         
     except Exception as e:
@@ -483,7 +484,7 @@ def list_google_docs(args: ListDocsArgs) -> Dict[str, Any]:
         query_parts = ["mimeType='application/vnd.google-apps.document'", "trashed=false"]
         
         if args.folder_name:
-            folder_id = _find_or_create_folder(args.folder_name)
+            folder_id = _find_or_create_folder(args.folder_name, drive_service=drive_service)
             query_parts.append(f"'{folder_id}' in parents")
         
         query = " and ".join(query_parts)
