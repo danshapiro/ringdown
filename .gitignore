@@ -39,3 +39,14 @@ temp*
 .data/
 .claude/
 .venv-wsl/
+android/.android-sdk/
+android/.gradle-cache/
+android/.jdk/
+android/config/*.env
+android/config/*.env.*
+!android/config/.env.example
+android/keys/*
+!android/keys/.gitkeep
+android/**/*.env
+android/**/*.keystore
+android/screenshots/
