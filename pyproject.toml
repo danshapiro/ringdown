@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 
 # Direct runtime dependencies
 dependencies = [
+    "audioop-lts>=0.2.2; python_version >= \"3.13\"",
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.29.0; platform_system != \"Windows\"",
     "uvicorn>=0.29.0; platform_system == \"Windows\"",
@@ -25,6 +26,7 @@ dependencies = [
     "google-auth>=2.0.0",
     "google-api-python-client>=2.0.0",
     "google-cloud-storage>=2.10.0",
+    "google-cloud-run>=0.10.0",
     "ratelimit>=2.2.1",
     "click>=8.0.0",
     "typing-extensions>=4.11.0",
