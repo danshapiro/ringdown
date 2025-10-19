@@ -93,6 +93,23 @@ case "$OSTYPE" in
   *) die "Unsupported platform '$OSTYPE'. Only Linux and macOS are supported." ;;
 esac
 
+UNAME_ARCH="$(uname -m)"
+case "$UNAME_ARCH" in
+  x86_64|amd64) ADOPTIUM_ARCH="x64" ;;
+  arm64|aarch64) ADOPTIUM_ARCH="aarch64" ;;
+  *)
+    die "Unsupported architecture '$UNAME_ARCH' for managed JDK installation."
+    ;;
+esac
+
+if [[ "$PLATFORM" == "linux" ]]; then
+  ADOPTIUM_OS="linux"
+elif [[ "$PLATFORM" == "mac" ]]; then
+  ADOPTIUM_OS="mac"
+else
+  ADOPTIUM_OS="$PLATFORM"
+fi
+
 require_command curl
 require_command unzip
 
@@ -123,7 +140,6 @@ download_cmdline_tools() {
 
   # Ensure sdkmanager is executable
   chmod +x "$CMDLINE_DIR/latest/bin/"*
-  trap - RETURN
 }
 
 if [[ ! -x "$SDKMANAGER" ]]; then
@@ -151,12 +167,12 @@ run_sdkmanager() {
 
 install_jdk() {
   mkdir -p "$JDK_ROOT"
-  local archive_name="jdk-${JDK_VERSION}-linux-x64.tar.gz"
+  local archive_name="jdk-${JDK_VERSION}-${ADOPTIUM_OS}-${ADOPTIUM_ARCH}.tar.gz"
   local tmpdir
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' RETURN
 
-  local url="https://api.adoptium.net/v3/binary/latest/${JDK_VERSION}/ga/linux/x64/jdk/hotspot/normal/eclipse"
+  local url="https://api.adoptium.net/v3/binary/latest/${JDK_VERSION}/ga/${ADOPTIUM_OS}/${ADOPTIUM_ARCH}/jdk/hotspot/normal/eclipse"
   echo "Downloading Temurin JDK ${JDK_VERSION}..."
   curl -fsSL "$url" -o "$tmpdir/$archive_name"
 
@@ -172,16 +188,36 @@ install_jdk() {
 
   export JAVA_HOME="$JDK_ROOT/current"
   export PATH="$JAVA_HOME/bin:$PATH"
-
-  trap - RETURN
 }
 
-if ! command -v java >/dev/null 2>&1; then
-  install_jdk
+java_major_version() {
+  local version_line version major
+  version_line=$(java -version 2>&1 | head -n 1)
+  version=$(sed -n 's/.*version "\(.*\)".*/\1/p' <<<"$version_line")
+  major=${version%%.*}
+  if [[ "$major" == "1" ]]; then
+    major=$(awk -F. '{print $2}' <<<"$version")
+  fi
+  printf '%s' "$major"
+}
+
+NEEDS_MANAGED_JAVA=false
+if command -v java >/dev/null 2>&1; then
+  detected_major=$(java_major_version || echo "unknown")
+  if [[ "$detected_major" =~ ^[0-9]+$ && "$detected_major" -ge 17 ]]; then
+    JAVA_BIN=$(command -v java)
+    JAVA_HOME="${JAVA_HOME:-$(dirname "$(dirname "$JAVA_BIN")")}"
+    export JAVA_HOME
+  else
+    echo "Detected Java major version '$detected_major'. Installing managed Temurin JDK ${JDK_VERSION}..."
+    NEEDS_MANAGED_JAVA=true
+  fi
 else
-  JAVA_BIN=$(command -v java)
-  JAVA_HOME="${JAVA_HOME:-$(dirname "$(dirname "$JAVA_BIN")")}"
-  export JAVA_HOME
+  NEEDS_MANAGED_JAVA=true
+fi
+
+if [[ "$NEEDS_MANAGED_JAVA" == true ]]; then
+  install_jdk
 fi
 
 export PATH="$JAVA_HOME/bin:$PATH"
