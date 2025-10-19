@@ -138,12 +138,20 @@ Phase 1 - Core Architecture & Registration Skeleton
     * **UI fidelity:** For every Compose surface introduced in this phase, replicate the matching mockup in `todo-android-spec/` (e.g., mockup-1-pending-approval.html). Use the document measurements for spacing, typography, and component hierarchy.
 
 Phase 2 – Backend Integration & Permission Handling
-- Connect registration flow to staging backend using environment-configured base URL (`config/android/.env`) loaded by Gradle. Replace stubs with real Retrofit services and WebSocket handshake to register device.
+- Connect registration flow to staging backend using environment-configured base URL (`android/config/.env`) loaded by Gradle. Replace stubs with real Retrofit services and WebSocket handshake to register device.
 - Source `BuildConfig.BACKEND_BASE_URL` from build-type or flavor configuration instead of a single hard-coded string so release builds target production.
 - Gate the stub interceptor behind a debug-only variant or feature flag to keep production traffic on the real backend.
 - Surface server-provided polling hints by plumbing `pollAfterSeconds` (or equivalent) from the Retrofit DTO through domain models and into the ViewModel retry strategy.
 - Wire permission manager (Accompanist) and ensure denied permissions revert to idle with inline messaging.
+- Track permission result transitions explicitly (e.g. observe status via `snapshotFlow` or keyed `LaunchedEffect`) so reconnect/error handlers run immediately after the system dialog closes.
+- `.env` contract: require `STAGING_BACKEND_BASE_URL`, `PRODUCTION_BACKEND_BASE_URL`, `DEBUG_USE_REGISTRATION_STUB`, and `DEBUG_STUB_APPROVAL_THRESHOLD` (all build variants read via Gradle at configuration time). Backend URLs must include the trailing slash so Retrofit base URLs resolve correctly.
+- Debug builds honour runtime overrides for the registration stub via `DebugFeatureFlags`; instrumentation switches the stub off while hijacking traffic to the local `MockWebServer`.
+- Provide an instrumentation-only Hilt module (or equivalent) that overrides the Retrofit base URL with `mockWebServer.url("/")` so registration polls never escape the test harness.
 - Automation: `bash android/scripts/mock-server.sh start` (spawns MockWebServer for CI), run integration tests `bash android/scripts/gradle.sh ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=...RegistrationSuite`, then stop mock server script.
+- Instrumented tests use `HiltTestApplication` (`src/androidTest/AndroidManifest.xml`) so any new instrumentation must stay compatible with Hilt injection.
+- `mock-server.sh` wraps `android/scripts/mock_server.py` so CI and local workflows get consistent behaviour (configurable port, approval threshold, and poll hint). Use the script instead of invoking the Python module directly.
+- Known gap: Gradle `:app:assembleDebug` currently fails under WSL due to AAPT2 spawn helper issues (`Failed to exec spawn helper`). Run the Phase 2 automation on native Linux/macOS until the WSL environment is configured with metadata or an ext4-backed workspace so AAPT2 can launch.
+- After resolving AAPT2, immediately run `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest` followed by `bash android/scripts/gradle.sh ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.ringdown.registration.RegistrationSuite`.
 - Deploy to USB device with `bash android/scripts/install.sh --device $ANDROID_SERIAL` (Codex CLI sets serial). Deliverable: device auto-registers and transitions to idle when backend approval flips.
 
 Phase 3 - Voice Session MVP (Fast Track)

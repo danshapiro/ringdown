@@ -51,3 +51,4 @@ android/keys/*
 android/**/*.env
 android/**/*.keystore
 android/screenshots/
+.tmp/

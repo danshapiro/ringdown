@@ -2,7 +2,8 @@ package com.ringdown.domain.model
 
 data class DeviceRegistration(
     val deviceId: String,
-    val status: RegistrationStatus
+    val status: RegistrationStatus,
+    val pollAfterSeconds: Long?
 )
 
 sealed interface RegistrationStatus {

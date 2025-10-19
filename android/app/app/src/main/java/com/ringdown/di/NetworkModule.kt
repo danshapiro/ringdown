@@ -1,6 +1,7 @@
 package com.ringdown.di
 
 import com.ringdown.BuildConfig
+import com.ringdown.DebugFeatureFlags
 import com.ringdown.data.registration.RegistrationApi
 import com.ringdown.data.registration.RegistrationRepository
 import com.ringdown.data.registration.RegistrationRepositoryImpl
@@ -40,18 +41,28 @@ object NetworkModule {
         .build()
 
     @Provides
+    @StubApprovalThreshold
+    fun provideStubApprovalThreshold(): Int = BuildConfig.STUB_APPROVAL_THRESHOLD
+
+    @Provides
     @Singleton
     fun provideOkHttpClient(
         stubInterceptor: StubRegistrationInterceptor
     ): OkHttpClient {
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BODY
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
         }
 
-        return OkHttpClient.Builder()
-            .addInterceptor(stubInterceptor)
-            .addInterceptor(logging)
-            .build()
+        return OkHttpClient.Builder().apply {
+            if (DebugFeatureFlags.shouldUseRegistrationStub(BuildConfig.USE_STUB_REGISTRATION)) {
+                addInterceptor(stubInterceptor)
+            }
+            addInterceptor(logging)
+        }.build()
     }
 
     @Provides
