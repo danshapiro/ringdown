@@ -9,14 +9,15 @@ import javax.inject.Inject
 class RefreshRegistrationStatusUseCase @Inject constructor(
     private val deviceIdStorage: DeviceIdStorage,
     private val registrationRepository: RegistrationRepository
-) {
+) : RegistrationStatusRefresher {
 
-    suspend operator fun invoke(): DeviceRegistration {
+    override suspend operator fun invoke(): DeviceRegistration {
         val deviceId = runCatching { deviceIdStorage.getOrCreate() }
             .getOrElse { throwable ->
                 return DeviceRegistration(
                     deviceId = "",
-                    status = RegistrationStatus.Error(throwable.message ?: "Unable to read device id")
+                    status = RegistrationStatus.Error(throwable.message ?: "Unable to read device id"),
+                    pollAfterSeconds = null
                 )
             }
 
@@ -25,7 +26,8 @@ class RefreshRegistrationStatusUseCase @Inject constructor(
         }.getOrElse { throwable ->
             DeviceRegistration(
                 deviceId = deviceId,
-                status = RegistrationStatus.Error(throwable.message ?: "Registration failed")
+                status = RegistrationStatus.Error(throwable.message ?: "Registration failed"),
+                pollAfterSeconds = null
             )
         }
     }

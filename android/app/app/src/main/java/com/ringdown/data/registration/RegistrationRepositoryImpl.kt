@@ -21,7 +21,8 @@ class RegistrationRepositoryImpl @Inject constructor(
             val response = api.register(RegistrationRequest(deviceId = deviceId))
             DeviceRegistration(
                 deviceId = deviceId,
-                status = response.toDomainStatus()
+                status = response.toDomainStatus(),
+                pollAfterSeconds = response.pollAfterSeconds
             )
         }
 
