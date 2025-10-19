@@ -129,6 +129,7 @@ Phase 0 - Tooling & Project Bootstrap
 Phase 1 - Core Architecture & Registration Skeleton
 - Implement base packages (`data`, `domain`, `ui`) and Dependency Injection graph (Hilt) via MCP-assisted Kotlin scaffolding commands embedded in `bash android/scripts/generate.sh`.
 - Add device ID persistence and registration API client stubs with Retrofit + OkHttp. Compose idle/pending approval layouts with state machine skeleton (StateFlow + reducers).
+- Declare `android.permission.INTERNET` in the manifest so Retrofit/OkHttp networking succeeds once real endpoints are enabled.
 - Automated checks: `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest`. Deploy to emulator for smoke via `bash android/scripts/install.sh --emulator`. Deliverable: app reaches pending dialog with stubbed backend responses.
 - Extend the `mobile-mcp` automation to run the pending approval flow on-device (launch app, trigger pending dialog, capture screenshot artifact) so every iteration still validates against real hardware.
     * Current stub behaviour: `StubRegistrationInterceptor` approves on the third poll. Expect to see Attempts increment from 1 → 2 before the idle screen appears. Leave this threshold configurable when wiring real backend.
@@ -138,6 +139,9 @@ Phase 1 - Core Architecture & Registration Skeleton
 
 Phase 2 – Backend Integration & Permission Handling
 - Connect registration flow to staging backend using environment-configured base URL (`config/android/.env`) loaded by Gradle. Replace stubs with real Retrofit services and WebSocket handshake to register device.
+- Source `BuildConfig.BACKEND_BASE_URL` from build-type or flavor configuration instead of a single hard-coded string so release builds target production.
+- Gate the stub interceptor behind a debug-only variant or feature flag to keep production traffic on the real backend.
+- Surface server-provided polling hints by plumbing `pollAfterSeconds` (or equivalent) from the Retrofit DTO through domain models and into the ViewModel retry strategy.
 - Wire permission manager (Accompanist) and ensure denied permissions revert to idle with inline messaging.
 - Automation: `bash android/scripts/mock-server.sh start` (spawns MockWebServer for CI), run integration tests `bash android/scripts/gradle.sh ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=...RegistrationSuite`, then stop mock server script.
 - Deploy to USB device with `bash android/scripts/install.sh --device $ANDROID_SERIAL` (Codex CLI sets serial). Deliverable: device auto-registers and transitions to idle when backend approval flips.
