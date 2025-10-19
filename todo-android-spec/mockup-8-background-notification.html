@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Background Notification</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Roboto', sans-serif;
+            background: #0a0a0a;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            color: #ffffff;
+            overflow: hidden;
+            padding: 20px;
+        }
+
+        /* Lock screen clock */
+        .lock-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex: 1;
+            gap: 8px;
+        }
+
+        .clock {
+            font-size: 96px;
+            font-weight: 200;
+            letter-spacing: -2px;
+            color: white;
+        }
+
+        .date {
+            font-size: 20px;
+            font-weight: 400;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        /* Notification card */
+        .notification-container {
+            width: 100%;
+            max-width: 480px;
+            margin-bottom: 60px;
+            animation: notificationSlide 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes notificationSlide {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .notification-card {
+            background: rgba(28, 28, 30, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            padding: 18px 20px;
+            box-shadow:
+                0 0 0 1px rgba(255, 255, 255, 0.1),
+                0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .notification-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+
+        .app-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5a3fd9 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 16px;
+            box-shadow: 0 2px 8px rgba(123, 97, 255, 0.4);
+        }
+
+        .notification-meta {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .app-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .ongoing-badge {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: rgba(16, 185, 129, 0.9);
+        }
+
+        .ongoing-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #10b981;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+            50% {
+                opacity: 0.6;
+                transform: scale(1.2);
+            }
+        }
+
+        .timestamp {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.4);
+            margin-left: auto;
+        }
+
+        .notification-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: white;
+            margin-bottom: 6px;
+        }
+
+        .notification-body {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 14px;
+        }
+
+        .notification-action {
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .btn-hang-up {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            border: none;
+            border-radius: 12px;
+            padding: 10px 24px;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-hang-up:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
+        }
+
+        .btn-hang-up:active {
+            transform: translateY(0);
+        }
+
+        /* Lock icon */
+        .lock-icon-container {
+            margin-bottom: 40px;
+        }
+
+        .lock-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .lock-icon svg {
+            width: 28px;
+            height: 28px;
+            stroke: rgba(255, 255, 255, 0.6);
+            fill: none;
+            stroke-width: 2;
+        }
+
+        /* Swipe indicator */
+        .swipe-hint {
+            text-align: center;
+            color: rgba(255, 255, 255, 0.3);
+            font-size: 12px;
+            margin-top: -30px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Lock screen clock -->
+    <div class="lock-screen">
+        <div class="clock" id="clock">12:00</div>
+        <div class="date" id="date">Saturday, October 18</div>
+    </div>
+
+    <!-- Notification card -->
+    <div class="notification-container">
+        <div class="notification-card" onclick="openApp()">
+            <!-- Header -->
+            <div class="notification-header">
+                <div class="app-icon">R</div>
+                <div class="notification-meta">
+                    <div class="app-name">Ringdown</div>
+                    <div class="ongoing-badge">
+                        <div class="ongoing-dot"></div>
+                        <span>Ongoing</span>
+                    </div>
+                    <div class="timestamp">now</div>
+                </div>
+            </div>
+
+            <!-- Title and body -->
+            <div class="notification-title">Danbot call in progress</div>
+            <div class="notification-body">Tap to return to call</div>
+
+            <!-- Action button -->
+            <div class="notification-action">
+                <button class="btn-hang-up" onclick="hangUp(event)">Hang Up</button>
+            </div>
+        </div>
+
+        <div class="swipe-hint">Tap notification to return to app</div>
+    </div>
+
+    <!-- Lock icon -->
+    <div class="lock-icon-container">
+        <div class="lock-icon">
+            <svg viewBox="0 0 24 24">
+                <rect x="5" y="11" width="14" height="10" rx="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+        </div>
+    </div>
+
+    <script>
+        // Implementation notes:
+        // - Shows when voice session active and app backgrounded/locked
+        // - Category: CATEGORY_CALL (ongoing, high priority)
+        // - Foreground service required for Android 8+
+        // - Notification channel: "Calls", importance HIGH
+        // - Non-dismissible (swipe won't remove while call active)
+        // - Tapping notification returns to voice screen (mockup-3)
+        // - Tapping "Hang Up" ends session and removes notification
+        // - Lock screen visibility: PUBLIC (shows on secure lock screen)
+        // - Agent name dynamic from backend (Dan, Ina, Elan, etc.)
+        // - Removed immediately when session ends
+        // - During reconnect: keep visible, optionally update title
+
+        // Update clock
+        function updateClock() {
+            const now = new Date();
+            const hours = now.getHours().toString().padStart(2, '0');
+            const minutes = now.getMinutes().toString().padStart(2, '0');
+            document.getElementById('clock').textContent = `${hours}:${minutes}`;
+        }
+
+        updateClock();
+        setInterval(updateClock, 1000);
+
+        // Set date
+        const date = new Date();
+        const options = { weekday: 'long', month: 'long', day: 'numeric' };
+        document.getElementById('date').textContent = date.toLocaleDateString('en-US', options);
+
+        function openApp() {
+            // Tapping notification returns to foreground
+            console.log('Opening app to voice screen...');
+            // window.location.href = 'mockup-3-voice-active.html';
+        }
+
+        function hangUp(event) {
+            // Prevent notification tap from triggering
+            event.stopPropagation();
+
+            // End call and remove notification
+            console.log('Hanging up from notification...');
+
+            // Animate notification removal
+            const notification = document.querySelector('.notification-container');
+            notification.style.animation = 'notificationSlideOut 0.3s ease-out forwards';
+
+            setTimeout(() => {
+                notification.style.display = 'none';
+                console.log('Notification removed. Call ended.');
+            }, 300);
+        }
+    </script>
+
+    <style>
+        @keyframes notificationSlideOut {
+            from {
+                opacity: 1;
+                transform: translateY(0);
+            }
+            to {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+        }
+    </style>
+</body>
+</html>

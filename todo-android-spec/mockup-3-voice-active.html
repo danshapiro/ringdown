@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Active Voice Session</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #0a2540 0%, #1a3a5c 50%, #0f1f38 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Animated wave background */
+        .wave-background {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            overflow: hidden;
+        }
+
+        .wave {
+            position: absolute;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.1) 0%, transparent 70%);
+            animation: waveMove 8s ease-in-out infinite;
+        }
+
+        .wave:nth-child(1) {
+            animation-delay: 0s;
+            opacity: 0.3;
+        }
+
+        .wave:nth-child(2) {
+            animation-delay: 2s;
+            opacity: 0.2;
+        }
+
+        .wave:nth-child(3) {
+            animation-delay: 4s;
+            opacity: 0.15;
+        }
+
+        @keyframes waveMove {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.2); }
+        }
+
+        /* Status indicator */
+        .status-bar {
+            position: fixed;
+            top: 40px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            padding: 12px 24px;
+            border-radius: 24px;
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            z-index: 20;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            background: #10b981;
+            border-radius: 50%;
+            animation: pulse 2s ease-in-out infinite;
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.6);
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% {
+                transform: scale(1.2);
+                opacity: 0.8;
+            }
+        }
+
+        .status-text {
+            font-size: 16px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        /* Main button container */
+        .button-container {
+            position: relative;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Large circular hang up button */
+        .hang-up-button {
+            width: min(50vw, 280px);
+            height: min(50vw, 280px);
+            border-radius: 50%;
+            border: none;
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow:
+                0 0 0 1px rgba(239, 68, 68, 0.3),
+                0 20px 60px rgba(239, 68, 68, 0.4),
+                0 0 80px rgba(239, 68, 68, 0.2),
+                inset 0 2px 40px rgba(255, 255, 255, 0.1);
+        }
+
+        .hang-up-button:hover {
+            transform: scale(1.05);
+            box-shadow:
+                0 0 0 1px rgba(239, 68, 68, 0.5),
+                0 25px 70px rgba(239, 68, 68, 0.5),
+                0 0 100px rgba(239, 68, 68, 0.3),
+                inset 0 2px 40px rgba(255, 255, 255, 0.15);
+        }
+
+        .hang-up-button:active {
+            transform: scale(0.95);
+        }
+
+        .button-content {
+            position: relative;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+        }
+
+        /* Phone icon */
+        .phone-icon {
+            width: 60px;
+            height: 60px;
+            margin-bottom: 16px;
+            fill: none;
+            stroke: white;
+            stroke-width: 3;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3));
+        }
+
+        .button-label {
+            font-size: 24px;
+            font-weight: 600;
+            color: white;
+            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Ripple effect on click */
+        .hang-up-button::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        .hang-up-button:active::before {
+            width: 400px;
+            height: 400px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Wave background -->
+    <div class="wave-background">
+        <div class="wave"></div>
+        <div class="wave"></div>
+        <div class="wave"></div>
+    </div>
+
+    <!-- Status bar -->
+    <div class="status-bar">
+        <div class="status-indicator"></div>
+        <div class="status-text">Danbot call in progress</div>
+    </div>
+
+    <!-- Main button container -->
+    <div class="button-container">
+        <!-- Hang up button -->
+        <button class="hang-up-button" onclick="hangUp()">
+            <div class="button-content">
+                <!-- Phone icon (hang up gesture - rotated) -->
+                <svg class="phone-icon" viewBox="0 0 24 24">
+                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" transform="rotate(135 12 12)"/>
+                </svg>
+
+                <!-- Button label -->
+                <div class="button-label">Hang Up</div>
+            </div>
+        </button>
+    </div>
+
+    <script>
+        // Implementation notes:
+        // - Button is centered vertically and horizontally
+        // - Button size is 50% of screen width (responsive, max 280px)
+        // - Status bar shows agent name from backend config
+        // - Audio routing: Auto Bluetooth SCO → speakerphone fallback
+        // - When backgrounded, show persistent notification (see mockup-8)
+        // - Keep WebSocket connection active during background
+        // - On hang up, close connection and return to idle screen
+
+        function hangUp() {
+            // Close WebSocket connection
+            // Stop audio streams
+            // Remove any notifications
+            // Transition to idle main screen
+            // window.location.href = 'mockup-2-idle-main.html';
+
+            console.log('Hanging up call...');
+
+            // Simulate transition after animation
+            setTimeout(() => {
+                alert('Call ended. Returning to idle screen.');
+            }, 300);
+        }
+
+        // Simulate connection status
+        // In production, update status based on WebSocket events
+        const statusIndicator = document.querySelector('.status-indicator');
+        const statusText = document.querySelector('.status-text');
+
+        // Listen for WebSocket connection events
+        // ws.on('disconnect', () => { /* show reconnecting state */ });
+    </script>
+</body>
+</html>
