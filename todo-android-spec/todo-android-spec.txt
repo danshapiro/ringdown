@@ -42,8 +42,10 @@ Date: 2025-10-18
 
 - Visible only when no voice call and no pending approval dialog.
 - Layout: app background + two primary buttons stacked vertically or center-aligned: Reconnect (or Connect on first load) and Open Chat. No additional text, status, or chrome.
+- Motion: replicate button press states, hover/pressed elevation changes, and any idle-to-pending transitions shown in the mockup. Use your best judgment if animation timings are unspecified.
 - Tapping Reconnect initiates the voice session flow described below.
 - Tapping Open Chat switches to the chat session 3as described in Section 8.
+- **Implementation note:** Mirror the layout, spacing, typography, and button treatments in the referenced mockup exactly. Treat the HTML mockup as source of truth for paddings, corner radii, and type ramp.
 
 7. Voice Session Experience
 → See mockups: mockup-3-voice-active.html (active session), mockup-4-voice-reconnecting.html (reconnecting state), mockup-8-background-notification.html (backgrounded)
@@ -60,6 +62,7 @@ Date: 2025-10-18
   - The app initiates up to 1 minute of reconnect attempts with a backoff suited for real-time use (e.g., 3–5 seconds); no user intervention required.
   - The Hang Up button remains available to abort the loop. When pressed, retries stop and the app returns to the idle main screen.
 - Successful reconnect after a failure removes banners and resumes normal audio.
+- **Implementation note:** All voice session screens must match mockup visual details (button proportions, banner placement, notification copy) unless explicitly deferred in a later phase. Honor any motion cues in the references (e.g., reconnect banner slide-up, hang-up button press feedback) and log gaps when specs are missing.
 
 8. Mode Switching Between Voice and Chat
 - Hang Up button (during active call) ends the current session and transitions to the idle main screen.
@@ -128,6 +131,10 @@ Phase 1 - Core Architecture & Registration Skeleton
 - Add device ID persistence and registration API client stubs with Retrofit + OkHttp. Compose idle/pending approval layouts with state machine skeleton (StateFlow + reducers).
 - Automated checks: `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest`. Deploy to emulator for smoke via `bash android/scripts/install.sh --emulator`. Deliverable: app reaches pending dialog with stubbed backend responses.
 - Extend the `mobile-mcp` automation to run the pending approval flow on-device (launch app, trigger pending dialog, capture screenshot artifact) so every iteration still validates against real hardware.
+    * Current stub behaviour: `StubRegistrationInterceptor` approves on the third poll. Expect to see Attempts increment from 1 → 2 before the idle screen appears. Leave this threshold configurable when wiring real backend.
+    * Device IDs are persisted via `DataStore` under `ringdown_device.preferences_pb`; treat it as opaque and use the provided repository/UseCase plumbing instead of rolling your own.
+    * Hilt is now required for app startup; `RingdownApp` is registered in the manifest. Any new components should request dependencies through DI rather than manual singletons.
+    * **UI fidelity:** For every Compose surface introduced in this phase, replicate the matching mockup in `todo-android-spec/` (e.g., mockup-1-pending-approval.html). Use the document measurements for spacing, typography, and component hierarchy.
 
 Phase 2 – Backend Integration & Permission Handling
 - Connect registration flow to staging backend using environment-configured base URL (`config/android/.env`) loaded by Gradle. Replace stubs with real Retrofit services and WebSocket handshake to register device.
