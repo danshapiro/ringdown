@@ -4,3 +4,5 @@
 - [ ] Enhance inline guidance inside `secret-manager.yaml` (we are keeping a single canonical file) so developers understand how to bind env vars to mounted secrets.
 - [ ] Deployment sanity checklist. No automated or documented checklist covers `pytest`, `/twiml` fetch, and a simulated WebSocket run; codify this workflow before the next release.
 - [ ] Release-ready commit curation. After the 0.2.0 merge, confirm whether additional rebasing or grouping is required ahead of the next review cycle.
+reset tool should emit a one-word 'resetting'.Or tell the live test otherwise.
+When you dial send a few ringtones as a password

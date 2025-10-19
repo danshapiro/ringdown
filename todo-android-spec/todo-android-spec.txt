@@ -1,0 +1,113 @@
+Ringdown Android Client UX Specification
+Date: 2025-10-18
+
+1. Purpose
+- Deliver a personal, data-only Android interface for the existing Ringdown backend.
+- Prioritise hands-free voice use while enabling manual text chat as an alternate mode.
+- Maintain feature parity with the current Twilio voice experience (agents, tools, prompts) without expanding scope beyond flows discussed here.
+
+2. Core Assumptions
+- Single trusted user per phone and per bot, with only a handful of users total, but multiple preconfigured personas exist in backend config (mirrors caller-ID agents today).
+- The Android client talks directly to the current FastAPI backend (Twilio ConversationRelay-compatible websocket and HTTP endpoints) with no additional middle tier.
+- Credentials are baked into the app build; no login or user-managed auth inside the UI.
+- Bluetooth audio accessories are commonly in use; the user may be driving and unable to interact with the screen once a session starts.
+
+3. Application States
+- Pending device approval (first run on an unregistered device).
+- Idle main screen (no active voice session).
+- Active voice session.
+- Chat session (voice suspended).
+- Automatic reconnection loop after an unexpected disconnect.
+
+4. Launch and Device Registration Flow
+→ See mockup: mockup-1-pending-approval.html
+
+- On first launch, the app generates or retrieves a stable device identifier and calls the backend registration endpoint.
+- If the backend recognises the device (enabled in config.yaml), the app proceeds directly into the standard voice flow described below.
+- If the backend does not recognize it, it auto-adds the device as disabled, and the app receives a pending response. Behaviour:
+  - Show a blocking modal dialog that explains approval is required.
+  - Provide a single primary action labeled Check again. Each tap re-issues the registration check.
+  - The dialog remains visible between checks. When the backend flips the entry to enabled, the next check immediately dismisses the dialog and transitions into voice call startup without returning to the idle screen.
+  - No other navigation or features are available while pending.
+
+5. Permissions Handling
+→ See mockup: mockup-7-permission-denied.html
+
+- Whenever the app attempts to start or resume a voice session (including automatic launch connect, manual reconnect, or background auto-retry), it first verifies RECORD_AUDIO and any required Bluetooth permissions.
+- If permissions are missing, surface the system permission sheet immediately.
+- If the user denies, treat it exactly like a user-initiated hangup: stop trying to connect, display the idle main screen, and surface inline text under the Reconnect button noting Microphone permission required. The next attempt to connect re-triggers the sheet.
+
+6. Idle Main Screen
+→ See mockup: mockup-2-idle-main.html
+
+- Visible only when no voice call and no pending approval dialog.
+- Layout: app background + two primary buttons stacked vertically or center-aligned: Reconnect (or Connect on first load) and Open Chat. No additional text, status, or chrome.
+- Tapping Reconnect initiates the voice session flow described below.
+- Tapping Open Chat switches to the chat session 3as described in Section 8.
+
+7. Voice Session Experience
+→ See mockups: mockup-3-voice-active.html (active session), mockup-4-voice-reconnecting.html (reconnecting state), mockup-8-background-notification.html (backgrounded)
+
+- Entry: Upon successful permissions and registration, the app auto-connects to the backend call websocket using the device's mapped agent. No user confirmation.
+- Screen: The voice UI displays only a large, circular, Hang Up button centered vertically and horizontally that takes up 50% of the screen width.
+- Audio routing: Immediately request Bluetooth SCO routing and stay locked to it while available. If Bluetooth disconnects, fall back to device speakerphone. No manual route picker in UI.
+- Backgrounding: If the user locks the device, switches apps, or the UI otherwise loses foreground focus, keep the voice session active. Show a persistent system notification (ongoing call category) with:
+  - Title indicating active connection (e.g., Danbot call in progress).
+  - Single action Hang Up, which terminates the session and returns the state to the idle main screen when the user reopens the app.
+- Unexpected disconnects (network, backend error):
+  - Immediately play the local reconnecting audio clip on a loop with a delay between repeats. Cancel it when it is reconnected.
+  - Surface a short banner at the bottom with the best possible user-facing explanation for the hangup (e.g., Network unavailable, AI timeout).
+  - The app initiates up to 1 minute of reconnect attempts with a backoff suited for real-time use (e.g., 3–5 seconds); no user intervention required.
+  - The Hang Up button remains available to abort the loop. When pressed, retries stop and the app returns to the idle main screen.
+- Successful reconnect after a failure removes banners and resumes normal audio.
+
+8. Mode Switching Between Voice and Chat
+- Hang Up button (during active call) ends the current session and transitions to the idle main screen.
+- From the idle main screen, tapping Open Chat immediately enters chat mode.
+- Within chat mode, a persistent control labeled Voice sits in the header. Activating it closes chat and starts the voice connection flow (respecting permissions) without a separate confirmation.
+- The voice mode has a timeout where it reconnects to the same session by default if it's been less than 5 min. Use of the chat client is counted towards this timeout.
+- The chat system does not have a timeout; it always picks up the previous system.
+
+9. Chat Session Experience
+→ See mockups: mockup-5-chat-session.html (chat interface), mockup-6-chat-tool-expanded.html (expanded tool view)
+
+- Layout: full-height transcript view with newest messages at bottom, streaming updates as chunks arrive from the backend.
+- Content stream: includes assistant turns, user turns (captured via chat or prior voice transcription), system notifications, and tool activity markers sourced from the existing backend message log.
+- Tool visibility: each tool invocation renders as a collapsed pill (e.g., Tool: TavilySearch). Tapping expands an in-place panel showing a user-friendly version of the request/response payload and any structured output the backend surfaces today. Collapse toggles on second tap anywhere within the section.
+- Thinking tokens emitted by the backend render as collapsible blocks similar to tool pills.
+- All pills stack from left to right in the same line, wrapping as needed (not one per line).
+- Composer: single-line text input with Send icon. There is an attachment button which opens the device attachment dialogue; it can support up to 9 attachments.
+- There is a 'reset' button that wipes the conversation and creates a new one.
+- Model selector: header-level dropdown populated from the backend’s permitted models, ordered by most recently used (MRU first, updating whenever the user switches). Selection does not use the change-llm tool but instead innvokes the switch immediately and reflects in subsequent turns. The selector is only present in chat mode.
+
+10. Persistent Conversation Handling
+- The app relies on the backend’s existing message persistence (SQLite state, continue_conversation flag). Voice and chat modes share the same conversation state; ending voice or switching modes never purges history unless the reset tool is invoked via the assistant.
+- The first voice turn after a reset or new session uses the configured welcome greeting defined for the agent associated with the device.
+
+11. Device-to-Agent Mapping
+- Each device is mapped to an agent entry created in config.yaml when it first connects to the backend. The backend is responsible for adding a fully populated entry (device id, friendly label, agent name, enabled flag, and any other fields it requires) when a new device connects, with enabled defaulting to false.
+- The device id must be stable so repeated connections do not generate multiple config entries.
+- The key security mechanism is that no client can do anything except trigger its disabled addition to config.yaml without an admin modifying config.yaml by hand to enable it.
+- The Android app does not edit config.yaml; it simply surfaces pending status and polls until the backend reports the device as enabled.
+- When multiple agents exist for a single user (e.g., Dan, Ina, Elan), enabling the device entry determines which persona handles subsequent sessions. The app reflects whatever agent the backend returns; no in-app selector.
+
+12. Notification Behaviour
+→ See mockup: mockup-8-background-notification.html
+
+- While connected (foreground or background), a single ongoing notification is shown with hang up action only.
+- When the session ends (user hangup or backend disconnect with retries exhausted), remove the notification immediately.
+
+13. Audio Assets
+- The app bundles a reconnecting audio file (provided as an mp3 and converted as needed by the app) for when the reconnect loop starts.
+- No other status tones are introduced beyond whatever the backend streams today (thinking and completion chimes already originate server-side).
+
+14. Error Messaging Summary
+- Missing permissions: idle screen note Microphone permission required until the next connect attempt.
+- Pending approval: blocking dialog with device ID, Check again button, and brief copy instructions.
+- Unexpected disconnect: transient reason banner plus reconnecting audio, followed by silent retries.
+- Registration failure after approval (e.g., backend down): treat as unexpected disconnect with reason from backend.
+
+15. Out of Scope for This Spec
+- Any redesign of backend flows, tool surfaces, or agent prompts.
+- Additional UI beyond the elements described above (no call duration, no manual audio routing, no transcripts during live voice).
+- Scheduling, implementation estimates, or engineering choices (SDKs, LiveKit vs. WebRTC specifics) beyond what is already implemented server-side.
