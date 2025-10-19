@@ -41,6 +41,7 @@ temp*
 .venv-wsl/
 android/.android-sdk/
 android/.gradle-cache/
+android/.gradle-cache
 android/.jdk/
 android/config/*.env
 android/config/*.env.*
