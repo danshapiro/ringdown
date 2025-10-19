@@ -114,25 +114,19 @@ Date: 2025-10-18
 
 16. Implementation Plan (Agent-Owned)
 - The same engineer (this agent) executes each phase sequentially, validating the build after every major change before moving forward. All repeatable work happens through bash commands that Codex CLI can execute without manual intervention beyond initial Android SDK configuration.
+- Priority: get a branded-but-minimal app rendering on a physical Android phone immediately, then iterate. Use `mobile-next/mobile-mcp` to drive the device from the CLI for every on-device validation.
 
-16.1 Review of Candidate Approaches
-- **Plan A (Phases 0–7, quick MVP focus)**: Strong emphasis on getting registration and voice working quickly, layering chat, reconnect polish, and deployment readiness. It balances emulator automation with physical-device validation and adds nightly CI hooks. The strength here is the aggressive push to a runnable build early (Phase 1/2) and explicit coverage of reconnect/audio polish.
-- **Plan B (Week-based roadmap)**: Highlights architecture discipline—central state machine, DI setup, and clear separation of backend plumbing before voice/chat features. It also stresses documentation of CLI tooling and staged QA (unit, snapshot, integration). The structured week-by-week cadence is helpful for forecasting larger bodies of work.
-- **Plan C (CLI automation-first)**: Optimised for agent execution via Codex CLI, documenting MCP automation, emulator/physical deployment scripts, and progressively layering reconnect, chat, and tooling visualisations. Its primary strength is detailing how to validate each capability entirely from bash commands, satisfying the no-human-in-loop requirement.
-
-The integrated plan below merges Plan A’s fast path to a working build, Plan B’s architectural rigor, and Plan C’s automation discipline. Each phase ends with concrete bash invocations suitable for Codex CLI once a USB-connected phone is available.
-
-16.2 Integrated Execution Plan
-
-Phase 0 – Tooling & Project Bootstrap
+Phase 0 - Tooling & Project Bootstrap
 - Provision Android command-line tools and required SDKs inside the Codex CLI container using a reproducible script: `bash scripts/android/setup-sdk.sh --api 35 --build-tools 35.0.0` (script will install sdkmanager components and accept licenses non-interactively).
 - Initialise `app/android` with Kotlin + Jetpack Compose single-activity template via `bash scripts/android/init-project.sh` (scaffolds Gradle wrapper, module, package structure, ktlint, `.editorconfig`, and CI workflow stub).
 - Verify Gradle by running `bash scripts/android/gradle.sh ./gradlew tasks` (wrapper script sets JAVA_HOME, ANDROID_HOME, and caches dependencies). Deliverable: empty activity builds and installs on emulator using `bash scripts/android/emulator-smoke.sh`.
+- Connect to the tethered phone with `mobile-mcp` (from https://github.com/mobile-next/mobile-mcp) and push the initial debug build: `bash scripts/android/install.sh --device $ANDROID_SERIAL`. Automate a smoke interaction via `mobile-mcp run scripts/mobile/sanity.mcp` that launches the app and verifies the placeholder UI renders. Deliverable: minimalist Compose screen visible on the physical phone within this phase.
 
-Phase 1 – Core Architecture & Registration Skeleton
+Phase 1 - Core Architecture & Registration Skeleton
 - Implement base packages (`data`, `domain`, `ui`) and Dependency Injection graph (Hilt) via MCP-assisted Kotlin scaffolding commands embedded in `bash scripts/android/generate.sh`.
 - Add device ID persistence and registration API client stubs with Retrofit + OkHttp. Compose idle/pending approval layouts with state machine skeleton (StateFlow + reducers).
 - Automated checks: `bash scripts/android/gradle.sh ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest`. Deploy to emulator for smoke via `bash scripts/android/install.sh --emulator`. Deliverable: app reaches pending dialog with stubbed backend responses.
+- Extend the `mobile-mcp` automation to run the pending approval flow on-device (launch app, trigger pending dialog, capture screenshot artifact) so every iteration still validates against real hardware.
 
 Phase 2 – Backend Integration & Permission Handling
 - Connect registration flow to staging backend using environment-configured base URL (`config/android/.env`) loaded by Gradle. Replace stubs with real Retrofit services and WebSocket handshake to register device.
@@ -140,8 +134,9 @@ Phase 2 – Backend Integration & Permission Handling
 - Automation: `bash scripts/android/mock-server.sh start` (spawns MockWebServer for CI), run integration tests `bash scripts/android/gradle.sh ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=...RegistrationSuite`, then stop mock server script.
 - Deploy to USB device with `bash scripts/android/install.sh --device $ANDROID_SERIAL` (Codex CLI sets serial). Deliverable: device auto-registers and transitions to idle when backend approval flips.
 
-Phase 3 – Voice Session MVP (Fast Track)
-- Implement WebSocket voice client hooking into existing FastAPI ConversationRelay endpoints with coroutine-based state machine. Compose Hang Up UI, audio routing via `AudioManager` + Bluetooth SCO utilities, and start ForegroundService with persistent notification.
+Phase 3 - Voice Session MVP (Fast Track)
+- Implement a WebRTC voice client that connects to an `aiortc` peer hosted inside the FastAPI service; reuse the existing WebSocket channel purely for signaling. Compose Hang Up UI, audio routing via `AudioManager` + Bluetooth SCO utilities, and start ForegroundService with persistent notification.
+- Define a thin VoiceTransport interface (connect, sendAudioFrame, receiveAudioFrame, teardown) so the WebRTC stack can be swapped for LiveKit/Daily or a future transport without touching UI/domain layers.
 - Add CLI automation for live call smoke test: `bash scripts/android/run-voice-smoke.sh --backend $BACKEND_URL` (script launches instrumentation that connects, streams dummy audio, asserts hang-up path).
 - Run `bash scripts/android/gradle.sh ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:connectedVoiceMvpAndroidTest`. Deliverable: first end-to-end voice call from emulator and USB device using only scripted commands.
 
