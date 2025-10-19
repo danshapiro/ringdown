@@ -117,44 +117,45 @@ Date: 2025-10-18
 - Priority: get a branded-but-minimal app rendering on a physical Android phone immediately, then iterate. Use `mobile-next/mobile-mcp` to drive the device from the CLI for every on-device validation.
 
 Phase 0 - Tooling & Project Bootstrap
-- Provision Android command-line tools and required SDKs inside the Codex CLI container using a reproducible script: `bash scripts/android/setup-sdk.sh --api 35 --build-tools 35.0.0` (script will install sdkmanager components and accept licenses non-interactively).
-- Initialise `app/android` with Kotlin + Jetpack Compose single-activity template via `bash scripts/android/init-project.sh` (scaffolds Gradle wrapper, module, package structure, ktlint, `.editorconfig`, and CI workflow stub).
-- Verify Gradle by running `bash scripts/android/gradle.sh ./gradlew tasks` (wrapper script sets JAVA_HOME, ANDROID_HOME, and caches dependencies). Deliverable: empty activity builds and installs on emulator using `bash scripts/android/emulator-smoke.sh`.
-- Connect to the tethered phone with `mobile-mcp` (from https://github.com/mobile-next/mobile-mcp) and push the initial debug build: `bash scripts/android/install.sh --device $ANDROID_SERIAL`. Automate a smoke interaction via `mobile-mcp run scripts/mobile/sanity.mcp` that launches the app and verifies the placeholder UI renders. Deliverable: minimalist Compose screen visible on the physical phone within this phase.
+- Provision Android command-line tools and required SDKs inside the Codex CLI container using a reproducible script: `bash android/scripts/setup-sdk.sh --api 35 --build-tools 35.0.0` (script will install sdkmanager components and accept licenses non-interactively).
+- Initialise `android/app` with Kotlin + Jetpack Compose single-activity template via `bash android/scripts/init-project.sh` (scaffolds Gradle wrapper, module, package structure, ktlint, `.editorconfig`, and CI workflow stub).
+- Verify Gradle by running `bash android/scripts/gradle.sh ./gradlew tasks` (wrapper script sets JAVA_HOME, ANDROID_HOME, and caches dependencies). Deliverable: empty activity builds and installs on emulator using `bash android/scripts/emulator-smoke.sh`.
+- Connect to the tethered phone with `mobile-mcp` (from https://github.com/mobile-next/mobile-mcp) and push the initial debug build. Build the APK once via `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug`, then install it with `mobile-mcp install_app --device $ANDROID_SERIAL --path android/app/app/build/outputs/apk/debug/app-debug.apk` (wake/unlock the phone first). Because DrvFS can block Gradle's cache moves for `adb`, only fall back to the shell installer if necessary: `GRADLE_USER_HOME=$HOME/.gradle-ringdown bash android/scripts/install.sh --device $ANDROID_SERIAL`. After installation, launch the UI and capture proof via `mobile-mcp run android/scripts/mobile/sanity.mcp`, which drives the pending-approval placeholder and saves a screenshot. Deliverable: minimalist Compose screen visible on the physical phone within this phase.
+- Secrets & config hygiene: place runtime credentials under `android/config/.env` (backend base URL, API tokens) and signing artifacts inside `android/keys/` (e.g., `internal.keystore`, Play Developer service accounts). These paths are gitignored—check in example templates (e.g., `android/config/.env.example`) but never real secrets.
 
 Phase 1 - Core Architecture & Registration Skeleton
-- Implement base packages (`data`, `domain`, `ui`) and Dependency Injection graph (Hilt) via MCP-assisted Kotlin scaffolding commands embedded in `bash scripts/android/generate.sh`.
+- Implement base packages (`data`, `domain`, `ui`) and Dependency Injection graph (Hilt) via MCP-assisted Kotlin scaffolding commands embedded in `bash android/scripts/generate.sh`.
 - Add device ID persistence and registration API client stubs with Retrofit + OkHttp. Compose idle/pending approval layouts with state machine skeleton (StateFlow + reducers).
-- Automated checks: `bash scripts/android/gradle.sh ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest`. Deploy to emulator for smoke via `bash scripts/android/install.sh --emulator`. Deliverable: app reaches pending dialog with stubbed backend responses.
+- Automated checks: `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest`. Deploy to emulator for smoke via `bash android/scripts/install.sh --emulator`. Deliverable: app reaches pending dialog with stubbed backend responses.
 - Extend the `mobile-mcp` automation to run the pending approval flow on-device (launch app, trigger pending dialog, capture screenshot artifact) so every iteration still validates against real hardware.
 
 Phase 2 – Backend Integration & Permission Handling
 - Connect registration flow to staging backend using environment-configured base URL (`config/android/.env`) loaded by Gradle. Replace stubs with real Retrofit services and WebSocket handshake to register device.
 - Wire permission manager (Accompanist) and ensure denied permissions revert to idle with inline messaging.
-- Automation: `bash scripts/android/mock-server.sh start` (spawns MockWebServer for CI), run integration tests `bash scripts/android/gradle.sh ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=...RegistrationSuite`, then stop mock server script.
-- Deploy to USB device with `bash scripts/android/install.sh --device $ANDROID_SERIAL` (Codex CLI sets serial). Deliverable: device auto-registers and transitions to idle when backend approval flips.
+- Automation: `bash android/scripts/mock-server.sh start` (spawns MockWebServer for CI), run integration tests `bash android/scripts/gradle.sh ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=...RegistrationSuite`, then stop mock server script.
+- Deploy to USB device with `bash android/scripts/install.sh --device $ANDROID_SERIAL` (Codex CLI sets serial). Deliverable: device auto-registers and transitions to idle when backend approval flips.
 
 Phase 3 - Voice Session MVP (Fast Track)
 - Implement a WebRTC voice client that connects to an `aiortc` peer hosted inside the FastAPI service; reuse the existing WebSocket channel purely for signaling. Compose Hang Up UI, audio routing via `AudioManager` + Bluetooth SCO utilities, and start ForegroundService with persistent notification.
 - Define a thin VoiceTransport interface (connect, sendAudioFrame, receiveAudioFrame, teardown) so the WebRTC stack can be swapped for LiveKit/Daily or a future transport without touching UI/domain layers.
-- Add CLI automation for live call smoke test: `bash scripts/android/run-voice-smoke.sh --backend $BACKEND_URL` (script launches instrumentation that connects, streams dummy audio, asserts hang-up path).
-- Run `bash scripts/android/gradle.sh ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:connectedVoiceMvpAndroidTest`. Deliverable: first end-to-end voice call from emulator and USB device using only scripted commands.
+- Add CLI automation for live call smoke test: `bash android/scripts/run-voice-smoke.sh --backend $BACKEND_URL` (script launches instrumentation that connects, streams dummy audio, asserts hang-up path).
+- Run `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:connectedVoiceMvpAndroidTest`. Deliverable: first end-to-end voice call from emulator and USB device using only scripted commands.
 
 Phase 4 – Reconnect Loop & Audio Asset Polish
-- Bundle reconnect audio asset under `app/android/app/src/main/res/raw/reconnect_loop.ogg`; script `bash scripts/android/convert-audio.sh assets/reconnect.mp3` handles conversion.
+- Bundle reconnect audio asset under `android/app/app/src/main/res/raw/reconnect_loop.ogg`; script `bash android/scripts/convert-audio.sh assets/reconnect.mp3` handles conversion.
 - Implement reconnect backoff scheduler, banner messaging, and ensure notification removal on completion. Extend smoke test script to toggle network via `adb shell cmd connectivity airplane-mode enable/disable` within bash automation.
-- Tests: `bash scripts/android/gradle.sh ./gradlew :app:testDebugUnitTest --tests "*Reconnect*" :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=ReconnectSuite`.
+- Tests: `bash android/scripts/gradle.sh ./gradlew :app:testDebugUnitTest --tests "*Reconnect*" :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=ReconnectSuite`.
 
 Phase 5 – Chat Mode & Shared Conversation State
 - Generate chat UI (LazyColumn, attachments, reset, model selector) with Compose using MCP templates. Implement repository sharing conversation state between voice/chat with Room-backed cache and streaming updates from backend log endpoints.
-- Provide CLI command `bash scripts/android/run-chat-smoke.sh --backend $BACKEND_URL --fixtures fixtures/chat/*.json` to replay log fixtures against the UI.
-- Tests: `bash scripts/android/gradle.sh ./gradlew :app:testDebugUnitTest :app:connectedChatAndroidTest :app:verifyComposeSnapshots`. Deliverable: fully functional chat with tool/thinking pills and attachments cap enforcement.
+- Provide CLI command `bash android/scripts/run-chat-smoke.sh --backend $BACKEND_URL --fixtures fixtures/chat/*.json` to replay log fixtures against the UI.
+- Tests: `bash android/scripts/gradle.sh ./gradlew :app:testDebugUnitTest :app:connectedChatAndroidTest :app:verifyComposeSnapshots`. Deliverable: fully functional chat with tool/thinking pills and attachments cap enforcement.
 
 Phase 6 – Hardening, Analytics, and Deployment
-- Add accessibility labels, localisation hooks, Crashlytics (behind build flag), and WorkManager jobs for background reconnect resilience. Ensure CLI workflow `bash scripts/android/full-ci.sh` chains lint, unit, instrumentation, and bundle builds.
-- Produce release bundle with `bash scripts/android/gradle.sh ./gradlew :app:bundleRelease` and sign via `bash scripts/android/signing.sh --keystore keys/internal.keystore`.
-- For deployment, run `bash scripts/android/publish-internal.sh --track internal --artifact app/build/outputs/bundle/release/app-release.aab` (script uses Play Developer API credentials configured beforehand). Deliverable: release candidate uploaded to internal testing without manual UI steps.
+- Add accessibility labels, localisation hooks, Crashlytics (behind build flag), and WorkManager jobs for background reconnect resilience. Ensure CLI workflow `bash android/scripts/full-ci.sh` chains lint, unit, instrumentation, and bundle builds.
+- Produce release bundle with `bash android/scripts/gradle.sh ./gradlew :app:bundleRelease` and sign via `bash android/scripts/signing.sh --keystore keys/internal.keystore`.
+- For deployment, run `bash android/scripts/publish-internal.sh --track internal --artifact app/build/outputs/bundle/release/app-release.aab` (script uses Play Developer API credentials configured beforehand). Deliverable: release candidate uploaded to internal testing without manual UI steps.
 
 Ongoing Operations
-- Nightly CI job triggers `bash scripts/android/full-ci.sh` and archives emulator + device logs.
-- Before each release, execute `bash scripts/android/device-soak.sh --duration 30m` to automate reconnect stress test on a tethered phone.
+- Nightly CI job triggers `bash android/scripts/full-ci.sh` and archives emulator + device logs.
+- Before each release, execute `bash android/scripts/device-soak.sh --duration 30m` to automate reconnect stress test on a tethered phone.
