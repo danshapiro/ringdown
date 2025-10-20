@@ -556,10 +556,10 @@ async def stream_response(
                 if delta and delta.get("content"):
                     token: str = delta["content"]
                     thinking_audio.stop()
+                    first_content = not assistant_tokens
                     assistant_tokens.append(token)
-                    if not tool_call_seen:
+                    if not tool_call_seen or first_content:
                         yield token
-
                 # Record diagnostics ----------------------------------------
                 last_finish_reason = finish_reason or last_finish_reason
                 if len(_diag_chunks) < 5:

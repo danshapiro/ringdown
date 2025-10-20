@@ -156,3 +156,6 @@ agents:
 # Optional shared Drive folders available to agents when not overridden.
 docs_folder_greenlist_defaults:
   - "Ringdown-default"
+
+# Registered Android devices managed by the backend
+mobile_devices: {}

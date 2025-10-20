@@ -169,6 +169,19 @@ def _load_config() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Configuration cache management
+# ---------------------------------------------------------------------------
+
+
+def refresh_config_cache() -> None:
+    """Clear cached configuration so subsequent calls reload from disk."""
+
+    _config_path.cache_clear()
+    _load_config.cache_clear()
+    _load_config_model.cache_clear()
+
+
+# ---------------------------------------------------------------------------
 # Convenience helpers used by various modules
 # ---------------------------------------------------------------------------
 
@@ -206,6 +219,20 @@ def get_project_name() -> str:
     cfg = _load_config()
     project = cfg.get("defaults", {}).get("project_name")
     return str(project).strip() if project else "Project"
+
+
+def get_mobile_devices() -> Dict[str, Any]:
+    """Return mapping of registered mobile devices."""
+
+    cfg = _load_config()
+    return cfg.get("mobile_devices", {})
+
+
+def get_mobile_device(device_id: str) -> Dict[str, Any] | None:
+    """Return configuration entry for a single device, if present."""
+
+    devices = get_mobile_devices()
+    return devices.get(device_id)
 
 
 def get_calendar_user_name() -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 import litellm
 
-from app.api import twilio, websocket
+from app.api import mobile, twilio, websocket
 from app.api.websocket import websocket_endpoint as websocket_endpoint
 from app.audio import (
     _build_prosody_tag,
@@ -56,6 +56,8 @@ def _create_app() -> FastAPI:
 
     # Webhook routers for Twilio Voice and ConversationRelay streaming.
     application.include_router(twilio.router)
+    application.include_router(mobile.router)
+    application.include_router(mobile.ws_router)
     application.include_router(websocket.router)
 
     return application
