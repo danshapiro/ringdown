@@ -11,7 +11,7 @@ Instead of performing these actions, only recommend them, and have the user eith
 - **write ad-hoc scripts in Python**
 - **Use bash** unless there's a specific reason to use powershell
 - **Mind the venv**: In bash, use `.venv-wsl`; on PowerShell or CMD, use `.venv`. Both live in this repo—activate the one that matches your shell.
-- **Always run tests after changes**: `uv run pytest`
+- **Always run tests after changes**: on Windows run `.venv\Scripts\python.exe -m pytest tests`; on WSL/bashe use `UV_PROJECT_ENVIRONMENT=.venv-wsl uv run pytest`
 - **Follow coding standards**: Write code that will pass ruff and mypy
 
 ### Python Standards
@@ -35,7 +35,7 @@ Instead of performing these actions, only recommend them, and have the user eith
   - WSL/Bash: `export UV_PROJECT_ENVIRONMENT=.venv-wsl` (add to `.bashrc`/`.zshrc`).
 
 ### Android Client & Voice Tests
-- **Python test suite:** run `uv run pytest tests` (Windows: avoid the repo root to skip `android/.gradle-cache` permission errors). Alternatively call `.venv\Scripts\python.exe -m pytest tests`.
+- **Python test suite:** Windows: call `.venv\Scripts\python.exe -m pytest tests` so uv does not fall back to the system Python. On WSL/macOS export `UV_PROJECT_ENVIRONMENT=.venv-wsl` and run `uv run pytest tests`. Running from the repo root is fine now that `.gradle-cache` stays out of site-packages.
 - **API registration tests** (`tests/test_mobile_registration.py`) require `OPENAI_API_KEY` in the environment; the suite fails fast if it’s missing.
 - **Voice smoke test:** once a device/emulator shows up in `adb devices`, run `bash android/scripts/run-voice-smoke.sh --backend $BACKEND_URL`. The script wraps `connectedDebugAndroidTest` and expects the same `ANDROID_SERIAL` that `mobile-mcp` uses.
 - **Instrumentation toggles:** to force the fake transport during tests set `DebugFeatureFlags.overrideVoiceTransportStub(true)`—handled automatically by the existing `VoiceMvpSuite`; no manual changes needed when running the suite.

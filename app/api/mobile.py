@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import copy
 import io
+import json
 import os
+import wave
 from contextlib import suppress
 from fractions import Fraction
-from functools import lru_cache
 from typing import Any, Dict, Literal, Optional
 
 import httpx
@@ -17,9 +18,12 @@ from aiortc.mediastreams import AudioStreamTrack
 from av import AudioFrame, open as av_open
 from av.audio.resampler import AudioResampler
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
+import numpy as np
+from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import settings
+from app.chat import stream_response
 from app.logging_utils import logger
 from app.mobile.config_store import ensure_device_entry
 
@@ -32,6 +36,22 @@ DEFAULT_TTS_VOICE = "alloy"
 HTTP_TIMEOUT = 60.0
 
 DEFAULT_POLL_AFTER_SECONDS = 5
+TRANSCRIPTION_MODEL = os.getenv("VOICE_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
+MIN_UTTERANCE_DURATION_SEC = 0.5
+MAX_UTTERANCE_DURATION_SEC = 12.0
+SILENCE_DURATION_SEC = 0.6
+ENERGY_THRESHOLD = 900.0
+
+_openai_client: OpenAI | None = None
+
+
+def _get_openai_client() -> OpenAI:
+    """Return a cached OpenAI client instance."""
+
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI()
+    return _openai_client
 
 router = APIRouter(prefix="/v1/mobile", tags=["mobile"])
 ws_router = APIRouter()
@@ -98,21 +118,240 @@ class QueuedAudioStreamTrack(AudioStreamTrack):
         self._closing = True
 
 
-async def _play_initial_prompt(track: QueuedAudioStreamTrack, device_cfg: Dict[str, Any]) -> None:
-    agent_name = device_cfg.get("agent") or "unknown-caller"
-    try:
-        agent_cfg = settings.get_agent_config(agent_name)
-    except KeyError:
-        agent_cfg = {}
+class MobileVoiceSession:
+    """Manage a mobile voice session with transcription, LLM, and TTS."""
 
-    greeting = agent_cfg.get("welcome_greeting") or "You are connected to the Ringdown assistant."
-    voice = agent_cfg.get("voice") or DEFAULT_TTS_VOICE
+    def __init__(
+        self,
+        device_id: str,
+        device_cfg: Dict[str, Any],
+        outbound_track: QueuedAudioStreamTrack,
+    ) -> None:
+        self.device_id = device_id
+        self.device_cfg = device_cfg
+        self._outbound_track = outbound_track
+        self._lock = asyncio.Lock()
+        self._tasks: set[asyncio.Task[Any]] = set()
+        self._active = True
+        self._silence_samples = int(SILENCE_DURATION_SEC * SAMPLE_RATE)
+        self._min_samples = int(MIN_UTTERANCE_DURATION_SEC * SAMPLE_RATE)
+        self._max_samples = int(MAX_UTTERANCE_DURATION_SEC * SAMPLE_RATE)
 
-    frames = await _synthesize_speech_frames(greeting, voice)
+        agent_name = device_cfg.get("agent") or "unknown-caller"
+        try:
+            agent_cfg = settings.get_agent_config(agent_name)
+        except KeyError:
+            logger.warning(
+                "Agent %s not found for device %s; falling back to unknown-caller",
+                agent_name,
+                device_id,
+            )
+            agent_name = "unknown-caller"
+            agent_cfg = settings.get_agent_config(agent_name)
 
-    for frame in frames:
-        track.enqueue(frame)
-    track.close()
+        self.agent_name = agent_name
+        self.agent_cfg = copy.deepcopy(agent_cfg)
+        prompt = self.agent_cfg.get("prompt", "")
+        self.messages: list[dict[str, Any]] = []
+        if prompt:
+            self.messages.append({"role": "system", "content": prompt})
+
+        self._voice = self.agent_cfg.get("voice") or DEFAULT_TTS_VOICE
+        self._client = _get_openai_client()
+
+    async def start(self) -> None:
+        """Play the configured greeting at session start."""
+
+        greeting = self._resolve_greeting()
+        if not greeting:
+            return
+
+        await self._speak(greeting)
+        self.messages.append({"role": "assistant", "content": greeting})
+
+    def _resolve_greeting(self) -> str | None:
+        candidate = self.agent_cfg.get("welcome_greeting")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+        return "You are connected to the Ringdown assistant."
+
+    def attach_incoming_track(self, track: AudioStreamTrack) -> None:
+        """Start consuming audio from the handset microphone."""
+
+        task = asyncio.create_task(self._consume_track(track))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def close(self) -> None:
+        """Cancel background tasks and release resources."""
+
+        self._active = False
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError):
+                await task
+
+        self._outbound_track.close()
+
+    async def _consume_track(self, track: AudioStreamTrack) -> None:
+        """Segment incoming audio into utterances and dispatch for processing."""
+
+        buffer = bytearray()
+        speaking = False
+        speech_samples = 0
+        silence_samples = 0
+
+        try:
+            while self._active:
+                try:
+                    frame = await track.recv()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Audio track for %s closed: %s", self.device_id, exc)
+                    break
+
+                samples = frame.to_ndarray(format="s16")
+                if samples.ndim == 2:
+                    mono = samples[0]
+                else:
+                    mono = samples
+                mono = np.asarray(mono, dtype=np.int16)
+
+                amplitude = float(np.abs(mono).mean())
+                pcm_chunk = mono.tobytes()
+
+                if not speaking:
+                    if amplitude < ENERGY_THRESHOLD:
+                        continue
+                    speaking = True
+                    speech_samples = len(mono)
+                    buffer.extend(pcm_chunk)
+                    silence_samples = 0
+                    continue
+
+                buffer.extend(pcm_chunk)
+                speech_samples += len(mono)
+
+                if amplitude < ENERGY_THRESHOLD:
+                    silence_samples += len(mono)
+                else:
+                    silence_samples = 0
+
+                should_flush = False
+                if silence_samples >= self._silence_samples:
+                    should_flush = True
+                elif speech_samples >= self._max_samples:
+                    should_flush = True
+
+                if should_flush:
+                    chunk = bytes(buffer)
+                    buffer.clear()
+                    speaking = False
+                    speech_samples = 0
+                    silence_samples = 0
+                    if chunk and len(chunk) >= self._min_samples * 2:
+                        self._schedule_chunk(chunk)
+
+        finally:
+            if buffer and len(buffer) >= self._min_samples * 2:
+                self._schedule_chunk(bytes(buffer))
+
+    def _schedule_chunk(self, pcm_bytes: bytes) -> None:
+        if not self._active or not pcm_bytes:
+            return
+        task = asyncio.create_task(self._process_chunk(pcm_bytes))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _process_chunk(self, pcm_bytes: bytes) -> None:
+        try:
+            async with self._lock:
+                transcript = await self._transcribe(pcm_bytes)
+                if not transcript:
+                    return
+
+                logger.info("Mobile user %s said: %s", self.device_id, transcript)
+                self.messages.append({"role": "user", "content": transcript})
+
+                response_text = await self._generate_response(transcript)
+                if not response_text:
+                    return
+
+                self.messages.append({"role": "assistant", "content": response_text})
+                await self._speak(response_text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error processing mobile audio chunk: %s", exc)
+
+    async def _transcribe(self, pcm_bytes: bytes) -> str:
+        if not pcm_bytes:
+            return ""
+
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(SAMPLE_RATE)
+            handle.writeframes(pcm_bytes)
+
+        wav_buffer.seek(0)
+        wav_buffer.name = "utterance.wav"
+
+        try:
+            result = await asyncio.to_thread(
+                self._client.audio.transcriptions.create,
+                model=TRANSCRIPTION_MODEL,
+                file=wav_buffer,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Transcription failed for device %s: %s", self.device_id, exc)
+            return ""
+
+        text = getattr(result, "text", None)
+        if not text and isinstance(result, dict):
+            text = result.get("text")
+
+        return text.strip() if text else ""
+
+    async def _generate_response(self, user_text: str) -> str:
+        responses: list[str] = []
+        tool_announced = False
+
+        async for chunk in stream_response(user_text, self.agent_cfg, self.messages):
+            if isinstance(chunk, dict):
+                marker_type = chunk.get("type")
+                if marker_type == "tool_executing" and not tool_announced:
+                    tool_announced = True
+                    await self._speak("Give me a moment while I work on that.")
+                elif marker_type == "reset_conversation":
+                    reset_message = chunk.get("message") or "Conversation reset."
+                    self.messages = []
+                    prompt = self.agent_cfg.get("prompt", "")
+                    if prompt:
+                        self.messages.append({"role": "system", "content": prompt})
+                    return reset_message
+                continue
+
+            responses.append(chunk)
+
+        return "".join(responses).strip()
+
+    async def _speak(self, text: str) -> None:
+        if not text or not self._active:
+            return
+
+        try:
+            frames = await _synthesize_speech_frames(text, self._voice)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("TTS synthesis failed for device %s: %s", self.device_id, exc)
+            return
+
+        for frame in frames:
+            self._outbound_track.enqueue(frame)
 
 
 async def _synthesize_speech_frames(text: str, voice: str) -> list[AudioFrame]:
@@ -229,16 +468,6 @@ async def register_device(payload: MobileRegisterRequest) -> MobileRegisterRespo
     )
 
 
-async def _drain_inbound_audio(track, device_id: str) -> None:
-    """Consume inbound audio frames to keep the receiver alive."""
-
-    try:
-        while True:
-            await track.recv()
-    except Exception:
-        logger.debug("Audio track for device %s closed", device_id)
-
-
 def _serialize_candidate(candidate: RTCIceCandidate) -> Dict[str, Any]:
     return {
         "candidate": candidate.candidate,
@@ -272,6 +501,7 @@ async def voice_signaling(websocket: WebSocket) -> None:
     peer_connection = RTCPeerConnection()
     audio_track = QueuedAudioStreamTrack()
     peer_connection.addTrack(audio_track)
+    session = MobileVoiceSession(device_id, device_cfg, audio_track)
 
     @peer_connection.on("icecandidate")
     def _on_icecandidate(candidate: Optional[RTCIceCandidate]) -> None:
@@ -283,13 +513,17 @@ async def voice_signaling(websocket: WebSocket) -> None:
         }
         asyncio.create_task(websocket.send_text(json.dumps(payload)))
 
+    inbound_started = False
+
     @peer_connection.on("track")
     def _on_track(track) -> None:  # noqa: ANN001 - aiortc callback signature
-        if track.kind == "audio":
+        nonlocal inbound_started
+        if track.kind == "audio" and not inbound_started:
+            inbound_started = True
             logger.debug("Received audio track from %s", device_id)
-            asyncio.create_task(_drain_inbound_audio(track, device_id))
+            session.attach_incoming_track(track)
 
-    play_task: Optional[asyncio.Task[None]] = None
+    greeting_started = False
 
     try:
         while True:
@@ -314,8 +548,9 @@ async def voice_signaling(websocket: WebSocket) -> None:
                     "sdp": peer_connection.localDescription.sdp,
                 }
                 await websocket.send_text(json.dumps(response))
-                if play_task is None:
-                    play_task = asyncio.create_task(_play_initial_prompt(audio_track, device_cfg))
+                if not greeting_started:
+                    greeting_started = True
+                    await session.start()
             elif mtype == "candidate":
                 candidate_payload = message.get("candidate") or {}
                 candidate_str = candidate_payload.get("candidate")
@@ -340,11 +575,7 @@ async def voice_signaling(websocket: WebSocket) -> None:
         logger.exception("Error in voice signaling handler for %s: %s", device_id, exc)
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
     finally:
-        if play_task is not None:
-            play_task.cancel()
-            with suppress(Exception):
-                await play_task
-        audio_track.close()
+        await session.close()
         await peer_connection.close()
 
 
