@@ -50,6 +50,7 @@ class VoiceMvpSuite {
     @After
     fun tearDown() {
         DebugFeatureFlags.overrideRegistrationStub(null)
+        DebugFeatureFlags.overrideVoiceTransportStub(null)
     }
 
     @Test
@@ -85,6 +86,7 @@ class VoiceMvpSuite {
             return object : org.junit.runners.model.Statement() {
                 override fun evaluate() {
                     DebugFeatureFlags.overrideRegistrationStub(false)
+                    DebugFeatureFlags.overrideVoiceTransportStub(true)
                     val backendOverride = InstrumentationRegistry.getArguments().getString("backendUrl")
                     if (backendOverride == null) {
                         server.start(8899)
@@ -96,6 +98,7 @@ class VoiceMvpSuite {
                             server.shutdown()
                         }
                         DebugFeatureFlags.overrideRegistrationStub(null)
+                        DebugFeatureFlags.overrideVoiceTransportStub(null)
                     }
                 }
             }

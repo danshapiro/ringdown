@@ -8,6 +8,7 @@ requires-python = ">=3.12"
 # Direct runtime dependencies
 dependencies = [
     "audioop-lts>=0.2.2; python_version >= \"3.13\"",
+    "aiortc>=1.7.0",
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.29.0; platform_system != \"Windows\"",
     "uvicorn>=0.29.0; platform_system == \"Windows\"",
@@ -32,6 +33,7 @@ dependencies = [
     "typing-extensions>=4.11.0",
     "openai>=1.86.0",
     "tzdata>=2024.1",
+    "ruamel.yaml>=0.18.6",
 ]
 
 [build-system]
@@ -49,6 +51,7 @@ dev = [
 
 # Tell setuptools to package the FastAPI app package and the shim module (avoid data/ directory)
 [tool.setuptools]
+license-files = []
 py-modules = ["log_love"]
 
 [tool.setuptools.packages.find]
@@ -61,6 +64,15 @@ filterwarnings = [
 ]
 markers = [
     "integration: tests that contact third-party services",
+]
+norecursedirs = [
+    "android/.gradle-cache",
+    "android/.gradle",
+    "android/.gradle-kotlin",
+    "android/.gradle-test",
+]
+testpaths = [
+    "tests",
 ]
 
 [tool.ruff]

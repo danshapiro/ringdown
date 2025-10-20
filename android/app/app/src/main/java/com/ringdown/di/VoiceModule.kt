@@ -1,6 +1,7 @@
 package com.ringdown.di
 
 import com.ringdown.BuildConfig
+import com.ringdown.DebugFeatureFlags
 import com.ringdown.data.voice.AudioRouteController
 import com.ringdown.data.voice.FakeVoiceTransport
 import com.ringdown.data.voice.VoiceTransport
@@ -49,7 +50,11 @@ class SelectedVoiceTransport @Inject constructor(
 ) : VoiceTransport {
 
     private val delegate: VoiceTransport
-        get() = if (BuildConfig.USE_FAKE_VOICE_TRANSPORT) fake else real
+        get() = if (DebugFeatureFlags.shouldUseVoiceTransportStub(BuildConfig.USE_FAKE_VOICE_TRANSPORT)) {
+            fake
+        } else {
+            real
+        }
 
     override suspend fun connect(parameters: VoiceTransport.ConnectParameters) {
         delegate.connect(parameters)

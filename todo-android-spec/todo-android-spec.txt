@@ -159,11 +159,13 @@ Phase 3 - Voice Session MVP (Fast Track)
 - Define a thin VoiceTransport interface (connect, sendAudioFrame, receiveAudioFrame, teardown) so the WebRTC stack can be swapped for LiveKit/Daily or a future transport without touching UI/domain layers.
 - Add CLI automation for live call smoke test: `bash android/scripts/run-voice-smoke.sh --backend $BACKEND_URL` (script launches instrumentation that connects, streams dummy audio, asserts hang-up path).
 - Run `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:connectedVoiceMvpAndroidTest`. Deliverable: first end-to-end voice call from emulator and USB device using only scripted commands.
+- Configure the Android `.env` to point at the production HTTPS backend (the service is live). Loops at `127.0.0.1` or any other cleartext URL are not acceptable—Phase 3 validation requires hitting the real backend over TLS so the voice flow mirrors production.
 - Add admin helper `python authorize_new_phone.py` to streamline device approvals: the script resolves the repo root, downloads the pending config from `gs://<project>-test-assets/config/pending/config.yaml`, shows a unified diff against the local `config.yaml`, flips all `enabled: false` phone entries to `true`, writes a timestamped backup, promotes the approved config to `gs://<project>-test-assets/config/live/config.yaml`, and deletes the pending artifact once confirmed.
 - Ensure the end-to-end “promote pending phone” workflow (authorize script + backend job) runs as part of Phase 3 validation so device approvals remain deployable without manual YAML edits.
 - Outstanding (Phase 3 follow-up):
-  - Replace the temporary `WebRtcVoiceTransport` stub with a production-ready implementation that exchanges SDP/candidates with the aiortc backend, streams microphone audio through the active transport, and forwards remote frames to the device output.
-  - Confirm `bash android/scripts/run-voice-smoke.sh --backend $BACKEND_URL` can execute against emulator and tethered device by ensuring `adb` connectivity is available in CI and local harnesses.
+  - Expand the Phase 3 WebRTC transport so live assistant audio flows end-to-end (LLM speech synthesis + microphone uplink) instead of the temporary greeting-only playback.
+  - Wire the new WebRTC smoke script (`android/scripts/run-voice-smoke.sh`) into CI after ensuring emulator/device `adb` visibility; at present it must be run manually against a tethered device.
+  - Broaden instrumentation coverage to exercise the voice WebRTC path (connectedVoiceMvpAndroidTest) and verify audio frame exchange to guard regressions.
 
 Phase 4 – Reconnect Loop & Audio Asset Polish
 - Bundle reconnect audio asset under `android/app/app/src/main/res/raw/reconnect_loop.ogg`; script `bash android/scripts/convert-audio.sh assets/reconnect.mp3` handles conversion.
