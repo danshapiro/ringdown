@@ -48,6 +48,7 @@ val stagingBackendUrl = requireBackendUrl("STAGING_BACKEND_BASE_URL")
 val productionBackendUrl = requireBackendUrl("PRODUCTION_BACKEND_BASE_URL")
 val debugUseRegistrationStub = requireBooleanEnv("DEBUG_USE_REGISTRATION_STUB")
 val debugStubApprovalThreshold = requireIntEnv("DEBUG_STUB_APPROVAL_THRESHOLD")
+val debugUseVoiceTransportStub = requireBooleanEnv("DEBUG_USE_VOICE_TRANSPORT_STUB")
 val javaHome: String = System.getenv("JAVA_HOME")
     ?: System.getProperty("java.home")
     ?: throw GradleException("JAVA_HOME is not set. Configure the JDK before building.")
@@ -72,8 +73,9 @@ android {
     buildTypes {
         getByName("debug") {
             buildConfigField("String", "BACKEND_BASE_URL", "\"$stagingBackendUrl\"")
-            buildConfigField("Boolean", "USE_STUB_REGISTRATION", debugUseRegistrationStub.toString())
-            buildConfigField("Int", "STUB_APPROVAL_THRESHOLD", debugStubApprovalThreshold.toString())
+            buildConfigField("boolean", "USE_STUB_REGISTRATION", debugUseRegistrationStub.toString())
+            buildConfigField("int", "STUB_APPROVAL_THRESHOLD", debugStubApprovalThreshold.toString())
+            buildConfigField("boolean", "USE_FAKE_VOICE_TRANSPORT", debugUseVoiceTransportStub.toString())
         }
         getByName("release") {
             isMinifyEnabled = false
@@ -82,8 +84,9 @@ android {
                 "proguard-rules.pro"
             )
             buildConfigField("String", "BACKEND_BASE_URL", "\"$productionBackendUrl\"")
-            buildConfigField("Boolean", "USE_STUB_REGISTRATION", "false")
-            buildConfigField("Int", "STUB_APPROVAL_THRESHOLD", "0")
+            buildConfigField("boolean", "USE_STUB_REGISTRATION", "false")
+            buildConfigField("int", "STUB_APPROVAL_THRESHOLD", "0")
+            buildConfigField("boolean", "USE_FAKE_VOICE_TRANSPORT", "false")
         }
     }
 
@@ -122,6 +125,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.5")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.5")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.5")
+    implementation("androidx.lifecycle:lifecycle-service:2.8.5")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.foundation:foundation")
@@ -139,6 +143,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
+    implementation("androidx.media:media:1.7.0")
+    implementation("com.infobip:google-webrtc:1.0.45036")
 
     // Dependency injection
     implementation("com.google.dagger:hilt-android:2.52")

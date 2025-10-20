@@ -1,4 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Ringdown</string>
+    <string name="voice_notification_channel_name">Voice session</string>
+    <string name="voice_notification_channel_description">Keeps the Ringdown voice session active while the app is in the background.</string>
+    <string name="voice_notification_connecting_title">Connecting voice session</string>
+    <string name="voice_notification_connecting_message">Contacting the assistant...</string>
+    <string name="voice_notification_active_title">Voice session active</string>
+    <string name="voice_notification_active_message">Connected via %1$s</string>
+    <string name="voice_notification_reconnect_title">Reconnecting voice session</string>
+    <string name="voice_notification_reconnect_message">Attempting to restore the call...</string>
+    <string name="voice_notification_error_title">Voice session error</string>
+    <string name="voice_notification_disconnected_title">Voice session ended</string>
+    <string name="voice_notification_disconnected_message">Voice channel closed.</string>
+    <string name="voice_notification_hang_up_action">Hang up</string>
 </resources>
