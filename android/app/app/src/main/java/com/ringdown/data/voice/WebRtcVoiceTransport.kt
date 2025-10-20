@@ -31,12 +31,12 @@ import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.IceCandidate
-import org.webrtc.JavaAudioDeviceModule
 import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.audio.JavaAudioDeviceModule
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
@@ -172,6 +172,10 @@ class WebRtcVoiceTransport @Inject constructor(
                     }
                 }
 
+                override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {
+                    Log.d(TAG, "ICE candidates removed: ${candidates.size}")
+                }
+
                 override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
                     Log.d(TAG, "Peer connection state changed: $newState")
                     if (newState == PeerConnection.PeerConnectionState.FAILED) {
@@ -183,6 +187,10 @@ class WebRtcVoiceTransport @Inject constructor(
 
                 override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
                     Log.d(TAG, "ICE connection state changed: $newState")
+                }
+
+                override fun onIceConnectionReceivingChange(receiving: Boolean) {
+                    Log.d(TAG, "ICE connection receiving change: $receiving")
                 }
 
                 override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) {
@@ -263,7 +271,11 @@ class WebRtcVoiceTransport @Inject constructor(
                                 val candidateJson = json.optJSONObject("candidate") ?: return@launch
                                 val candidateValue = candidateJson.optString("candidate")
                                 if (candidateValue.isNullOrEmpty()) return@launch
-                                val mid = candidateJson.optString("sdpMid", null)
+                                val mid = if (candidateJson.has("sdpMid")) {
+                                    candidateJson.optString("sdpMid")
+                                } else {
+                                    null
+                                }
                                 val indexValue = candidateJson.opt("sdpMLineIndex")
                                 val index = when (indexValue) {
                                     is Int -> indexValue
