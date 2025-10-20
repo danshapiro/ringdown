@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -42,6 +43,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
@@ -55,6 +57,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.outlined.DevicesOther
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,6 +81,16 @@ fun RingdownAppRoot(
             attempts = current.attempts,
             nextPollInSeconds = current.nextPollInSeconds,
             onCheckAgain = viewModel::onCheckAgain
+        )
+        is AppViewState.VoiceConnecting -> VoiceSessionScreen(
+            isConnecting = true,
+            deviceId = current.deviceId,
+            onHangUp = viewModel::onHangUpRequested
+        )
+        is AppViewState.VoiceActive -> VoiceSessionScreen(
+            isConnecting = false,
+            deviceId = current.deviceId,
+            onHangUp = viewModel::onHangUpRequested
         )
         is AppViewState.Error -> ErrorScreen(
             message = current.message,
@@ -181,6 +194,210 @@ private fun IdleScreen(
                 text = "Open Chat",
                 modifier = Modifier.fillMaxWidth(),
                 onClick = onOpenChat
+            )
+        }
+    }
+}
+
+@Composable
+private fun VoiceSessionScreen(
+    isConnecting: Boolean,
+    deviceId: String,
+    onHangUp: () -> Unit
+) {
+    VoiceBackground {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 32.dp)
+                .padding(top = 64.dp, bottom = 48.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            VoiceStatusHeader(isConnecting = isConnecting)
+            VoiceHangUpButton(
+                isConnecting = isConnecting,
+                onClick = onHangUp
+            )
+            Text(
+                text = "Device $deviceId",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = Color.White.copy(alpha = 0.7f),
+                    letterSpacing = 0.5.sp
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun VoiceBackground(
+    content: @Composable BoxScope.() -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFF0A2540),
+                        Color(0xFF1A3A5C),
+                        Color(0xFF0F1F38)
+                    ),
+                    start = Offset.Zero,
+                    end = Offset.Infinite
+                )
+            )
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val radius = size.minDimension
+            drawCircle(
+                color = Color(0x332F6BFF),
+                radius = radius * 0.6f,
+                center = Offset(size.width * 0.2f, size.height * 0.85f)
+            )
+            drawCircle(
+                color = Color(0x22335BFF),
+                radius = radius * 0.45f,
+                center = Offset(size.width * 0.85f, size.height * 0.25f)
+            )
+        }
+        AnimatedVoiceWave(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(220.dp)
+        )
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+            content = content
+        )
+    }
+}
+
+@Composable
+private fun AnimatedVoiceWave(modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "voice-wave")
+    val offset by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(
+                durationMillis = 6000,
+                easing = LinearEasing
+            ),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "voice-wave-offset"
+    )
+
+    Canvas(modifier = modifier) {
+        val waveHeight = size.height
+        val waveWidth = size.width
+        val controlHeight = waveHeight * 0.35f
+        val path = Path().apply {
+            moveTo(0f, waveHeight)
+            val step = waveWidth / 4f
+            val animatedShift = (offset - 0.5f) * controlHeight
+            cubicTo(
+                step,
+                waveHeight - controlHeight + animatedShift,
+                step * 3f,
+                waveHeight + controlHeight - animatedShift,
+                waveWidth,
+                waveHeight - controlHeight * 0.4f
+            )
+            lineTo(waveWidth, waveHeight)
+            close()
+        }
+
+        drawPath(
+            path = path,
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color(0x334E8BFF),
+                    Color.Transparent
+                )
+            )
+        )
+    }
+}
+
+@Composable
+private fun VoiceStatusHeader(isConnecting: Boolean) {
+    val statusText = if (isConnecting) "Connecting..." else "Call in progress"
+    val indicatorColor = if (isConnecting) Color(0xFFFFD60A) else Color(0xFF6DFFB3)
+
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(40.dp))
+            .background(Color.White.copy(alpha = 0.08f))
+            .padding(horizontal = 28.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(12.dp)
+                .clip(CircleShape)
+                .background(indicatorColor)
+        )
+        Text(
+            text = statusText,
+            style = MaterialTheme.typography.titleMedium.copy(
+                color = Color.White,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 0.6.sp
+            ),
+            modifier = Modifier.padding(start = 12.dp)
+        )
+    }
+}
+
+@Composable
+private fun VoiceHangUpButton(
+    isConnecting: Boolean,
+    onClick: () -> Unit
+) {
+    val label = if (isConnecting) "Cancel" else "Hang Up"
+    val shape = CircleShape
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth(0.55f)
+            .aspectRatio(1f)
+            .shadow(elevation = 30.dp, shape = shape, clip = false)
+            .clip(shape)
+            .background(
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFFFF4B5C),
+                        Color(0xFFE53970)
+                    )
+                )
+            )
+            .clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.CallEnd,
+                contentDescription = "Hang up",
+                tint = Color.White,
+                modifier = Modifier.size(56.dp)
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 20.sp
+                ),
+                modifier = Modifier.padding(top = 12.dp)
             )
         }
     }
