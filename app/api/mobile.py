@@ -4,54 +4,44 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import io
 import json
 import os
-import wave
 from contextlib import suppress
 from fractions import Fraction
 from typing import Any, Dict, Literal, Optional
 
 import httpx
-from aiortc import RTCPeerConnection, RTCIceCandidate, RTCSessionDescription
+
+from aiortc import (
+    RTCPeerConnection,
+    RTCConfiguration,
+    RTCIceCandidate,
+    RTCIceServer,
+    RTCSessionDescription,
+)
 from aiortc.mediastreams import AudioStreamTrack
-from av import AudioFrame, open as av_open
-from av.audio.resampler import AudioResampler
+from aiortc.sdp import candidate_from_sdp
+from av import AudioFrame
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
 import numpy as np
-from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import settings
 from app.chat import stream_response
 from app.logging_utils import logger
 from app.mobile.config_store import ensure_device_entry
+from app.speech.providers import SpeechProvider, get_speech_provider
 
 SAMPLE_RATE = 48_000
 FRAME_DURATION_SEC = 0.02  # 20ms
 SAMPLES_PER_FRAME = int(SAMPLE_RATE * FRAME_DURATION_SEC)
-TTS_ENDPOINT = "https://api.openai.com/v1/audio/speech"
-DEFAULT_TTS_MODEL = "tts-1"
 DEFAULT_TTS_VOICE = "alloy"
-HTTP_TIMEOUT = 60.0
 
 DEFAULT_POLL_AFTER_SECONDS = 5
-TRANSCRIPTION_MODEL = os.getenv("VOICE_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 MIN_UTTERANCE_DURATION_SEC = 0.5
 MAX_UTTERANCE_DURATION_SEC = 12.0
 SILENCE_DURATION_SEC = 0.6
 ENERGY_THRESHOLD = 900.0
-
-_openai_client: OpenAI | None = None
-
-
-def _get_openai_client() -> OpenAI:
-    """Return a cached OpenAI client instance."""
-
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = OpenAI()
-    return _openai_client
 
 router = APIRouter(prefix="/v1/mobile", tags=["mobile"])
 ws_router = APIRouter()
@@ -85,12 +75,13 @@ class QueuedAudioStreamTrack(AudioStreamTrack):
 
     kind = "audio"
 
-    def __init__(self, sample_rate: int = SAMPLE_RATE) -> None:
+    def __init__(self, sample_rate: int = SAMPLE_RATE, device_id: str | None = None) -> None:
         super().__init__()
         self._sample_rate = sample_rate
         self._queue: asyncio.Queue[AudioFrame] = asyncio.Queue()
         self._timestamp = 0
         self._closing = False
+        self._device_id = device_id or "unknown-device"
 
     async def recv(self) -> AudioFrame:
         try:
@@ -103,16 +94,29 @@ class QueuedAudioStreamTrack(AudioStreamTrack):
             for plane in frame.planes:
                 plane.update(b"\x00" * len(plane))
             self._timestamp += SAMPLES_PER_FRAME
+            logger.debug("QueuedAudioStreamTrack(%s) sending silence frame", self._device_id)
             return frame
 
         frame.pts = self._timestamp
         frame.sample_rate = self._sample_rate
         frame.time_base = Fraction(1, self._sample_rate)
         self._timestamp += frame.samples
+        logger.debug(
+            "QueuedAudioStreamTrack(%s) dequeued frame samples=%d queue_size=%d",
+            self._device_id,
+            frame.samples,
+            self._queue.qsize(),
+        )
         return frame
 
     def enqueue(self, frame: AudioFrame) -> None:
         self._queue.put_nowait(frame)
+        logger.debug(
+            "QueuedAudioStreamTrack(%s) enqueued frame samples=%d queue_size=%d",
+            self._device_id,
+            frame.samples,
+            self._queue.qsize(),
+        )
 
     def close(self) -> None:
         self._closing = True
@@ -126,6 +130,8 @@ class MobileVoiceSession:
         device_id: str,
         device_cfg: Dict[str, Any],
         outbound_track: QueuedAudioStreamTrack,
+        *,
+        speech_provider: SpeechProvider | None = None,
     ) -> None:
         self.device_id = device_id
         self.device_cfg = device_cfg
@@ -157,7 +163,9 @@ class MobileVoiceSession:
             self.messages.append({"role": "system", "content": prompt})
 
         self._voice = self.agent_cfg.get("voice") or DEFAULT_TTS_VOICE
-        self._client = _get_openai_client()
+        self._language = self.agent_cfg.get("language") or "en-US"
+        self._speech_model = self.agent_cfg.get("speech_model") or None
+        self._speech_provider = speech_provider or get_speech_provider(self.agent_cfg)
 
     async def start(self) -> None:
         """Play the configured greeting at session start."""
@@ -274,6 +282,11 @@ class MobileVoiceSession:
                     return
 
                 logger.info("Mobile user %s said: %s", self.device_id, transcript)
+                logger.debug(
+                    "Mobile transcript length=%d chars (chunk %d bytes)",
+                    len(transcript),
+                    len(pcm_bytes),
+                )
                 self.messages.append({"role": "user", "content": transcript})
 
                 response_text = await self._generate_response(transcript)
@@ -291,31 +304,12 @@ class MobileVoiceSession:
         if not pcm_bytes:
             return ""
 
-        wav_buffer = io.BytesIO()
-        with wave.open(wav_buffer, "wb") as handle:
-            handle.setnchannels(1)
-            handle.setsampwidth(2)
-            handle.setframerate(SAMPLE_RATE)
-            handle.writeframes(pcm_bytes)
-
-        wav_buffer.seek(0)
-        wav_buffer.name = "utterance.wav"
-
-        try:
-            result = await asyncio.to_thread(
-                self._client.audio.transcriptions.create,
-                model=TRANSCRIPTION_MODEL,
-                file=wav_buffer,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Transcription failed for device %s: %s", self.device_id, exc)
-            return ""
-
-        text = getattr(result, "text", None)
-        if not text and isinstance(result, dict):
-            text = result.get("text")
-
-        return text.strip() if text else ""
+        return await self._speech_provider.transcribe(
+            pcm_bytes,
+            SAMPLE_RATE,
+            language=self._language,
+            model=self._speech_model,
+        )
 
     async def _generate_response(self, user_text: str) -> str:
         responses: list[str] = []
@@ -345,63 +339,37 @@ class MobileVoiceSession:
             return
 
         try:
-            frames = await _synthesize_speech_frames(text, self._voice)
+            frames = await self._speech_provider.synthesize(
+                text,
+                voice=self._voice,
+                prosody=self.agent_cfg.get("tts_prosody"),
+                language=self._language,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.error("TTS synthesis failed for device %s: %s", self.device_id, exc)
             return
 
+        if not frames:
+            logger.warning(
+                "Synthesized 0 frames for device %s (text length=%d)",
+                self.device_id,
+                len(text),
+            )
+            return
+
+        total_samples = 0
         for frame in frames:
+            samples = getattr(frame, "samples", 0) or 0
+            total_samples += samples
             self._outbound_track.enqueue(frame)
 
-
-async def _synthesize_speech_frames(text: str, voice: str) -> list[AudioFrame]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not configured")
-
-    payload = {
-        "model": os.getenv("VOICE_TTS_MODEL", DEFAULT_TTS_MODEL),
-        "input": text,
-        "voice": voice,
-        "format": "wav",
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        response = await client.post(TTS_ENDPOINT, headers=headers, json=payload)
-        response.raise_for_status()
-
-    return _decode_audio(response.content)
-
-
-def _decode_audio(data: bytes) -> list[AudioFrame]:
-    container = av_open(io.BytesIO(data))
-    try:
-        stream = next(s for s in container.streams if s.type == "audio")
-    except StopIteration as exc:  # pragma: no cover - defensive
-        container.close()
-        raise ValueError("No audio stream in synthesized output") from exc
-
-    resampler = AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
-    frames: list[AudioFrame] = []
-    for frame in container.decode(stream):
-        resampled_frames = resampler.resample(frame)
-        if resampled_frames is None:
-            continue
-        for resampled in resampled_frames:
-            resampled.pts = None
-            resampled.sample_rate = SAMPLE_RATE
-            resampled.time_base = Fraction(1, SAMPLE_RATE)
-            frames.append(resampled)
-
-    container.close()
-    if not frames:
-        raise ValueError("Synthesized audio did not produce any frames")
-    return frames
+        duration = total_samples / SAMPLE_RATE if total_samples else 0.0
+        logger.debug(
+            "Synthesized %d frames (%.2fs) for device %s",
+            len(frames),
+            duration,
+            self.device_id,
+        )
 
 
 def _normalise_device_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -476,6 +444,46 @@ def _serialize_candidate(candidate: RTCIceCandidate) -> Dict[str, Any]:
     }
 
 
+async def _fetch_ice_servers() -> list[dict[str, Any]]:
+    """Return TURN/STUN server definitions for this session."""
+
+    env = settings.get_env()
+    account_sid = env.twilio_account_sid
+    auth_token = env.twilio_auth_token
+
+    ice_servers: list[dict[str, Any]] = [
+        {"urls": "stun:stun.l.google.com:19302"},
+    ]
+
+    if not account_sid:
+        return ice_servers
+
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Tokens.json"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, auth=(account_sid, auth_token))
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Unable to fetch Twilio ICE servers: %s", exc)
+        return ice_servers
+
+    remote_servers = payload.get("ice_servers") or []
+    for server in remote_servers:
+        urls = server.get("urls")
+        if not urls:
+            continue
+        ice_servers.append(
+            {
+                "urls": urls,
+                "username": server.get("username"),
+                "credential": server.get("credential"),
+            }
+        )
+
+    return ice_servers
+
+
 @ws_router.websocket("/ws/mobile/voice")
 async def voice_signaling(websocket: WebSocket) -> None:
     """Bidirectional signaling channel for WebRTC voice sessions."""
@@ -490,18 +498,52 @@ async def voice_signaling(websocket: WebSocket) -> None:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    if not os.getenv("OPENAI_API_KEY"):
-        await websocket.accept()
-        await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="OPENAI_API_KEY missing")
-        logger.error("OPENAI_API_KEY missing during voice signaling for %s", device_id)
-        return
-
     await websocket.accept()
 
-    peer_connection = RTCPeerConnection()
-    audio_track = QueuedAudioStreamTrack()
+    ice_server_payload = await _fetch_ice_servers()
+    rtc_ice_servers: list[RTCIceServer] = []
+    for entry in ice_server_payload:
+        urls = entry.get("urls")
+        if isinstance(urls, str):
+            urls = [urls]
+        if not urls:
+            continue
+        username = entry.get("username")
+        credential = entry.get("credential")
+        rtc_ice_servers.append(
+            RTCIceServer(urls=urls, username=username, credential=credential)
+        )
+
+    peer_connection = RTCPeerConnection(
+        configuration=RTCConfiguration(iceServers=rtc_ice_servers)
+    )
+    audio_track = QueuedAudioStreamTrack(device_id=device_id)
     peer_connection.addTrack(audio_track)
     session = MobileVoiceSession(device_id, device_cfg, audio_track)
+
+    if ice_server_payload:
+        logger.debug(
+            "Sending %d ICE server entries to %s", len(ice_server_payload), device_id
+        )
+        await websocket.send_text(
+            json.dumps({"type": "iceServers", "iceServers": ice_server_payload})
+        )
+
+    @peer_connection.on("iceconnectionstatechange")
+    def _on_ice_state_change() -> None:
+        logger.debug(
+            "ICE connection state for %s -> %s",
+            device_id,
+            peer_connection.iceConnectionState,
+        )
+
+    @peer_connection.on("connectionstatechange")
+    def _on_connection_state_change() -> None:
+        logger.debug(
+            "Peer connection state for %s -> %s",
+            device_id,
+            peer_connection.connectionState,
+        )
 
     @peer_connection.on("icecandidate")
     def _on_icecandidate(candidate: Optional[RTCIceCandidate]) -> None:
@@ -558,12 +600,21 @@ async def voice_signaling(websocket: WebSocket) -> None:
                     index = candidate_payload.get("sdpMLineIndex")
                     if isinstance(index, str) and index.isdigit():
                         index = int(index)
-                    rtc_candidate = RTCIceCandidate(
-                        sdpMid=candidate_payload.get("sdpMid"),
-                        sdpMLineIndex=index,
-                        candidate=candidate_str,
-                    )
+                    try:
+                        rtc_candidate = candidate_from_sdp(candidate_str)
+                    except Exception:  # pragma: no cover - defensive logging
+                        logger.warning(
+                            "Dropping malformed ICE candidate from %s: %s",
+                            device_id,
+                            candidate_str,
+                            exc_info=True,
+                        )
+                        continue
+                    rtc_candidate.sdpMid = candidate_payload.get("sdpMid")
+                    rtc_candidate.sdpMLineIndex = index
                     await peer_connection.addIceCandidate(rtc_candidate)
+                elif "candidate" in candidate_payload:
+                    await peer_connection.addIceCandidate(None)
             elif mtype == "bye":
                 await websocket.close()
                 break

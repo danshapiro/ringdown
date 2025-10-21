@@ -27,6 +27,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
@@ -215,7 +216,12 @@ class WebRtcVoiceTransport @Inject constructor(
                     Log.d(TAG, "Renegotiation needed")
                 }
 
-                override fun onAddTrack(receiver: org.webrtc.RtpReceiver?, streams: Array<out org.webrtc.MediaStream>?) {}
+                override fun onAddTrack(
+                    receiver: org.webrtc.RtpReceiver?,
+                    streams: Array<out org.webrtc.MediaStream>?
+                ) {
+                    Log.d(TAG, "Remote track added: ${receiver?.id()} streams=${streams?.size ?: 0}")
+                }
             }
         ) ?: throw IllegalStateException("Unable to allocate PeerConnection")
     }
@@ -255,6 +261,55 @@ class WebRtcVoiceTransport @Inject constructor(
                     try {
                         val json = JSONObject(text)
                         when (json.optString("type").lowercase(Locale.US)) {
+                            "iceservers" -> {
+                                val serversJson = json.optJSONArray("iceServers") ?: return@launch
+                                val updatedServers = mutableListOf<PeerConnection.IceServer>()
+                                for (index in 0 until serversJson.length()) {
+                                    val entry = serversJson.opt(index)
+                                    if (entry !is JSONObject) continue
+                                    val urlsValue = entry.opt("urls")
+                                    val urls = mutableListOf<String>()
+                                    when (urlsValue) {
+                                        is JSONArray -> {
+                                            for (i in 0 until urlsValue.length()) {
+                                                val url = urlsValue.optString(i)
+                                                if (!url.isNullOrEmpty()) {
+                                                    urls.add(url)
+                                                }
+                                            }
+                                        }
+
+                                        is String -> if (urlsValue.isNotBlank()) {
+                                            urls.add(urlsValue)
+                                        }
+                                    }
+                                    if (urls.isEmpty()) continue
+                                    val builder = if (urls.size == 1) {
+                                        PeerConnection.IceServer.builder(urls[0])
+                                    } else {
+                                        PeerConnection.IceServer.builder(urls)
+                                    }
+                                    val username = entry.optString("username")
+                                    val credential = entry.optString("credential")
+                                    if (!username.isNullOrEmpty() && !credential.isNullOrEmpty()) {
+                                        builder.setUsername(username)
+                                        builder.setPassword(credential)
+                                    }
+                                    updatedServers.add(builder.createIceServer())
+                                }
+                                if (updatedServers.isNotEmpty()) {
+                                    val merged = mutableListOf(
+                                        PeerConnection.IceServer.builder(DEFAULT_STUN_SERVER).createIceServer()
+                                    )
+                                    merged.addAll(updatedServers)
+                                    val rtcConfig = PeerConnection.RTCConfiguration(merged).apply {
+                                        sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+                                    }
+                                    peer.setConfiguration(rtcConfig)
+                                    Log.d(TAG, "Updated ICE servers from backend: ${merged.size}")
+                                }
+                            }
+
                             "answer" -> {
                                 val sdp = json.optString("sdp")
                                 if (sdp.isNullOrEmpty()) {

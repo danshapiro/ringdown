@@ -775,6 +775,22 @@ wheels = [
 ]
 
 [[package]]
+name = "google-cloud-speech"
+version = "2.34.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b7/c2/500c58a7e3008cb77da01a2f2a8284ac55c808545d18551c62a031ff548d/google_cloud_speech-2.34.0.tar.gz", hash = "sha256:2a7bffd84f134b9b70c9f11cbb5088c534f92be149d71d9073d0b9dd3a431acf", size = 391496 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/4c/8c52951a4078f4b181917c37a2610e69c0b24a10567d0182bf089a933c35/google_cloud_speech-2.34.0-py3-none-any.whl", hash = "sha256:cc0c6c0fda9306fee01c998bc207b68f71e0a3247121a5a3a27daabacd3a8c98", size = 336614 },
+]
+
+[[package]]
 name = "google-cloud-storage"
 version = "3.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -789,6 +805,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/bd/ef/7cefdca67a6c8b3af0ec38612f9e78e5a9f6179dd91352772ae1a9849246/google_cloud_storage-3.4.1.tar.gz", hash = "sha256:6f041a297e23a4b485fad8c305a7a6e6831855c208bcbe74d00332a909f82268", size = 17238203 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/83/6e/b47d83d3a35231c6232566341b0355cce78fd4e6988a7343725408547b2c/google_cloud_storage-3.4.1-py3-none-any.whl", hash = "sha256:972764cc0392aa097be8f49a5354e22eb47c3f62370067fb1571ffff4a1c1189", size = 290142 },
+]
+
+[[package]]
+name = "google-cloud-texttospeech"
+version = "2.32.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a9/3f/2158f046729e0e4c6beca7f910183381e61702214b38b5f910b79b2b9a00/google_cloud_texttospeech-2.32.0.tar.gz", hash = "sha256:f5cfe0047c1380f39eaef6b231a7467018cdf2fd5b93b6bc529f7a60db99694b", size = 185134 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/12/8d5c271913364b07dd5cba69fc99805ad77fca04263b4611f7670aa5f606/google_cloud_texttospeech-2.32.0-py3-none-any.whl", hash = "sha256:266d138e9c167bc4b1e4007cce72e34967815a01406b5fbe860b9a3d3704ab31", size = 191975 },
 ]
 
 [[package]]
@@ -2048,7 +2080,9 @@ dependencies = [
     { name = "google-api-python-client" },
     { name = "google-auth" },
     { name = "google-cloud-run" },
+    { name = "google-cloud-speech" },
     { name = "google-cloud-storage" },
+    { name = "google-cloud-texttospeech" },
     { name = "httpx", extra = ["http2"] },
     { name = "litellm" },
     { name = "numpy" },
@@ -2088,7 +2122,9 @@ requires-dist = [
     { name = "google-api-python-client", specifier = ">=2.0.0" },
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "google-cloud-run", specifier = ">=0.10.0" },
+    { name = "google-cloud-speech", specifier = ">=2.26.0" },
     { name = "google-cloud-storage", specifier = ">=2.10.0" },
+    { name = "google-cloud-texttospeech", specifier = ">=2.16.2" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.27.0" },
     { name = "litellm", specifier = ">=1.67.0,<1.77.0" },
     { name = "numpy", specifier = ">=1.26.0" },

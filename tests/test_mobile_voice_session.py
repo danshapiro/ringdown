@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 
 import app.api.mobile as mobile_api
@@ -18,46 +16,49 @@ class _StubTrack:
         self.closed = True
 
 
-@pytest.fixture(autouse=True)
-def _stub_openai_client(monkeypatch):
-    class _Transcriptions:
-        def create(self, *args, **kwargs):
-            raise AssertionError("Unexpected transcription call")
+class _FakeSpeechProvider:
+    def __init__(self) -> None:
+        self.synth_calls: list[dict[str, str | None]] = []
+        self.transcribe_calls: list[bytes] = []
+        self.next_transcript: str = ""
 
-    dummy_client = SimpleNamespace(audio=SimpleNamespace(transcriptions=_Transcriptions()))
-    monkeypatch.setattr(mobile_api, "_get_openai_client", lambda: dummy_client)
+    async def synthesize(self, text: str, *, voice: str, prosody=None, language=None):
+        self.synth_calls.append(
+            {"text": text, "voice": voice, "prosody": prosody, "language": language}
+        )
+        return [text]
+
+    async def transcribe(self, pcm_bytes: bytes, sample_rate_hz: int, *, language=None, model=None):
+        self.transcribe_calls.append(pcm_bytes)
+        return self.next_transcript
+
+
+@pytest.fixture
+def fake_provider(monkeypatch):
+    provider = _FakeSpeechProvider()
+    monkeypatch.setattr(mobile_api, "get_speech_provider", lambda *_args, **_kwargs: provider)
+    return provider
 
 
 @pytest.mark.asyncio
-async def test_voice_session_start_adds_greeting(monkeypatch):
+async def test_voice_session_start_adds_greeting(fake_provider):
     track = _StubTrack()
     session = MobileVoiceSession("device-1", {"agent": "unknown-caller"}, track)
 
-    captured: list[str] = []
-
-    async def fake_speak(self, text: str) -> None:
-        captured.append(text)
-
-    monkeypatch.setattr(MobileVoiceSession, "_speak", fake_speak)
+    expected_greeting = session._resolve_greeting()
 
     await session.start()
 
-    assert captured, "Expected greeting to be spoken"
+    assert fake_provider.synth_calls, "Expected greeting to be spoken"
+    assert fake_provider.synth_calls[0]["text"] == expected_greeting
     assert session.messages[-1]["role"] == "assistant"
-    assert session.messages[-1]["content"] == captured[-1]
+    assert session.messages[-1]["content"] == fake_provider.synth_calls[-1]["text"]
 
 
 @pytest.mark.asyncio
-async def test_generate_response_handles_tool_marker(monkeypatch):
+async def test_generate_response_handles_tool_marker(monkeypatch, fake_provider):
     track = _StubTrack()
     session = MobileVoiceSession("device-2", {"agent": "unknown-caller"}, track)
-
-    spoken: list[str] = []
-
-    async def fake_speak(self, text: str) -> None:
-        spoken.append(text)
-
-    monkeypatch.setattr(MobileVoiceSession, "_speak", fake_speak)
 
     async def fake_stream(user_text, agent_cfg, messages):
         yield {"type": "tool_executing"}
@@ -68,27 +69,21 @@ async def test_generate_response_handles_tool_marker(monkeypatch):
     result = await session._generate_response("status?")
 
     assert result == "All set."
-    assert "moment while I work on that" in spoken[0]
+    assert "moment while I work on that" in fake_provider.synth_calls[0]["text"]
 
 
 @pytest.mark.asyncio
-async def test_process_chunk_updates_conversation(monkeypatch):
+async def test_process_chunk_updates_conversation(monkeypatch, fake_provider):
     track = _StubTrack()
     session = MobileVoiceSession("device-3", {"agent": "unknown-caller"}, track)
-
-    async def fake_transcribe(self, pcm_bytes: bytes) -> str:
-        return "hello bot"
 
     async def fake_generate(self, user_text: str) -> str:
         assert user_text == "hello bot"
         return "greetings human"
 
-    async def fake_speak(self, text: str) -> None:
-        track.enqueue(text)
+    fake_provider.next_transcript = "hello bot"
 
-    monkeypatch.setattr(MobileVoiceSession, "_transcribe", fake_transcribe)
     monkeypatch.setattr(MobileVoiceSession, "_generate_response", fake_generate)
-    monkeypatch.setattr(MobileVoiceSession, "_speak", fake_speak)
 
     pcm_bytes = b"\x01\x00" * (session._min_samples + 10)
 

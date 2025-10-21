@@ -28,6 +28,8 @@ dependencies = [
     "google-api-python-client>=2.0.0",
     "google-cloud-storage>=2.10.0",
     "google-cloud-run>=0.10.0",
+    "google-cloud-texttospeech>=2.16.2",
+    "google-cloud-speech>=2.26.0",
     "ratelimit>=2.2.1",
     "click>=8.0.0",
     "typing-extensions>=4.11.0",
@@ -65,6 +67,7 @@ filterwarnings = [
 ]
 markers = [
     "integration: tests that contact third-party services",
+    "live: tests that hit the production Ringdown backend",
 ]
 norecursedirs = [
     "android/.gradle-cache",

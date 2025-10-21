@@ -30,8 +30,22 @@ For full production validation (assemble, install, and run both suites), call:
 ```bash
 export RINGDOWN_BACKEND_URL="https://danbot-twilio-bkvo7niota-uw.a.run.app/"
 export ANDROID_SERIAL="${ANDROID_SERIAL:?set to emulator-5554 or real device serial}"
-bash android/scripts/run-production-instrumentation.sh
+bash android/scripts/run-production-instrumentation.sh --approve-device
 ```
+
+The `--approve-device` flag invokes `android/scripts/approve_device.py`, which:
+
+1. Reads the device UUID from the installed app (or uses `RINGDOWN_DEVICE_ID_OVERRIDE` when set).
+2. Runs `authorize_new_phone.py --device-id …` to enable the handset in `config.yaml`.
+3. Redeploys the backend (unless you set `PYTHON_BIN` and pass `--skip-deploy` through the helper).
+
+Use `PYTHON_BIN` to point at the desired interpreter (defaults to `python`). If `DEPLOY_PROJECT_ID` or `LIVE_TEST_PROJECT_ID` is available, the helper forwards it; otherwise pass `--project-id` explicitly. When running locally on the production handset after reinstalling the APK, you can execute the helper directly:
+
+```bash
+python android/scripts/approve_device.py --device <serial>
+```
+
+This combination keeps the backend and instrumentation device in sync without manual steps.
 
 ## CI Hook Sketch
 

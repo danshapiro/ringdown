@@ -10,8 +10,6 @@ import com.ringdown.domain.usecase.VoiceSessionCommands
 import com.ringdown.domain.usecase.VoiceSessionController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -47,8 +45,6 @@ class MainViewModel @Inject constructor(
     private val idleStatusMessage = MutableStateFlow<String?>(null)
 
     private var attempts = 0
-    private var autoRefreshJob: Job? = null
-    private var lastDeviceId: String? = null
 
     val state: StateFlow<AppViewState> = combine(
         registrationState,
@@ -113,7 +109,6 @@ class MainViewModel @Inject constructor(
     }
 
     private fun triggerRefresh(connectIfApproved: Boolean) {
-        autoRefreshJob?.cancel()
         viewModelScope.launch {
             val registration = refreshRegistrationStatus()
             handleRegistrationResult(registration, connectIfApproved)
@@ -127,19 +122,15 @@ class MainViewModel @Inject constructor(
         when (val status = registration.status) {
             RegistrationStatus.Pending -> {
                 attempts += 1
-                lastDeviceId = registration.deviceId
                 registrationState.value = RegistrationUiState.Pending(
                     deviceId = registration.deviceId,
                     attempts = attempts,
                     nextPollInSeconds = registration.pollAfterSeconds
                 )
-                scheduleAutoRefresh(registration.pollAfterSeconds, connectIfApproved)
             }
 
             RegistrationStatus.Approved -> {
                 attempts = 0
-                autoRefreshJob?.cancel()
-                lastDeviceId = registration.deviceId
                 registrationState.value = RegistrationUiState.Approved(
                     deviceId = registration.deviceId,
                     statusMessage = idleStatusMessage.value
@@ -151,27 +142,13 @@ class MainViewModel @Inject constructor(
 
             is RegistrationStatus.Denied -> {
                 attempts = 0
-                autoRefreshJob?.cancel()
                 registrationState.value = RegistrationUiState.Denied(status.reason)
             }
 
             is RegistrationStatus.Error -> {
                 attempts = 0
-                autoRefreshJob?.cancel()
                 registrationState.value = RegistrationUiState.Failed(status.message)
             }
-        }
-    }
-
-    private fun scheduleAutoRefresh(pollAfterSeconds: Long?, connectIfApproved: Boolean) {
-        if (pollAfterSeconds == null || pollAfterSeconds <= 0L) {
-            return
-        }
-
-        autoRefreshJob = viewModelScope.launch {
-            delay(pollAfterSeconds * 1000)
-            val registration = refreshRegistrationStatus()
-            handleRegistrationResult(registration, connectIfApproved)
         }
     }
 

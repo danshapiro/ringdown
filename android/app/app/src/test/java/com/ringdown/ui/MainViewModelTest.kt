@@ -24,7 +24,7 @@ import org.junit.Test
 class MainViewModelTest {
 
     @Test
-    fun pendingRegistrationSchedulesNextPoll() = runTest {
+    fun pendingRegistrationRequiresManualRetry() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
         try {
@@ -57,6 +57,13 @@ class MainViewModelTest {
             assertEquals(2L, pending.nextPollInSeconds)
 
             advanceTimeBy(2000)
+            runCurrent()
+
+            val stillPending = viewModel.state.value
+            assertTrue(stillPending is AppViewState.PendingApproval)
+            assertEquals(null, voiceCommands.lastStartedDevice)
+
+            viewModel.onCheckAgain()
             runCurrent()
 
             val voiceState = viewModel.state.value

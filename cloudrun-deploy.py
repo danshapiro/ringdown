@@ -970,6 +970,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         "ANTHROPIC_API_KEY",  # Claude models
         "TAVILY_API_KEY",     # Tavily search
         "TWILIO_AUTH_TOKEN",  # Twilio webhook validation
+        "TWILIO_ACCOUNT_SID",  # Twilio TURN credential fetch
         "GMAIL_IMPERSONATE_EMAIL",  # Gmail impersonation
         "GMAIL_SA_KEY_PATH",  # Gmail service account path
     )
