@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.ringdown.DebugFeatureFlags
 import com.ringdown.di.IoDispatcher
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -29,6 +30,16 @@ class DeviceIdStorage @Inject constructor(
         val existing = context.deviceDataStore.data
             .map { preferences -> preferences[key] }
             .first()
+
+        val override = DebugFeatureFlags.deviceIdOverride()
+        if (!override.isNullOrBlank()) {
+            if (existing != override) {
+                context.deviceDataStore.edit { prefs ->
+                    prefs[key] = override
+                }
+            }
+            return@withContext override
+        }
 
         if (existing != null) {
             existing

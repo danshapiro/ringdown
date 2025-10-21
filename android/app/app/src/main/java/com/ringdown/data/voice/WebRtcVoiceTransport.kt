@@ -333,10 +333,7 @@ class WebRtcVoiceTransport @Inject constructor(
         val httpUrl = trimmed.toHttpUrlOrNull()
             ?: throw IllegalArgumentException("Invalid signaling URL: $baseUrl")
 
-        val scheme = if (httpUrl.isHttps) "wss" else "ws"
-
         val rebuilt = httpUrl.newBuilder()
-            .scheme(scheme)
             .encodedPath("/")
             .addPathSegments("ws/mobile/voice")
             .addQueryParameter("device_id", deviceId)

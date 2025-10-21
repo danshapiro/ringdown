@@ -52,3 +52,8 @@ android/**/*.env
 android/**/*.keystore
 android/screenshots/
 .tmp/
+.beads/
+android/.android-sdk-win/
+android/.jdk-win/
+android/app/tmp-apk/
+android/app/tmp_apk/

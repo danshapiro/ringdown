@@ -64,7 +64,9 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        testInstrumentationRunner = "com.google.dagger.hilt.android.testing.HiltAndroidJUnitRunner"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        multiDexEnabled = true
+        multiDexKeepProguard = file("src/androidTest/multidex-keep.pro")
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -144,7 +146,7 @@ dependencies {
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
     implementation("androidx.media:media:1.7.0")
-    implementation("com.infobip:google-webrtc:1.0.45036")
+    implementation("io.github.webrtc-sdk:android:125.6422.07")
 
     // Dependency injection
     implementation("com.google.dagger:hilt-android:2.52")
@@ -160,8 +162,6 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
-    androidTestImplementation("com.google.dagger:hilt-android-testing:2.52")
-    kaptAndroidTest("com.google.dagger:hilt-android-compiler:2.52")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

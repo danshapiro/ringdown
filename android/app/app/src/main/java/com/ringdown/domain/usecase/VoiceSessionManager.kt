@@ -1,6 +1,8 @@
 package com.ringdown.domain.usecase
 
+import android.util.Log
 import com.ringdown.BuildConfig
+import com.ringdown.DebugFeatureFlags
 import com.ringdown.data.device.DeviceIdStorage
 import com.ringdown.data.voice.AudioRouteController
 import com.ringdown.data.voice.VoiceTransport
@@ -31,6 +33,10 @@ class VoiceSessionManager @Inject constructor(
     @com.ringdown.di.IoDispatcher private val dispatcher: CoroutineDispatcher
 ) : VoiceSessionController {
 
+    private companion object {
+        private const val TAG = "VoiceSessionManager"
+    }
+
     private val coroutineScope = CoroutineScope(SupervisorJob() + dispatcher)
     private val _state = MutableStateFlow<VoiceSessionState>(VoiceSessionState.Disconnected)
     override val state: StateFlow<VoiceSessionState> = _state.asStateFlow()
@@ -46,13 +52,17 @@ class VoiceSessionManager @Inject constructor(
                 val deviceId = deviceIdStorage.getOrCreate()
                 val parameters = VoiceTransport.ConnectParameters(
                     deviceId = deviceId,
-                    signalingUrl = BuildConfig.BACKEND_BASE_URL
+                    signalingUrl = DebugFeatureFlags.backendBaseUrlOrDefault(
+                        BuildConfig.BACKEND_BASE_URL
+                    )
                 )
 
                 voiceTransport.connect(parameters)
                 audioRouteController.acquireVoiceRoute()
+                Log.i(TAG, "Voice session connected for device $deviceId using ${parameters.signalingUrl}")
                 _state.value = VoiceSessionState.Active(Instant.now())
             }.onFailure { error ->
+                Log.e(TAG, "Voice session start failed", error)
                 _state.value = VoiceSessionState.Error(error.message ?: "Unable to start voice session")
                 teardownInternal()
             }
@@ -69,5 +79,6 @@ class VoiceSessionManager @Inject constructor(
     private suspend fun teardownInternal() = withContext(dispatcher) {
         runCatching { voiceTransport.teardown() }
         runCatching { audioRouteController.releaseVoiceRoute() }
+        Log.d(TAG, "Voice session torn down")
     }
 }
