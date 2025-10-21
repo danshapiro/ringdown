@@ -53,6 +53,15 @@ val javaHome: String = System.getenv("JAVA_HOME")
     ?: System.getProperty("java.home")
     ?: throw GradleException("JAVA_HOME is not set. Configure the JDK before building.")
 
+val instrumentationDeviceId: String =
+    (project.findProperty("ringdown.deviceIdOverride") as? String)
+        ?.takeIf { it.isNotBlank() }
+        ?: "instrumentation-device"
+val instrumentationBackendUrl: String =
+    (project.findProperty("ringdown.backendUrl") as? String)
+        ?.trim()
+        .orEmpty()
+
 android {
     namespace = "com.ringdown"
     compileSdk = 35
@@ -65,6 +74,10 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunnerArguments["deviceIdOverride"] = instrumentationDeviceId
+        if (instrumentationBackendUrl.isNotBlank()) {
+            testInstrumentationRunnerArguments["backendUrl"] = instrumentationBackendUrl
+        }
         multiDexEnabled = true
         multiDexKeepProguard = file("src/androidTest/multidex-keep.pro")
         vectorDrawables {
