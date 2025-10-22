@@ -5,6 +5,8 @@ import com.ringdown.BuildConfig
 import com.ringdown.DebugFeatureFlags
 import com.ringdown.data.device.DeviceIdStorage
 import com.ringdown.data.voice.AudioRouteController
+import com.ringdown.data.voice.VoiceDiagnosticType
+import com.ringdown.data.voice.VoiceDiagnosticsReporter
 import com.ringdown.data.voice.VoiceTransport
 import com.ringdown.domain.model.VoiceSessionState
 import java.time.Instant
@@ -30,6 +32,7 @@ class VoiceSessionManager @Inject constructor(
     private val deviceIdStorage: DeviceIdStorage,
     private val voiceTransport: VoiceTransport,
     private val audioRouteController: AudioRouteController,
+    private val diagnostics: VoiceDiagnosticsReporter,
     @com.ringdown.di.IoDispatcher private val dispatcher: CoroutineDispatcher
 ) : VoiceSessionController {
 
@@ -47,6 +50,10 @@ class VoiceSessionManager @Inject constructor(
         }
 
         _state.value = VoiceSessionState.Connecting
+        diagnostics.record(
+            VoiceDiagnosticType.SESSION_STATE,
+            "Session connecting"
+        )
         coroutineScope.launch {
             runCatching {
                 val deviceId = deviceIdStorage.getOrCreate()
@@ -61,9 +68,22 @@ class VoiceSessionManager @Inject constructor(
                 audioRouteController.acquireVoiceRoute()
                 Log.i(TAG, "Voice session connected for device $deviceId using ${parameters.signalingUrl}")
                 _state.value = VoiceSessionState.Active(Instant.now())
+                diagnostics.record(
+                    VoiceDiagnosticType.SESSION_STATE,
+                    "Session active",
+                    metadata = mapOf(
+                        "deviceId" to deviceId,
+                        "backend" to parameters.signalingUrl
+                    )
+                )
             }.onFailure { error ->
                 Log.e(TAG, "Voice session start failed", error)
-                _state.value = VoiceSessionState.Error(error.message ?: "Unable to start voice session")
+                val message = error.message ?: "Unable to start voice session"
+                _state.value = VoiceSessionState.Error(message)
+                diagnostics.record(
+                    VoiceDiagnosticType.SESSION_STATE,
+                    "Session error: $message"
+                )
                 teardownInternal()
             }
         }
@@ -71,6 +91,10 @@ class VoiceSessionManager @Inject constructor(
 
     override fun hangUp() {
         coroutineScope.launch {
+            diagnostics.record(
+                VoiceDiagnosticType.SESSION_STATE,
+                "Manual hangup requested"
+            )
             teardownInternal()
             _state.value = VoiceSessionState.Disconnected
         }
@@ -79,6 +103,10 @@ class VoiceSessionManager @Inject constructor(
     private suspend fun teardownInternal() = withContext(dispatcher) {
         runCatching { voiceTransport.teardown() }
         runCatching { audioRouteController.releaseVoiceRoute() }
+        diagnostics.record(
+            VoiceDiagnosticType.SESSION_STATE,
+            "Session disconnected"
+        )
         Log.d(TAG, "Voice session torn down")
     }
 }

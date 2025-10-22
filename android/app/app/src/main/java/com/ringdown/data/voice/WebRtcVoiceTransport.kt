@@ -1,14 +1,18 @@
 package com.ringdown.data.voice
 
 import android.content.Context
-import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import com.ringdown.di.IoDispatcher
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.Locale
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -38,20 +42,18 @@ import org.webrtc.PeerConnectionFactory
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
 import org.webrtc.audio.JavaAudioDeviceModule
-import java.util.Locale
-import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineDispatcher
+import kotlin.math.abs
 
 @Singleton
 class WebRtcVoiceTransport @Inject constructor(
     @ApplicationContext private val context: Context,
-    @IoDispatcher private val dispatcher: CoroutineDispatcher
+    @IoDispatcher private val dispatcher: CoroutineDispatcher,
+    private val diagnostics: VoiceDiagnosticsReporter
 ) : VoiceTransport {
 
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.SECONDS) // Long-lived WebSocket
+        .readTimeout(0, TimeUnit.SECONDS)
         .writeTimeout(0, TimeUnit.SECONDS)
         .build()
 
@@ -65,6 +67,7 @@ class WebRtcVoiceTransport @Inject constructor(
     private var signalingScope = CoroutineScope(SupervisorJob() + dispatcher)
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
     private var isConnected = false
+    private var lastMicLevelEmitAt = 0L
 
     override suspend fun connect(parameters: VoiceTransport.ConnectParameters) {
         mutex.withLock {
@@ -74,6 +77,11 @@ class WebRtcVoiceTransport @Inject constructor(
             }
 
             withContext(dispatcher) {
+                diagnostics.record(
+                    VoiceDiagnosticType.CONNECT_ATTEMPT,
+                    "Connecting to ${parameters.signalingUrl}",
+                    metadata = mapOf("deviceId" to parameters.deviceId)
+                )
                 val factory = ensurePeerConnectionFactory()
                 val connectionReady = CompletableDeferred<Unit>()
                 val peer = createPeerConnection(factory, connectionReady)
@@ -95,9 +103,19 @@ class WebRtcVoiceTransport @Inject constructor(
                 try {
                     connectionReady.await()
                     isConnected = true
+                    diagnostics.record(
+                        VoiceDiagnosticType.CONNECT_SUCCEEDED,
+                        "Voice transport ready",
+                        metadata = mapOf("deviceId" to parameters.deviceId)
+                    )
                     Log.i(TAG, "WebRTC voice transport established for ${parameters.deviceId}")
                 } catch (t: Throwable) {
                     Log.e(TAG, "Failed to establish WebRTC transport", t)
+                    diagnostics.record(
+                        VoiceDiagnosticType.CONNECT_FAILED,
+                        "Failed to establish transport: ${t.message ?: t::class.java.simpleName}",
+                        metadata = mapOf("deviceId" to parameters.deviceId)
+                    )
                     teardownInternal()
                     throw t
                 }
@@ -120,10 +138,7 @@ class WebRtcVoiceTransport @Inject constructor(
     }
 
     private suspend fun ensurePeerConnectionFactory(): PeerConnectionFactory {
-        val existing = peerConnectionFactory
-        if (existing != null) {
-            return existing
-        }
+        peerConnectionFactory?.let { return it }
 
         return coroutineScope {
             val initJob = async(dispatcher) {
@@ -135,6 +150,126 @@ class WebRtcVoiceTransport @Inject constructor(
                 audioDeviceModule = JavaAudioDeviceModule.builder(context)
                     .setUseHardwareAcousticEchoCanceler(true)
                     .setUseHardwareNoiseSuppressor(true)
+                    .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
+                        override fun onWebRtcAudioRecordInitError(errorMessage: String) {
+                            diagnostics.record(
+                                VoiceDiagnosticType.AUDIO_DEVICE_ERROR,
+                                "AudioRecord init error: $errorMessage"
+                            )
+                        }
+
+                        override fun onWebRtcAudioRecordStartError(
+                            errorCode: JavaAudioDeviceModule.AudioRecordStartErrorCode,
+                            errorMessage: String
+                        ) {
+                            diagnostics.record(
+                                VoiceDiagnosticType.AUDIO_DEVICE_ERROR,
+                                "AudioRecord start error: $errorCode - $errorMessage"
+                            )
+                        }
+
+                        override fun onWebRtcAudioRecordError(errorMessage: String) {
+                            diagnostics.record(
+                                VoiceDiagnosticType.AUDIO_DEVICE_ERROR,
+                                "AudioRecord error: $errorMessage"
+                            )
+                        }
+                    })
+                    .setAudioTrackErrorCallback(object : JavaAudioDeviceModule.AudioTrackErrorCallback {
+                        override fun onWebRtcAudioTrackInitError(errorMessage: String) {
+                            diagnostics.record(
+                                VoiceDiagnosticType.AUDIO_DEVICE_ERROR,
+                                "AudioTrack init error: $errorMessage"
+                            )
+                        }
+
+                        override fun onWebRtcAudioTrackStartError(
+                            errorCode: JavaAudioDeviceModule.AudioTrackStartErrorCode,
+                            errorMessage: String
+                        ) {
+                            diagnostics.record(
+                                VoiceDiagnosticType.AUDIO_DEVICE_ERROR,
+                                "AudioTrack start error: $errorCode - $errorMessage"
+                            )
+                        }
+
+                        override fun onWebRtcAudioTrackError(errorMessage: String) {
+                            diagnostics.record(
+                                VoiceDiagnosticType.AUDIO_DEVICE_ERROR,
+                                "AudioTrack error: $errorMessage"
+                            )
+                        }
+                    })
+                    .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
+                        override fun onWebRtcAudioRecordStart() {
+                            diagnostics.record(
+                                VoiceDiagnosticType.AUDIO_DEVICE_STATE,
+                                "Microphone capture started"
+                            )
+                        }
+
+                        override fun onWebRtcAudioRecordStop() {
+                            diagnostics.record(
+                                VoiceDiagnosticType.AUDIO_DEVICE_STATE,
+                                "Microphone capture stopped"
+                            )
+                        }
+                    })
+                    .setSamplesReadyCallback(object : JavaAudioDeviceModule.SamplesReadyCallback {
+                        override fun onWebRtcAudioRecordSamplesReady(samples: JavaAudioDeviceModule.AudioSamples) {
+                            val data = samples.data
+                            if (data.isEmpty()) {
+                                return
+                            }
+                            val now = SystemClock.elapsedRealtime()
+                            if (now - lastMicLevelEmitAt < MIC_LEVEL_LOG_INTERVAL_MS) {
+                                return
+                            }
+                            lastMicLevelEmitAt = now
+                            var index = 0
+                            var sum = 0.0
+                            var count = 0
+                            while (index + 1 < data.size) {
+                                val high = data[index + 1].toInt() and 0xFF
+                                val low = data[index].toInt() and 0xFF
+                                val sample = ((high shl 8) or low).toShort()
+                                sum += abs(sample.toInt())
+                                count += 1
+                                index += 2
+                            }
+                            if (count == 0) {
+                                return
+                            }
+                            val amplitude = sum / count
+                            val amplitudeText = String.format(Locale.US, "%.1f", amplitude)
+                            diagnostics.record(
+                                VoiceDiagnosticType.MICROPHONE_LEVEL,
+                                "Microphone amplitude ${amplitudeText}",
+                                metadata = mapOf(
+                                    "amplitude" to amplitude,
+                                    "amplitude_fmt" to amplitudeText,
+                                    "channels" to samples.channelCount,
+                                    "sampleRate" to samples.sampleRate,
+                                    "format" to samples.audioFormat
+                                )
+                            )
+                        }
+                    })
+                    .setAudioTrackStateCallback(object : JavaAudioDeviceModule.AudioTrackStateCallback {
+                        override fun onWebRtcAudioTrackStart() {
+                            diagnostics.record(
+                                VoiceDiagnosticType.AUDIO_DEVICE_STATE,
+                                "Audio playback started"
+                            )
+                        }
+
+                        override fun onWebRtcAudioTrackStop() {
+                            diagnostics.record(
+                                VoiceDiagnosticType.AUDIO_DEVICE_STATE,
+                                "Audio playback stopped"
+                            )
+                        }
+                    })
                     .createAudioDeviceModule()
 
                 PeerConnectionFactory.builder()
@@ -179,7 +314,12 @@ class WebRtcVoiceTransport @Inject constructor(
 
                 override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
                     Log.d(TAG, "Peer connection state changed: $newState")
-                    if (newState == PeerConnection.PeerConnectionState.FAILED) {
+                    diagnostics.record(
+                        VoiceDiagnosticType.PEER_STATE,
+                        "Peer connection state -> $newState",
+                        metadata = mapOf("state" to newState.name)
+                    )
+                    if (newState == PeerConnection.PeerConnectionState.FAILED && !connectionReady.isCompleted) {
                         connectionReady.completeExceptionally(
                             IllegalStateException("Peer connection failed")
                         )
@@ -188,6 +328,11 @@ class WebRtcVoiceTransport @Inject constructor(
 
                 override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
                     Log.d(TAG, "ICE connection state changed: $newState")
+                    diagnostics.record(
+                        VoiceDiagnosticType.ICE_STATE,
+                        "ICE state -> $newState",
+                        metadata = mapOf("state" to newState.name)
+                    )
                 }
 
                 override fun onIceConnectionReceivingChange(receiving: Boolean) {
@@ -210,7 +355,9 @@ class WebRtcVoiceTransport @Inject constructor(
                     // No-op
                 }
 
-                override fun onDataChannel(dc: org.webrtc.DataChannel?) {}
+                override fun onDataChannel(dc: org.webrtc.DataChannel?) {
+                    // Unused
+                }
 
                 override fun onRenegotiationNeeded() {
                     Log.d(TAG, "Renegotiation needed")
@@ -220,7 +367,15 @@ class WebRtcVoiceTransport @Inject constructor(
                     receiver: org.webrtc.RtpReceiver?,
                     streams: Array<out org.webrtc.MediaStream>?
                 ) {
-                    Log.d(TAG, "Remote track added: ${receiver?.id()} streams=${streams?.size ?: 0}")
+                    val trackId = receiver?.id()
+                    Log.d(TAG, "Remote track added: $trackId streams=${streams?.size ?: 0}")
+                    diagnostics.record(
+                        VoiceDiagnosticType.REMOTE_TRACK_ADDED,
+                        "Remote track added",
+                        metadata = mapOf("trackId" to trackId)
+                    )
+                    val remoteTrack = receiver?.track() as? AudioTrack
+                    remoteTrack?.setVolume(1.0)
                 }
             }
         ) ?: throw IllegalStateException("Unable to allocate PeerConnection")
@@ -251,6 +406,10 @@ class WebRtcVoiceTransport @Inject constructor(
                         }
                     } catch (t: Throwable) {
                         Log.e(TAG, "Failed to publish SDP offer", t)
+                        diagnostics.record(
+                            VoiceDiagnosticType.CONNECT_FAILED,
+                            "Failed to publish SDP offer: ${t.message ?: t::class.java.simpleName}"
+                        )
                         connectionReady.completeExceptionally(t)
                     }
                 }
@@ -278,7 +437,6 @@ class WebRtcVoiceTransport @Inject constructor(
                                                 }
                                             }
                                         }
-
                                         is String -> if (urlsValue.isNotBlank()) {
                                             urls.add(urlsValue)
                                         }
@@ -306,6 +464,11 @@ class WebRtcVoiceTransport @Inject constructor(
                                         sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
                                     }
                                     peer.setConfiguration(rtcConfig)
+                                    diagnostics.record(
+                                        VoiceDiagnosticType.ICE_SERVERS_RECEIVED,
+                                        "Backend supplied ${merged.size} ICE entries",
+                                        metadata = mapOf("count" to merged.size)
+                                    )
                                     Log.d(TAG, "Updated ICE servers from backend: ${merged.size}")
                                 }
                             }
@@ -339,12 +502,21 @@ class WebRtcVoiceTransport @Inject constructor(
                                 } ?: 0
                                 val candidate = IceCandidate(mid, index, candidateValue)
                                 peer.addIceCandidate(candidate)
+                                diagnostics.record(
+                                    VoiceDiagnosticType.REMOTE_CANDIDATE_APPLIED,
+                                    "Applied remote ICE candidate",
+                                    metadata = mapOf("mid" to (mid ?: ""), "index" to index)
+                                )
                             }
 
                             else -> Log.d(TAG, "Ignoring signaling message: $text")
                         }
                     } catch (t: Throwable) {
                         Log.e(TAG, "Error handling signaling message", t)
+                        diagnostics.record(
+                            VoiceDiagnosticType.CONNECT_FAILED,
+                            "Signaling message error: ${t.message ?: t::class.java.simpleName}"
+                        )
                         if (!connectionReady.isCompleted) {
                             connectionReady.completeExceptionally(t)
                         }
@@ -363,6 +535,10 @@ class WebRtcVoiceTransport @Inject constructor(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "Voice signaling socket failure", t)
+                diagnostics.record(
+                    VoiceDiagnosticType.CONNECT_FAILED,
+                    "Signaling socket failure: ${t.message ?: t::class.java.simpleName}"
+                )
                 if (!connectionReady.isCompleted) {
                     connectionReady.completeExceptionally(t)
                 }
@@ -381,6 +557,14 @@ class WebRtcVoiceTransport @Inject constructor(
                     .put("sdpMLineIndex", candidate.sdpMLineIndex)
             )
         webSocket.send(payload.toString())
+        diagnostics.record(
+            VoiceDiagnosticType.LOCAL_CANDIDATE_PUBLISHED,
+            "Published local ICE candidate",
+            metadata = mapOf(
+                "mid" to candidate.sdpMid,
+                "index" to candidate.sdpMLineIndex
+            )
+        )
     }
 
     private fun buildSignalingUrl(baseUrl: String, deviceId: String): String {
@@ -419,6 +603,7 @@ class WebRtcVoiceTransport @Inject constructor(
         signalingScope = CoroutineScope(SupervisorJob() + dispatcher)
 
         isConnected = false
+        diagnostics.record(VoiceDiagnosticType.TEARDOWN, "Voice transport torn down")
     }
 
     private suspend fun PeerConnection.createOfferSuspend(constraints: MediaConstraints): SessionDescription =
@@ -486,5 +671,6 @@ class WebRtcVoiceTransport @Inject constructor(
         const val DEFAULT_STUN_SERVER = "stun:stun.l.google.com:19302"
         const val CONNECT_TIMEOUT_SECONDS = 10L
         const val DISABLE_VP8_FILTER = "WebRTC-DisableVP8HSVC"
+        const val MIC_LEVEL_LOG_INTERVAL_MS = 750L
     }
 }

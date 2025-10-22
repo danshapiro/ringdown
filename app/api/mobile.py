@@ -41,7 +41,7 @@ DEFAULT_POLL_AFTER_SECONDS = 5
 MIN_UTTERANCE_DURATION_SEC = 0.5
 MAX_UTTERANCE_DURATION_SEC = 12.0
 SILENCE_DURATION_SEC = 0.6
-ENERGY_THRESHOLD = 900.0
+ENERGY_THRESHOLD = 150.0
 
 router = APIRouter(prefix="/v1/mobile", tags=["mobile"])
 ws_router = APIRouter()
@@ -142,6 +142,7 @@ class MobileVoiceSession:
         self._silence_samples = int(SILENCE_DURATION_SEC * SAMPLE_RATE)
         self._min_samples = int(MIN_UTTERANCE_DURATION_SEC * SAMPLE_RATE)
         self._max_samples = int(MAX_UTTERANCE_DURATION_SEC * SAMPLE_RATE)
+        self._debug_frames_logged = 0
 
         agent_name = device_cfg.get("agent") or "unknown-caller"
         try:
@@ -221,15 +222,29 @@ class MobileVoiceSession:
                     logger.debug("Audio track for %s closed: %s", self.device_id, exc)
                     break
 
-                samples = frame.to_ndarray(format="s16")
+                samples = frame.to_ndarray()
                 if samples.ndim == 2:
                     mono = samples[0]
                 else:
                     mono = samples
-                mono = np.asarray(mono, dtype=np.int16)
+                mono = np.asarray(mono)
+                if mono.dtype != np.int16:
+                    mono = np.clip(mono, -1.0, 1.0)
+                    mono = (mono * 32767.0).astype(np.int16)
 
                 amplitude = float(np.abs(mono).mean())
                 pcm_chunk = mono.tobytes()
+                if self._debug_frames_logged < 25:
+                    logger.info(
+                        "Inbound frame %d for %s: samples=%d amplitude=%.2f threshold=%.2f time=%s",
+                        self._debug_frames_logged + 1,
+                        self.device_id,
+                        len(mono),
+                        amplitude,
+                        ENERGY_THRESHOLD,
+                        getattr(frame, "pts", None),
+                    )
+                    self._debug_frames_logged += 1
 
                 if not speaking:
                     if amplitude < ENERGY_THRESHOLD:
@@ -277,8 +292,22 @@ class MobileVoiceSession:
     async def _process_chunk(self, pcm_bytes: bytes) -> None:
         try:
             async with self._lock:
+                amplitudes = np.frombuffer(pcm_bytes, dtype=np.int16)
+                mean_amp = float(np.abs(amplitudes).mean()) if amplitudes.size else 0.0
+                logger.debug(
+                    "Processing chunk for %s bytes=%d mean_amp=%.2f",
+                    self.device_id,
+                    len(pcm_bytes),
+                    mean_amp,
+                )
                 transcript = await self._transcribe(pcm_bytes)
                 if not transcript:
+                    logger.info(
+                        "No transcript produced for %s (mean_amp=%.2f, bytes=%d)",
+                        self.device_id,
+                        mean_amp,
+                        len(pcm_bytes),
+                    )
                     return
 
                 logger.info("Mobile user %s said: %s", self.device_id, transcript)
@@ -562,7 +591,13 @@ async def voice_signaling(websocket: WebSocket) -> None:
         nonlocal inbound_started
         if track.kind == "audio" and not inbound_started:
             inbound_started = True
-            logger.debug("Received audio track from %s", device_id)
+            logger.info(
+                "Received audio track from %s codec=%s sample_rate=%s channels=%s",
+                device_id,
+                getattr(track, "codec", None),
+                getattr(track, "sample_rate", None),
+                getattr(track, "channels", None),
+            )
             session.attach_incoming_track(track)
 
     greeting_started = False
