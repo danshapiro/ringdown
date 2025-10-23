@@ -1,5 +1,5 @@
 # Logging first so we capture import-time failures too
-from typing import AsyncIterator, Dict, Any
+from typing import AsyncIterator, Dict, Any, Optional
 import json
 
 import logging
@@ -177,6 +177,7 @@ async def stream_response(
     user_text: str,
     agent: Dict[str, Any],
     messages: list[dict[str, Any]] | None = None,
+    call_context: Optional[Dict[str, Any]] = None,
 ) -> AsyncIterator[str | dict[str, Any]]:
     """Stream an LLM reply for *user_text*.
 
@@ -199,6 +200,8 @@ async def stream_response(
 
     # Propagate agent configuration to all tool modules (e.g., for greenlists)
     tf.set_agent_context(agent)
+    if hasattr(tf, "set_call_context"):
+        tf.set_call_context(call_context)
 
     thinking_audio = ThinkingAudioController(_THINKING_SOUND_URL)
 
@@ -736,7 +739,7 @@ async def stream_response(
                             and ev.data.get("action") == "model_changed"):
                             logger.info("Change LLM tool executed - switching model from %s to %s", 
                                        ev.data.get("previous_model"), ev.data.get("new_model"))
-                            
+
                             # Update agent configuration with new model settings
                             agent["model"] = ev.data["new_model"]
                             agent["temperature"] = ev.data["settings"]["temperature"]  
@@ -756,6 +759,27 @@ async def stream_response(
                             thinking_audio.stop()
                             yield ev.data.get("message", "Changed to %s" % ev.data.get("new_model"))
                             return  # End the conversation turn with the confirmation message
+
+                        if (name == "hang_up" and isinstance(ev.data, dict)
+                            and ev.data.get("action") == "hangup_call"):
+                            logger.info("Hang up tool executed - terminating call")
+
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.get("id"),
+                                "content": _safe_json_dumps(ev.data),
+                            })
+
+                            thinking_audio.stop()
+                            say_text = ev.data.get("message")
+                            if say_text:
+                                yield say_text
+                            yield {
+                                "type": "hangup_call",
+                                "message": ev.data.get("message"),
+                                "reason": ev.data.get("status"),
+                            }
+                            return
                         
                         # Normal tool result handling
                         messages.append({

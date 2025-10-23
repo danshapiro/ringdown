@@ -93,6 +93,7 @@ TOOL_REGISTRY: Dict[str, _ToolSpec] = {}
 
 # Global storage for current agent context to support async execution
 _current_agent_context: Dict[str, Any] | None = None
+_current_call_context: Dict[str, Any] | None = None
 
 # Global registry for async tool results and callbacks
 _async_tool_registry: Dict[str, Dict[str, Any]] = {}
@@ -609,3 +610,22 @@ def set_agent_context(agent_cfg: Dict[str, Any] | None) -> None:
                 logger.debug(f"Set agent context on module {mod.__name__}")
             except Exception as exc:  # noqa: BLE001 – do not fail app for one tool
                 logger.exception("%s.set_agent_context failed: %s", mod.__name__, exc) 
+
+
+def set_call_context(call_ctx: Dict[str, Any] | None) -> None:
+    """Propagate *call_ctx* (e.g., Twilio metadata) to tools that opt in."""
+
+    global _current_call_context
+    _current_call_context = call_ctx
+
+    for spec in TOOL_REGISTRY.values():
+        mod = inspect.getmodule(spec.func)
+        if mod is None:  # pragma: no cover – defensive guard
+            continue
+        setter = getattr(mod, "set_call_context", None)
+        if callable(setter):
+            try:
+                setter(call_ctx)
+                logger.debug("Set call context on module %s", mod.__name__)
+            except Exception as exc:  # noqa: BLE001 – keep processing other tools
+                logger.exception("%s.set_call_context failed: %s", mod.__name__, exc)

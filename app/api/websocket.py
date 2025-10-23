@@ -7,6 +7,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
+from typing import Any
 import litellm
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from fastapi.concurrency import run_in_threadpool
@@ -223,6 +224,12 @@ async def websocket_endpoint(ws: WebSocket):
                 ws.scope["agent_name"] = agent_name
                 ws.scope["agent_config"] = agent  # merged & maybe overridden
                 ws.scope["saved_messages"] = saved_messages
+                ws.scope["call_sid"] = call_sid
+                ws.scope["call_context"] = {
+                    "call_sid": call_sid,
+                    "agent_name": agent_name,
+                    "caller_number": caller_number,
+                }
 
                 # Log the system prompt once during agent initialization
                 logger.debug(
@@ -355,7 +362,15 @@ async def websocket_endpoint(ws: WebSocket):
                             }
                         )
 
-                    async for token in stream_response(user_text, agent_cfg, ws.scope["messages"]):
+                    call_context = ws.scope.get("call_context")
+                    hangup_marker: dict[str, Any] | None = None
+
+                    async for token in stream_response(
+                        user_text,
+                        agent_cfg,
+                        ws.scope["messages"],
+                        call_context=call_context,
+                    ):
                         # Handle special markers from stream_response
                         # These are used to keep the stream alive during tool execution
                         if isinstance(token, dict):
@@ -495,6 +510,7 @@ async def websocket_endpoint(ws: WebSocket):
                                 from app import tool_framework as tf
 
                                 tf.set_agent_context(fresh_agent)
+                                tf.set_call_context(ws.scope.get("call_context"))
 
                                 # Log the reset in memory (marks boundary between old and new conversation)
                                 await run_in_threadpool(
@@ -544,6 +560,14 @@ async def websocket_endpoint(ws: WebSocket):
                                 )
 
                                 # Break out of the token processing loop since we've completed the stream
+                                break
+                            elif token.get("type") == "hangup_call":
+                                hangup_marker = token
+                                marker_message = token.get("message")
+                                if marker_message and not buffer:
+                                    buffer.append(marker_message)
+                                    assistant_full.append(marker_message)
+                                logger.info("Hangup marker received – scheduling call disconnect")
                                 break
 
                             else:
@@ -749,8 +773,9 @@ async def websocket_endpoint(ws: WebSocket):
                                 except Exception as exc:
                                     logger.error("token_counter failed: %s", exc)
 
-                    # Play finished sound after AI completes speaking
-                    await send_finished_sound()
+                    # Play finished sound after AI completes speaking unless we are hanging up immediately
+                    if hangup_marker is None:
+                        await send_finished_sound()
 
                     # Persist assistant turn (async).
                     assistant_text = "".join(assistant_full)
@@ -768,6 +793,16 @@ async def websocket_endpoint(ws: WebSocket):
                         logger.error("Failed to save state: %s", exc)
 
                     METRIC_MESSAGES.labels(role="bot").inc()
+
+                    if hangup_marker is not None:
+                        reason = hangup_marker.get("reason", "Hangup requested")
+                        logger.info("Hangup tool completed – closing WebSocket (%s)", reason)
+                        ws.scope["user_disconnected"] = True
+                        try:
+                            await ws.close(code=4100, reason=reason[:120])
+                        except Exception as exc:
+                            logger.warning("Failed to close WebSocket during hangup: %s", exc)
+                        break
 
                     # Signal end-of-turn for easier tracing – we are now idle until the next user prompt.
                     logger.debug("Waiting for user")
