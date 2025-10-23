@@ -2,10 +2,10 @@
 
 ## DON'T DO THIS
 Unless the user specifically requests it, **NEVER** perform:
-- Git add or commit
+- Git add or commit (fine if the user requests)
 - Destructive git operations
 - Render tests ineffective (make them less rigorous, skip them, delete them, etc)
-Instead of performing these actions, only recommend them, and have the user either confirm it or do it themselves.
+Instead of performing these actions, only recommend them, and have the user confirm.
 
 ### General Guidelines
 - **write ad-hoc scripts in Python**
@@ -46,10 +46,9 @@ Instead of performing these actions, only recommend them, and have the user eith
 - Make sure `gcloud auth application-default login` is already configured for the `danbot-twilio` project.
 - Run `python cloudrun-deploy.py` and wait for it to finish; it builds the image, updates secrets, and redeploys the service.
 - The deploy script can exceed the default 2‑minute timeout in the Codex harness—if it gets killed mid-run, rerun it from a local shell outside the harness or split the workflow into smaller steps.
+- Always run ``live_test_all_functions.py`` after every deploy to confirm things work.
 
 ## Helpful tools
 - `gh` for github work including CI status
 - `gcloud` for google cloud work including checking logs
-
-
-
+- Twilio logs: to debug Twilio, use the helper that can be found in the file  `tests/live_test_all_functions.py`
