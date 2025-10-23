@@ -14,10 +14,12 @@ of silence – defaults to 15 s):
    on a cheaper model.
 2. Create a Google Doc – ``CreateGoogleDoc``
 3. Perform a Tavily web search – ``TavilySearch``
-4. Schedule a calendar event - ``CreateCalendarEvent``
-5. Delete the calendar event - ``DeleteCalendarEvent``
-6. Send an email - ``SendEmail`` (from ``app.tools.email``)
+4. Send an email - ``SendEmail`` (from ``app.tools.email``)
+5. Schedule a calendar event - ``CreateCalendarEvent``
+6. Delete the calendar event - ``DeleteCalendarEvent``
 7. Reset conversation memory - ``reset`` tool
+8. Ask a memory check follow-up
+9. Tell the assistant to hang up so Twilio, not the harness, terminates the call
 
 Everything happens within a single call so that we stress long-context handling
 instead of many short calls.
@@ -48,22 +50,24 @@ from live_test_call import (
     DEFAULT_TO_NUMBER,
 )
 PROMPTS: List[str] = [
-    # 1. Change model (must be first)
+    # Change model (must be first)
     "Switch your model to gpt dash 4 point 1 mini.",
-    # 2. Google Docs - create a document
+    # Google Docs - create a document
     "Create a new Google Doc titled 'Integration Test Document' and write 'Hello from the automated integration test!' inside.",
-    # 3. Tavily search
-    "Search the web for the latest news about OpenAI's research breakthroughs and summarize the key points.",
-    # 4. Calendar event
+    # Tavily search
+    "Search the web for the latest news about OpenAI's research breakthroughs and summarize the key points in a single sentence.",
+    # Send email
+    "Send an email to 'dan at dan shapiro dot com' with the subject 'Test'. The body is the openai research summary.",
+    # Calendar event
     "Add a calendar event titled 'Ringdown Integration Test' tomorrow at noon lasting 30 minutes.",
-    # 5. Delete the calendar event
-    "Please delete the calendar event titled 'Ringdown Integration Test' you just scheduled.",
-    # 6. Send email
-    "Send an email to dan at danshapiro dot com with the subject 'Test' and the body 'This is an automated test email sent by Ringdown.'",
-    # 7. Reset memory so the next test run starts fresh
-    "Reset your conversation memory now, please.",
-    # 8. Memory check question - should fail if memory was truly reset
+    # Delete the calendar event
+    "Delete the calendar event you just scheduled.",
+    # Reset memory so the next test run starts fresh
+    "Reset your conversation memory now.",
+    # Memory check question - should fail if memory was truly reset
     "What is the subject of the email we created earlier in this call?",
+    # Request the assistant to terminate the call
+    "Hang up this call.",
 ]
 
 @click.command()

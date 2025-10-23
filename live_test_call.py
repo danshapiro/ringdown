@@ -432,19 +432,35 @@ def retrieve_cloudrun_logs(
     except Exception as exc:
         logger.error("Failed to retrieve Cloud Run logs: %s", exc)
         return f"\n=== Error retrieving logs: {exc} ===\n"
-def create_test_twiml(mp3_url: str) -> str:
-    """Create TwiML that plays MP3 and hangs up immediately.
-    
-    Plays the audio file and hangs up immediately after completion,
-    with no waiting period or goodbye message.
+def create_test_twiml(
+    mp3_url: str,
+    *,
+    hangup_after_playback: bool = True,
+    post_play_pause_seconds: int = 120,
+) -> str:
+    """Create TwiML that plays MP3 and either hangs up or keeps the call open.
+
+    Args:
+        mp3_url: Publicly reachable URL of the audio asset to play.
+        hangup_after_playback: When ``True`` (default), Twilio will hang up
+            immediately after the audio completes. When ``False``, we insert a
+            long ``<Pause>`` so that the far side is responsible for ending the
+            call (useful for verifying remote hangups).
+        post_play_pause_seconds: Length of the pause when ``hangup_after_playback``
+            is ``False``. Twilio caps this at 600 seconds; values outside the
+            range [1, 600] are clamped automatically.
     """
     response = VoiceResponse()
 
     # Play the MP3 file
     response.play(mp3_url)
 
-    # Hang up immediately after audio completes
-    response.hangup()
+    if hangup_after_playback:
+        # Hang up immediately after audio completes
+        response.hangup()
+    else:
+        pause_length = max(1, min(600, int(post_play_pause_seconds)))
+        response.pause(length=pause_length)
 
     return str(response)
 
@@ -671,14 +687,16 @@ def make_test_call(
     debug: bool = False,
     *,
     expected_duration: float | None = None,  # predicted call length (secs)
+    wait_for_remote_hangup: bool = False,
+    post_play_pause_seconds: int = 120,
 ) -> tuple[str, str, int]:
-    """Make outbound test call with immediate hangup after audio.
-    
-    Plays the specified audio file and hangs up immediately after
-    completion, with call duration exactly matching audio length.
-    
-    Returns:
-        Tuple of (call SID, logs, local_duration_secs) from the completed call.
+    """Make an outbound test call that plays synthesized audio.
+
+    By default the TwiML hangs up after the audio finishes. When
+    ``wait_for_remote_hangup`` is set, the TwiML stays connected and the far
+    side (Twilio ConversationRelay / assistant) must terminate the call.
+
+    Returns a tuple of ``(call_sid, logs, local_duration_secs)`` upon success.
     """
 
     project_id = project_id or DEFAULT_PROJECT_ID
@@ -711,6 +729,8 @@ def make_test_call(
     # Determine MP3 URL – local file → upload/host; http URL → use as-is
     # ------------------------------------------------------------------
 
+    pause_seconds = max(1, min(600, int(post_play_pause_seconds)))
+
     if mp3_file.lower().startswith("http"):
         mp3_url = mp3_file
     else:
@@ -727,17 +747,32 @@ def make_test_call(
         mp3_url = upload_mp3_to_twilio_util(client, mp3_path)
 
     # Create TwiML for the call
-    twiml = create_test_twiml(mp3_url)
+    twiml = create_test_twiml(
+        mp3_url,
+        hangup_after_playback=not wait_for_remote_hangup,
+        post_play_pause_seconds=pause_seconds,
+    )
 
     # Option 1: Create a TwiML Bin (one-time setup in Twilio Console)
     # Option 2: Host TwiML on your server
     # For this test, we'll use inline TwiML
 
+    if wait_for_remote_hangup:
+        hangup_desc = f"play MP3, wait for remote hangup (pause {pause_seconds}s)"
+    else:
+        hangup_desc = "play MP3, immediate hang up"
+
     logger.info(
-        "Making test call from %s to %s (play MP3, immediate hang up)",
+        "Making test call from %s to %s (%s)",
         from_number,
-        to_number
+        to_number,
+        hangup_desc,
     )
+    if wait_for_remote_hangup:
+        print(
+            f"[LiveTest] Expecting the assistant to hang up the call. TwiML pause window: {pause_seconds}s.",
+            flush=True,
+        )
 
     try:
         # Make the call
@@ -754,8 +789,14 @@ def make_test_call(
         # Monitor call status until completion
         start_time = time.time()
         call_start_datetime = dt.datetime.now(dt.timezone.utc)
-        # Wait window: predicted duration + 30-second grace (or default 60s)
-        timeout = (expected_duration + 30) if expected_duration else 60
+        # Wait window: predicted duration + grace. When remote hangup is required,
+        # add the pause window so we allow for the assistant to act.
+        if wait_for_remote_hangup:
+            if expected_duration is None:
+                raise ValueError("expected_duration must be provided when wait_for_remote_hangup=True")
+            timeout = max(expected_duration + pause_seconds + 30, 90)
+        else:
+            timeout = (expected_duration + 30) if expected_duration else 60
         
         if enable_log_monitoring and not project_id:
             project_id = DEFAULT_PROJECT_ID
@@ -821,6 +862,27 @@ def make_test_call(
             local_duration,
         )
 
+        if wait_for_remote_hangup:
+            assert expected_duration is not None  # validated earlier
+            expected_with_pause = expected_duration + pause_seconds
+            margin = expected_with_pause - local_duration
+            if margin <= 10:
+                raise RuntimeError(
+                    "Expected Twilio to hang up before the TwiML pause expired, "
+                    f"but local duration was {local_duration}s vs. pause window {expected_with_pause}s."
+                )
+            logger.info(
+                "Remote hangup confirmed %.1fs before TwiML pause expiry "
+                "(expected window %.1fs, actual duration %.1fs).",
+                margin,
+                expected_with_pause,
+                local_duration,
+            )
+            print(
+                f"[LiveTest] Remote hangup confirmed ({margin:.1f}s before TwiML pause expiry).",
+                flush=True,
+            )
+
         return call.sid, logs_output, local_duration
 
     except Exception as e:
@@ -848,12 +910,12 @@ def make_chained_test_call(
     debug: bool,
 ) -> tuple[str, str, int, float, list[float]]:
     """Make chained test call with combined audio and pauses.
-    
-    This approach combines all audio files into a single track with silence
-    pauses between them, then makes one call. The call duration exactly matches
-    the audio playback time (TTS + pauses) with immediate hangup after completion.
-    This maintains conversation context between prompts while ensuring proper timing.
-    
+
+    We stitch the generated prompts together (with silence gaps) and place a
+    single outbound call. The harness now keeps the call open after playback
+    so the assistant must hang up on the final prompt, which confirms Twilio
+    – not the harness – terminates the call.
+
     Returns:
         Tuple of (call SID, logs, local call duration, combined audio duration, individual audio durations)
     """
@@ -864,12 +926,14 @@ def make_chained_test_call(
     try:
         # Combine all audio files with silence pauses
         combined_audio_path, total_audio_duration, individual_durations = combine_audio_files_with_pauses(audio_files, silence_timeout)
-        
-        # Make single call with combined audio - hang up immediately after audio finishes
+        remote_pause_seconds = max(silence_timeout * 4, 120)
+
+        # Make single call with combined audio – allow Twilio to hang up after the agent obeys
         now_local = dt.datetime.now().astimezone()
         eta_local = now_local + dt.timedelta(seconds=total_audio_duration)
         print(f"[LiveTest] Call start: {now_local:%Y-%m-%d %H:%M:%S %Z}", flush=True)
         print(f"[LiveTest] Estimated completion: {eta_local:%Y-%m-%d %H:%M:%S %Z} (~{total_audio_duration:.1f}s)", flush=True)
+        print(f"[LiveTest] Remote hangup verification window: {remote_pause_seconds}s pause after playback.", flush=True)
 
         logger.info("Making test call with combined audio (%.1fs total)...", total_audio_duration)
         call_sid, logs_output, local_call_duration = make_test_call(
@@ -882,6 +946,8 @@ def make_chained_test_call(
             enable_log_monitoring=enable_log_monitoring,
             debug=debug,
             expected_duration=total_audio_duration,
+            wait_for_remote_hangup=True,
+            post_play_pause_seconds=remote_pause_seconds,
         )
         
         # Get call duration
@@ -963,7 +1029,7 @@ def prepare_log_evaluation_prompt(
     current_time = final_silence_end
     section_num += 1
     
-    timeline_sections.append(f"{section_num}. **Call End** (~{current_time:.1f}s): Hang up after final silence completes")
+    timeline_sections.append(f"{section_num}. **Call End** (~{current_time:.1f}s): Assistant obeys the hang-up request and Twilio terminates the call")
     
     timeline_text = "\n".join(timeline_sections)
 
@@ -987,6 +1053,7 @@ Analyze the logs CAREFULLY. Produce a succinct timeline of the call, and call ou
 - Any errors or warnings
 - Any text that we sent, which did not get transcribed (small transcription errors fine and need not be noted)
 - Any text that we sent, where there was no response from the bot
+- Confirm that Twilio (not the harness) terminated the call after the hang-up instruction
 And finally, using your best analysis of appropriate answers:
 - Any response from the bot which does not make sense given the text we sent.
 
