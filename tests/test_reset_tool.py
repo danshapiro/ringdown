@@ -91,7 +91,7 @@ class TestResetTool:
         
         # Set up mock agent config
         agent_config = {
-            "model": "gpt-4",
+            "model": "gpt-5",
             "temperature": 0.7,
             "max_tokens": 500,
             "max_history": 1000,

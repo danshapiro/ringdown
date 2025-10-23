@@ -16,10 +16,10 @@ async def test_stream_continuity_with_tools():
     
     # Configure agent with tools
     agent = {
-        "model": "gpt-4",
+        "model": "gpt-5",
         "temperature": 1.0,
-                    "max_tokens": 1000,
-            "max_history": 1000,
+        "max_tokens": 1000,
+        "max_history": 1000,
         "prompt": "You are a helpful assistant.",
         "max_tool_iterations": 3,
         "tools": ["TavilySearch"]
@@ -93,7 +93,7 @@ async def test_thinking_sound_emitted_during_llm_wait():
     """Ensure thinking audio starts before the LLM yields tokens."""
 
     agent = {
-        "model": "gpt-4",
+        "model": "gpt-5",
         "temperature": 0.7,
         "max_tokens": 100,
         "max_history": 10,

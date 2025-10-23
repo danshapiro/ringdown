@@ -12,7 +12,7 @@
 # ---------------------------------------------------------------------------
 defaults:
   timezone: America/Los_Angeles     # IANA timezone used for scheduling output.
-  model: gpt-5                      # Primary LLM model identifier.
+  model: claude-sonnet-4-20250514    # Primary LLM model identifier.
   temperature: 1.0                  # Creativity / randomness of LLM calls.
   max_tokens: 20000                 # Maximum output tokens for the primary model.
   language: en-US                   # Locale code for speech synthesis.
@@ -26,7 +26,7 @@ defaults:
   calendar_user_name: "Ringdown Operator"  # Name announced when creating calendar events.
 
   # Secondary LLM configuration used when primary model fails.
-  backup_model: sonnet
+  backup_model: gemini/gemini-2.5-flash
   backup_temperature: 1.0
   backup_max_tokens: 20000
 
