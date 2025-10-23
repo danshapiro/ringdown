@@ -6,3 +6,5 @@
 - [ ] Release-ready commit curation. After the 0.2.0 merge, confirm whether additional rebasing or grouping is required ahead of the next review cycle.
 reset tool should emit a one-word 'resetting'.Or tell the live test otherwise.
 When you dial send a few ringtones as a password
+
+Add a hangup tool
