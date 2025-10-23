@@ -76,7 +76,7 @@ PROMPTS: List[str] = [
 @click.option("--tts-voice", default="alloy", help="OpenAI TTS voice preset")
 @click.option("--tts-model", default="tts-1", help="OpenAI TTS model")
 @click.option("--evaluate-logs/--no-evaluate-logs", default=True, help="Run LLM analysis of Cloud-Run logs")
-@click.option("--log-model", default="gpt-5-pro", help="Model to use for log evaluation (default: gpt-5-pro)")
+@click.option("--log-model", default="gpt-5", help="Model to use for log evaluation (default: gpt-5)")
 @click.option("--debug", is_flag=True, help="Enable verbose debug output")
 @click.option("--no-logs", is_flag=True, help="Disable Cloud Run log retrieval")
 def main(

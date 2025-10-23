@@ -45,6 +45,7 @@ defaults:
     - TavilyExtract
     - SendEmail
     - change_llm
+    - hang_up
     - reset
   max_tool_iterations: 6
   transcription_provider: Google

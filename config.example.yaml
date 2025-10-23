@@ -67,6 +67,7 @@ defaults:
     - TavilySearch
     - TavilyExtract
     - change_llm
+    - hang_up
     - reset
   max_tool_iterations: 6            # Safeguard for runaway tool loops.
 
