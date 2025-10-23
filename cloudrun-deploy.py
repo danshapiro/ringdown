@@ -65,7 +65,7 @@ DEFAULT_PROJECT_ID: str = _env_default(
 )
 DEFAULT_ALWAYS_WARM: bool = True  # keep one instance warm
 DEFAULT_CPU: str = "1"
-DEFAULT_MEMORY: str = "512Mi"
+DEFAULT_MEMORY: str = "1Gi"
 DEFAULT_PORT: int = 8000
 DEFAULT_CLOUDRUN_TIMEOUT: int = 3600  # 60 minutes for WebSocket connections
 
