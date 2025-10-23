@@ -150,10 +150,10 @@ _STATUS_FROM_CFG = _tool_cfg.get("status_messages", {})
 # Fallbacks if config lacks entries ----------------------------------------
 
 _FALLBACK_STATUS = {
-    "TavilySearch": "Searching...",
-    "TavilyExtract": "Extracting...",
-    "SendEmail": "Sending email...",
-    "default": "Processing...",
+    "TavilySearch": "Searching.",
+    "TavilyExtract": "Extracting.",
+    "SendEmail": "Emailing.",
+    "default": "Processing.",
 }
 
 _FALLBACK_THINKING = {

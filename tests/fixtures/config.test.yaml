@@ -25,10 +25,10 @@ defaults:
   tool_runner:
     interval_sec: 2
     status_messages:
-      TavilySearch: "Searching for information..."
-      TavilyExtract: "Extracting details..."
-      SendEmail: "Preparing email..."
-      default: "Working on it..."
+      TavilySearch: "Searching."
+      TavilyExtract: "Extracting."
+      SendEmail: "Emailing."
+      default: "Processing."
     thinking_sounds:
       default:
         - "Checking the next step."

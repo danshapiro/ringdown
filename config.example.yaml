@@ -45,10 +45,10 @@ defaults:
   tool_runner:
     interval_sec: 2                 # Polling interval between tool status updates.
     status_messages:                # Human-friendly messages announced to callers.
-      TavilySearch: "Searching for information..."
-      TavilyExtract: "Extracting details..."
-      SendEmail: "Preparing email..."
-      default: "Working on it..."
+      TavilySearch: "Searching."
+      TavilyExtract: "Extracting."
+      SendEmail: "Emailing."
+      default: "Processing."
     thinking_sounds:                # Filler phrases played when tools take time.
       default:
         - "Checking the next step."
