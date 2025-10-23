@@ -20,7 +20,7 @@ CALL_STATE = (
         "language": "en-US",
         "welcome_greeting": "Test greeting",
         "max_disconnect_seconds": 7200,
-        "model": "gpt-4",
+        "model": "gpt-5",
     },
     None,
     False,

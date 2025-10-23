@@ -9,7 +9,7 @@ collection and (optional) LLM-based log evaluation.
 Test flow (all prompts are spoken via TTS and separated by configurable periods
 of silence – defaults to 15 s):
 
-1. Ask the bot to switch its underlying model to **gpt-4.1-mini** – this both
+1. Ask the bot to switch its underlying model to **gpt-5-mini** – this both
    exercises the ``change_llm`` tool and ensures the remainder of the test runs
    on a cheaper model.
 2. Create a Google Doc – ``CreateGoogleDoc``
@@ -51,7 +51,7 @@ from live_test_call import (
 )
 PROMPTS: List[str] = [
     # Change model (must be first)
-    "Switch your model to gpt dash 4 point 1 mini.",
+    "Switch your model to gpt five mini.",
     # Google Docs - create a document
     "Create a new Google Doc titled 'Integration Test Document' and write 'Hello from the automated integration test!' inside.",
     # Tavily search
@@ -76,7 +76,7 @@ PROMPTS: List[str] = [
 @click.option("--tts-voice", default="alloy", help="OpenAI TTS voice preset")
 @click.option("--tts-model", default="tts-1", help="OpenAI TTS model")
 @click.option("--evaluate-logs/--no-evaluate-logs", default=True, help="Run LLM analysis of Cloud-Run logs")
-@click.option("--log-model", default="o3", help="Model to use for log evaluation (default: o3)")
+@click.option("--log-model", default="gpt-5-pro", help="Model to use for log evaluation (default: gpt-5-pro)")
 @click.option("--debug", is_flag=True, help="Enable verbose debug output")
 @click.option("--no-logs", is_flag=True, help="Disable Cloud Run log retrieval")
 def main(

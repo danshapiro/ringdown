@@ -88,7 +88,7 @@ async def test_stream_response_handles_tool_error(monkeypatch):
     monkeypatch.setattr(chat_module, "acompletion", fake_acompletion, raising=True)
 
     agent_cfg = {
-            "model": "gpt-4.1-mini",
+            "model": "gpt-5-mini",
             "temperature": 0.1,
             "max_tokens": 16,
             "max_history": 1000,

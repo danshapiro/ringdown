@@ -37,7 +37,8 @@ The `defaults` section configures shared behaviour:
 
 ```yaml
 defaults:
-  model: gpt-4o-mini
+  model: claude-sonnet-4-20250514
+  backup_model: gemini/gemini-2.5-flash
   voice: en-US-Chirp3-HD-Aoede
   max_disconnect_seconds: 120
   max_tool_iterations: 6
