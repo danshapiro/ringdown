@@ -105,12 +105,14 @@ def test_folder_validation_with_agent_context():
 
         "docs_folder_greenlist": [
             "Test Folder",
-            "^Project .*$"
+            "^Project .*$",
+            "marketing-docs-.*",
         ]
     }
     google_docs.set_agent_context(test_agent_config)
     assert google_docs._is_folder_allowed("Test Folder") is True
     assert google_docs._is_folder_allowed("Project Alpha") is True
+    assert google_docs._is_folder_allowed("marketing-docs-q4") is True
     assert google_docs._is_folder_allowed("ringdown-default") is False
     google_docs.set_agent_context(None)
 

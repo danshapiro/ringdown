@@ -91,11 +91,15 @@ def _is_folder_allowed(folder_name: str) -> bool:
     """Check if folder name matches any greenlist pattern for the current agent."""
     allowed = _get_allowed_folders()
         
-    for pattern in allowed:
-        if pattern.startswith("^"):  # It's a regex pattern
-            if re.fullmatch(pattern, folder_name, re.IGNORECASE):
-                return True
-        elif pattern.lower() == folder_name.lower():  # Exact match
+    for candidate in allowed:
+        if _is_regex_pattern(candidate):
+            try:
+                if re.fullmatch(candidate, folder_name, re.IGNORECASE):
+                    return True
+            except re.error as exc:  # pragma: no cover - configuration error surfaced at runtime
+                logger.error("Google Docs: Invalid folder regex '%s': %s", candidate, exc)
+                continue
+        elif candidate.lower() == folder_name.lower():  # Exact match
             return True
     return False
 
@@ -636,5 +640,4 @@ def append_google_doc(args: AppendDocArgs) -> Dict[str, Any]:
             "success": False,
             "error": str(e)
         }
-
 
