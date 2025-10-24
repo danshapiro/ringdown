@@ -110,8 +110,8 @@ agents:
       - SendEmail
       - CreateGoogleDoc
       - ReadGoogleDoc
+      - SearchGoogleDrive
       - AppendGoogleDoc
-      - ListGoogleDocs
       - change_llm
       - reset
     email_greenlist_enforced: true

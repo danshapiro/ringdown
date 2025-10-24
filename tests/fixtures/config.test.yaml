@@ -77,7 +77,6 @@ agents:
       - CreateGoogleDoc
       - ReadGoogleDoc
       - AppendGoogleDoc
-      - ListGoogleDocs
       - change_llm
       - reset
     email_greenlist_enforced: true
