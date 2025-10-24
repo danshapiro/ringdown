@@ -30,6 +30,7 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from google.oauth2 import service_account
 
 from ..tool_framework import register_tool
+from .email import EmailArgs, send_email
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,23 @@ SCOPES = [
 
 # Known MIME types for Markdown files stored in Google Drive
 MARKDOWN_MIME_TYPES = {"text/markdown", "text/x-markdown"}
+
+
+def _iter_text_runs(doc: Dict[str, Any]):
+    """Yield textRun entries from a Docs API document response."""
+    for element in doc.get("body", {}).get("content", []):
+        paragraph = element.get("paragraph")
+        if not paragraph:
+            continue
+        for elem in paragraph.get("elements", []):
+            text_run = elem.get("textRun")
+            if text_run:
+                yield text_run
+
+
+def _collect_plain_text(doc: Dict[str, Any]) -> str:
+    """Return concatenated text content for a Docs API response."""
+    return "".join(run.get("content", "") for run in _iter_text_runs(doc))
 
 def set_agent_context(agent_config: Dict[str, Any] | None) -> None:
     """Set the current agent configuration in thread-local storage."""
@@ -291,6 +309,74 @@ def _is_document_in_default_folder(doc_id: str) -> bool:
     return False
 
 
+def _notify_doc_created(
+    *,
+    doc_id: str,
+    title: str,
+    docs_service: Any,
+    fallback_content: str,
+) -> None:
+    """Email the account owner with the document link and content."""
+
+    try:
+        from app.settings import get_default_email as _get_default_email_for_notify
+
+        recipient = _get_default_email_for_notify()
+    except Exception as exc:  # pragma: no cover - configuration error surfaced at runtime
+        logger.error(
+            "Google Docs: Unable to resolve notification recipient for document %s: %s",
+            doc_id,
+            exc,
+        )
+        return
+
+    doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+
+    doc_text = fallback_content or ""
+    try:
+        fetched = docs_service.documents().get(documentId=doc_id).execute()
+        resolved = _collect_plain_text(fetched)
+        if resolved:
+            doc_text = resolved
+    except Exception as exc:  # pragma: no cover - API availability issues handled gracefully
+        logger.warning(
+            "Google Docs: Failed to retrieve document %s content for notification: %s",
+            doc_id,
+            exc,
+        )
+
+    safe_title = title.replace("\r", " ").replace("\n", " ").strip()
+    body = doc_url if not doc_text else f"{doc_url}\n\n{doc_text}"
+
+    try:
+        email_args = EmailArgs(
+            to=recipient,
+            subject=f'Created gdoc: "{safe_title}"',
+            body=body,
+        )
+    except Exception as exc:
+        logger.error(
+            "Google Docs: Failed to build notification email payload for document %s: %s",
+            doc_id,
+            exc,
+        )
+        return
+
+    try:
+        result = send_email(email_args)
+        logger.info(
+            "Google Docs: Notification dispatched for document %s (success=%s)",
+            doc_id,
+            result.get("success"),
+        )
+    except Exception as exc:
+        logger.error(
+            "Google Docs: Notification email failed for document %s: %s",
+            doc_id,
+            exc,
+        )
+
+
 # ============================================================================
 # Tool Definitions
 # ============================================================================
@@ -385,11 +471,20 @@ def create_google_doc(args: CreateDocArgs) -> Dict[str, Any]:
             ).execute()
             logger.info("Moved empty document '%s' to folder '%s'", doc_id, target_folder_name)
 
+        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+
+        _notify_doc_created(
+            doc_id=doc_id,
+            title=args.title,
+            docs_service=docs_service,
+            fallback_content=markdown_content,
+        )
+
         return {
             "success": True,
             "document_id": doc_id,
             "title": args.title,
-            "url": f"https://docs.google.com/document/d/{doc_id}/edit",
+            "url": doc_url,
         }
         
     except Exception as e:
@@ -532,25 +627,17 @@ def read_google_doc(args: ReadDocArgs) -> Dict[str, Any]:
 
             raise doc_exc
 
-        content_parts = []
-        for element in doc.get('body', {}).get('content', []):
-            if 'paragraph' not in element:
-                continue
-            for elem in element['paragraph'].get('elements', []):
-                text_run = elem.get('textRun')
-                if not text_run:
-                    continue
-                text = text_run.get('content', '')
-                if args.include_formatting:
-                    style = text_run.get('textStyle', {})
-                    if style:
-                        content_parts.append({"text": text, "style": style})
-                    else:
-                        content_parts.append({"text": text})
-                else:
-                    content_parts.append(text)
-
-        content = content_parts if args.include_formatting else ''.join(content_parts)
+        if args.include_formatting:
+            content_parts: List[Dict[str, Any]] = []
+            for text_run in _iter_text_runs(doc):
+                entry: Dict[str, Any] = {"text": text_run.get("content", "")}
+                style = text_run.get("textStyle", {})
+                if style:
+                    entry["style"] = style
+                content_parts.append(entry)
+            content = content_parts
+        else:
+            content = _collect_plain_text(doc)
         title = doc.get('title', 'Untitled')
         url = f"https://docs.google.com/document/d/{doc_id}/edit"
 
@@ -640,4 +727,3 @@ def append_google_doc(args: AppendDocArgs) -> Dict[str, Any]:
             "success": False,
             "error": str(e)
         }
-
