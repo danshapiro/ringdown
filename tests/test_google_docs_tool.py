@@ -2,6 +2,7 @@
 """Tests for Google Docs tools."""
 
 import os
+import threading
 from unittest.mock import patch, MagicMock, Mock
 import pytest
 
@@ -142,7 +143,9 @@ def test_extract_doc_id():
 def test_create_document_mock():
     """Test document creation with mocked Google API - now async execution."""
     # Set agent context for dynamic folder name
-    google_docs.set_agent_context({"bot_name": "testbot"})
+    context = {"bot_name": "testbot"}
+    google_docs.set_agent_context(context)
+    tf.set_agent_context(context)
     
     # Mock the services
     mock_docs_service = MagicMock()
@@ -153,32 +156,71 @@ def test_create_document_mock():
         'documentId': 'test_doc_123',
         'title': 'Test Document'
     }
-    
+
+    mock_docs_service.documents().get().execute.return_value = {
+        'documentId': 'test_doc_123',
+        'title': 'Test Document',
+        'body': {
+            'content': [
+                {
+                    'paragraph': {
+                        'elements': [
+                            {
+                                'textRun': {
+                                    'content': 'This is test content.'
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    }
+
     # Mock batch update for content
     mock_docs_service.documents().batchUpdate().execute.return_value = {}
-    
+
     # Mock folder operations
     mock_drive_service.files().list().execute.return_value = {
         'files': [{'id': 'folder_123', 'name': 'testbot-default'}]
+    }
+    mock_drive_service.files().create().execute.return_value = {
+        'id': 'test_doc_123',
+        'parents': ['folder_123']
     }
     mock_drive_service.files().get().execute.return_value = {
         'parents': ['root']
     }
     mock_drive_service.files().update().execute.return_value = {'id': 'test_doc_123'}
-    
-    with patch('app.tools.google_docs._get_services', return_value=(mock_docs_service, mock_drive_service)):
-        result = tf.execute_tool("CreateGoogleDoc", {
-            "title": "Test Document",
-            "content": "This is test content.",
-        })
+
+    notification_event = threading.Event()
+
+    def _capture_email(email_args):
+        assert email_args.to == "team@example.com"
+        assert email_args.subject == 'Created gdoc: "Test Document"'
+        assert email_args.body.startswith("https://docs.google.com/document/d/test_doc_123/edit")
+        assert "This is test content." in email_args.body
+        notification_event.set()
+        return {"success": True}
+
+    with patch('app.tools.google_docs.send_email', side_effect=_capture_email) as mocked_email:
+        with patch('app.tools.google_docs._get_services', return_value=(mock_docs_service, mock_drive_service)):
+            result = tf.execute_tool("CreateGoogleDoc", {
+                "title": "Test Document",
+                "content": "This is test content.",
+            })
         
         # Since CreateGoogleDoc now runs asynchronously, we get an immediate response
         assert result["success"] is True
         assert result["async_execution"] is True
         assert "started asynchronously" in result["message"]
+
+        assert notification_event.wait(timeout=1.0)
+        mocked_email.assert_called_once()
     
     # Clear agent context after test
     google_docs.set_agent_context(None)
+    tf.set_agent_context(None)
 
 
 def test_read_document_mock():
