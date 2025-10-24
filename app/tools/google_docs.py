@@ -127,6 +127,42 @@ def _get_services() -> tuple[Any, Any]:
     return docs_service, drive_service
 
 
+def _is_regex_pattern(candidate: str) -> bool:
+    """Return True when the folder entry should be treated as a regex pattern."""
+    if candidate.startswith("^") or candidate.endswith("$"):
+        return True
+    return any(char in candidate for char in "*?[]{}()|\\")
+
+
+def _find_folder_by_pattern(pattern: str, drive_service: Any) -> tuple[str | None, str | None]:
+    """Locate an existing folder whose name matches the supplied regex pattern."""
+    try:
+        compiled = re.compile(pattern, re.IGNORECASE)
+    except re.error as exc:  # pragma: no cover - configuration error surfaced at runtime
+        raise ValueError(f"Invalid folder regex '{pattern}': {exc}") from exc
+
+    page_token: Optional[str] = None
+    while True:
+        response = drive_service.files().list(
+            q="mimeType='application/vnd.google-apps.folder' and trashed=false",
+            spaces="drive",
+            fields="nextPageToken, files(id, name)",
+            pageToken=page_token,
+            pageSize=100,
+        ).execute()
+
+        for folder in response.get("files", []):
+            name = folder.get("name", "")
+            if compiled.fullmatch(name):
+                return folder.get("id"), name
+
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    return None, None
+
+
 def _find_or_create_folder(folder_name: str, drive_service: Any | None = None) -> str:
     """Find a folder by name or create it if it doesn't exist.
     
@@ -137,7 +173,10 @@ def _find_or_create_folder(folder_name: str, drive_service: Any | None = None) -
         _, drive_service = _get_services()
     
     # Search for existing folder
-    query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    escaped_name = _escape_drive_query_term(folder_name)
+    query = (
+        f"name='{escaped_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    )
     results = drive_service.files().list(
         q=query,
         spaces='drive',
@@ -157,6 +196,27 @@ def _find_or_create_folder(folder_name: str, drive_service: Any | None = None) -
     folder = drive_service.files().create(body=file_metadata, fields='id').execute()
     logger.info(f"Created new folder '{folder_name}' with ID: {folder['id']}")
     return folder['id']
+
+
+def _resolve_allowed_folder(
+    candidate: str, drive_service: Any
+) -> tuple[str | None, str | None]:
+    """Resolve a greenlisted entry to a specific Drive folder."""
+    if _is_regex_pattern(candidate):
+        folder_id, resolved_name = _find_folder_by_pattern(candidate, drive_service)
+        if folder_id and resolved_name:
+            logger.debug(
+                "Google Docs: Resolved regex folder '%s' to existing folder '%s'",
+                candidate,
+                resolved_name,
+            )
+            return folder_id, resolved_name
+        raise ValueError(
+            f"No folder found matching regex pattern '{candidate}'"
+        )
+
+    folder_id = _find_or_create_folder(candidate, drive_service=drive_service)
+    return folder_id, candidate
 
 
 def _extract_doc_id(doc_input: str) -> str:
@@ -196,50 +256,34 @@ def _escape_drive_query_term(term: str) -> str:
 
 
 def _is_document_in_default_folder(doc_id: str) -> bool:
-    """Check if a document is in the agent's default folder.
-    
-    Args:
-        doc_id: Document ID
-        
-    Returns:
-        True if document is in default folder, False otherwise
-    """
+    """Check if a document lives in a greenlisted folder for the current agent."""
     _, drive_service = _get_services()
-    
-    # Get the agent's default folder name
-    agent_config = get_agent_context()
-    if not agent_config:
-        logger.warning("Agent context not available for folder validation, allowing operation")
-        # If agent context isn't available, we should allow the operation
-        # This happens during synchronous execution before context is restored
-        return True
-    
-    bot_name = agent_config.get('bot_name')
-    if not bot_name:
-        logger.warning("No bot_name in agent context for folder validation, allowing operation")
-        return True
-    
-    default_folder_name = f"{bot_name}-default"
-    
-    # Get the document's parent folders
+
+    allowed_folders = _get_allowed_folders()
+
     doc_info = drive_service.files().get(
         fileId=doc_id,
         fields='parents'
     ).execute()
-    
+
     parent_ids = doc_info.get('parents', [])
-    
-    # Check each parent folder
+
     for parent_id in parent_ids:
         folder_info = drive_service.files().get(
             fileId=parent_id,
             fields='name'
         ).execute()
-        
+
         folder_name = folder_info.get('name', '')
-        if folder_name == default_folder_name:
+        if _is_folder_allowed(folder_name):
             return True
-    
+
+    logger.debug(
+        "Google Docs: Document '%s' is not in any allowed folder; parents=%s allowed=%s",
+        doc_id,
+        parent_ids,
+        allowed_folders,
+    )
     return False
 
 
@@ -287,9 +331,11 @@ def create_google_doc(args: CreateDocArgs) -> Dict[str, Any]:
         target_folder_name: Optional[str] = None
         for candidate in allowed_folders:
             try:
-                target_folder_id = _find_or_create_folder(candidate, drive_service=drive_service)
-                target_folder_name = candidate
-                break
+                resolved_id, resolved_name = _resolve_allowed_folder(candidate, drive_service)
+                target_folder_id = resolved_id
+                target_folder_name = resolved_name
+                if target_folder_id and target_folder_name:
+                    break
             except Exception as folder_error:
                 logger.error("Failed to resolve folder '%s': %s", candidate, folder_error)
 
