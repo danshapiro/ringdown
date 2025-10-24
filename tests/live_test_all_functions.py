@@ -53,7 +53,7 @@ PROMPTS: List[str] = [
     # Change model (must be first)
     "Switch your model to gpt five mini.",
     "Search the web for the latest news about OpenAI's research breakthroughs and summarize the key points in a single sentence.",
-    "Create a new Google Doc titled 'Integration Test Document' and write 'Hello from the automated integration test!' inside.",
+    "Create a new Google Doc titled 'OpenAI update (Danbot integration test)'. The body is the openai summary you just prepared.",
     "Search for a document with the word parsnip in the title.",
     "Read the document to find out dan's alternate email and tell me what it is."
     "Send the sentence about OpenAI's research breakthroughs, nicely formatted, to dan's alternate email address, subject 'integration test'.",
