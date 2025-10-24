@@ -1,5 +1,11 @@
 """Google Docs creation and editing tools.
 
+Available tools:
+- CreateGoogleDoc: Create a new Google Doc from markdown content.
+- SearchGoogleDrive: Search Google Drive by title or content.
+- ReadGoogleDoc: Read the content of a Google Doc or Markdown file.
+- AppendGoogleDoc: Append content to a Google Doc in the default folder.
+
 Authentication uses the same delegated service-account credential as the Gmail tool.
 The service account impersonates the user
 to create and edit documents in their Google Drive.
@@ -20,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from google.oauth2 import service_account
 
 from ..tool_framework import register_tool
@@ -36,6 +42,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/drive.metadata.readonly",
 ]
+
+# Known MIME types for Markdown files stored in Google Drive
+MARKDOWN_MIME_TYPES = {"text/markdown", "text/x-markdown"}
 
 def set_agent_context(agent_config: Dict[str, Any] | None) -> None:
     """Set the current agent configuration in thread-local storage."""
@@ -169,6 +178,8 @@ def _extract_doc_id(doc_input: str) -> str:
     patterns = [
         r'docs\.google\.com/document/d/([a-zA-Z0-9_-]+)',
         r'docs\.google\.com/.*[?&]id=([a-zA-Z0-9_-]+)',
+        r'drive\.google\.com/file/d/([a-zA-Z0-9_-]+)',
+        r'drive\.google\.com/.*[?&]id=([a-zA-Z0-9_-]+)',
     ]
     
     for pattern in patterns:
@@ -423,47 +434,84 @@ class ReadDocArgs(BaseModel):
 
 @register_tool(
     name="ReadGoogleDoc",
-    description="Read the content of a Google Doc",
+    description="Read the content of a Google Doc or Markdown file",
     param_model=ReadDocArgs
 )
 def read_google_doc(args: ReadDocArgs) -> Dict[str, Any]:
     """Read document content."""
     try:
-        docs_service, _ = _get_services()
+        docs_service, drive_service = _get_services()
         doc_id = _extract_doc_id(args.document_id_or_url)
-        
-        # Get the document
-        doc = docs_service.documents().get(documentId=doc_id).execute()
-        
-        # Extract text content
+
+        try:
+            doc = docs_service.documents().get(documentId=doc_id).execute()
+        except Exception as doc_exc:
+            metadata: Dict[str, Any] = {}
+            try:
+                raw_metadata = drive_service.files().get(
+                    fileId=doc_id,
+                    fields="id, name, mimeType"
+                ).execute()
+                if isinstance(raw_metadata, dict):
+                    metadata = raw_metadata
+            except Exception as meta_exc:  # pragma: no cover - metadata fetch is best effort
+                logger.debug(f"Failed to retrieve metadata for {doc_id}: {meta_exc}")
+
+            mime_type = metadata.get("mimeType")
+            title = metadata.get("name", "Untitled")
+            is_markdown = (
+                (mime_type in MARKDOWN_MIME_TYPES) or title.lower().endswith(".md")
+            )
+            if is_markdown:
+                request = drive_service.files().get_media(fileId=doc_id)
+                buffer = io.BytesIO()
+                downloader = MediaIoBaseDownload(buffer, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+                buffer.seek(0)
+                content = buffer.read().decode("utf-8")
+
+                return {
+                    "success": True,
+                    "document_id": doc_id,
+                    "title": title,
+                    "content": content,
+                    "url": f"https://drive.google.com/file/d/{doc_id}/view",
+                }
+
+            raise doc_exc
+
         content_parts = []
         for element in doc.get('body', {}).get('content', []):
-            if 'paragraph' in element:
-                for elem in element['paragraph'].get('elements', []):
-                    if 'textRun' in elem:
-                        text = elem['textRun'].get('content', '')
-                        if args.include_formatting:
-                            style = elem['textRun'].get('textStyle', {})
-                            if style:
-                                content_parts.append({"text": text, "style": style})
-                            else:
-                                content_parts.append({"text": text})
-                        else:
-                            content_parts.append(text)
-        
-        if args.include_formatting:
-            content = content_parts
-        else:
-            content = ''.join(content_parts)
-        
+            if 'paragraph' not in element:
+                continue
+            for elem in element['paragraph'].get('elements', []):
+                text_run = elem.get('textRun')
+                if not text_run:
+                    continue
+                text = text_run.get('content', '')
+                if args.include_formatting:
+                    style = text_run.get('textStyle', {})
+                    if style:
+                        content_parts.append({"text": text, "style": style})
+                    else:
+                        content_parts.append({"text": text})
+                else:
+                    content_parts.append(text)
+
+        content = content_parts if args.include_formatting else ''.join(content_parts)
+        title = doc.get('title', 'Untitled')
+        url = f"https://docs.google.com/document/d/{doc_id}/edit"
+
         return {
             "success": True,
             "document_id": doc_id,
-            "title": doc.get('title', 'Untitled'),
+            "title": title,
             "content": content,
-            "url": f"https://docs.google.com/document/d/{doc_id}/edit"
+            "url": url,
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to read document: {e}")
         return {
