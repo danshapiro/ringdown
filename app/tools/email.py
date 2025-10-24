@@ -35,7 +35,7 @@ from ..tool_framework import register_tool
 # Third-party helper – handles sleep & concurrency for rate limiting
 from ratelimit import limits, sleep_and_retry
 
-from app.settings import get_admin_emails, get_default_email
+from app.settings import get_admin_emails, get_default_email, get_default_bot_name
 from app import settings as _settings
 
 
@@ -271,7 +271,23 @@ def send_email(args: EmailArgs) -> Dict[str, Any]:
         if agent_cfg is not None:
             bot_name = agent_cfg.get("bot_name")
 
-        subject: str = f"[{bot_name}] {args.subject}" if bot_name else args.subject
+        resolved_bot_name: str | None = None
+        if bot_name:
+            resolved_bot_name = str(bot_name).strip()
+        else:
+            try:
+                resolved_bot_name = get_default_bot_name()
+            except Exception:  # pragma: no cover - fallback if config missing
+                resolved_bot_name = "Danbot"
+
+        raw_subject = args.subject.strip() if isinstance(args.subject, str) else str(args.subject)
+        prefix = f"[{resolved_bot_name}]" if resolved_bot_name else "[Danbot]"
+        if raw_subject.startswith(prefix):
+            subject = raw_subject
+        elif raw_subject:
+            subject = f"{prefix} {raw_subject}"
+        else:
+            subject = prefix
 
         message['Subject'] = subject
         message.set_content(args.body)

@@ -60,7 +60,7 @@ PROMPTS: List[str] = [
     "Add a calendar event titled 'Ringdown Integration Test' tomorrow at noon lasting 30 minutes.",
     "Delete the calendar event you just scheduled.",
     "Reset your conversation memory now.",
-    "What is Dan's alternate email?",
+    "Have I mentioned a parsnip in this conversation?",
     "Hang up this call.",
 ]
 

@@ -4,11 +4,14 @@
 from unittest.mock import patch, MagicMock
 
 import time
+import base64
+from email import message_from_bytes
 
 import pytest
 
 from app.tools import email  # noqa: F401 – ensures registration
 from app import tool_framework as tf
+from app.settings import get_default_bot_name
 
 
 def test_email_registration():
@@ -80,7 +83,9 @@ def test_email_sending_mock():
     mock_users = MagicMock(return_value=MagicMock(messages=MagicMock(return_value=mock_messages)))
     mock_service = MagicMock(users=mock_users)
 
-    with patch("app.tools.email._get_gmail_service", return_value=mock_service):
+    with patch("app.tools.email._get_gmail_service", return_value=mock_service), patch(
+        "app.tools.email._send_gmail", return_value={"id": "test_message_123"}
+    ) as mocked_send:
         result = tf.execute_tool(
             "SendEmail",
             {"to": "team@example.com", "subject": "Test Subject", "body": "This is a test email."},
@@ -89,9 +94,15 @@ def test_email_sending_mock():
     assert result["success"] is True
     assert result["async_execution"] is True
     deadline = time.time() + 1
-    while mock_messages.send.call_count == 0 and time.time() < deadline:
+    while mocked_send.call_count == 0 and time.time() < deadline:
         time.sleep(0.01)
-    mock_messages.send.assert_called_once()
+    mocked_send.assert_called_once()
+
+    raw_message = mocked_send.call_args[0][1]
+    decoded = base64.urlsafe_b64decode(raw_message)
+    parsed = message_from_bytes(decoded)
+    expected_prefix = f"[{get_default_bot_name()}]"
+    assert parsed["Subject"].startswith(expected_prefix)
 
 
 def test_rate_limit_decorator_is_used():

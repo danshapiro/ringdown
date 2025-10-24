@@ -450,7 +450,18 @@ async def stream_response(
                     pass
         
         # DEBUG: Log message array for debugging reset issue
-        logger.debug("Message array content: %s", [{"role": m["role"], "content": str(m.get("content", ""))[:100], "tool_calls": bool(m.get("tool_calls")), "tool_call_id": m.get("tool_call_id")} for m in messages])
+        logger.debug(
+            "Message array content: %s",
+            [
+                {
+                    "role": m["role"],
+                    "content": str(m.get("content", "")),
+                    "tool_calls": bool(m.get("tool_calls")),
+                    "tool_call_id": m.get("tool_call_id"),
+                }
+                for m in messages
+            ],
+        )
 
         # Recompute dynamic placeholders just before each LLM call
         _refresh_dynamic_prompt()
