@@ -14,7 +14,7 @@ def test_docs_tools_registered():
     assert "CreateGoogleDoc" in tf.TOOL_REGISTRY
     assert "ReadGoogleDoc" in tf.TOOL_REGISTRY
     assert "AppendGoogleDoc" in tf.TOOL_REGISTRY
-    assert "ListGoogleDocs" in tf.TOOL_REGISTRY
+    assert "SearchGoogleDrive" in tf.TOOL_REGISTRY
 
 
 def test_folder_validation_default():
@@ -282,38 +282,88 @@ def test_update_document_not_in_default_folder():
     google_docs.set_agent_context(None)
 
 
-def test_list_documents_mock():
-    """Test document listing with mocked Google API."""
+def test_search_drive_default_filters():
+    """SearchGoogleDrive should restrict to Docs titles by default."""
     mock_docs_service = MagicMock()
     mock_drive_service = MagicMock()
-    
-    # Mock file listing
-    mock_drive_service.files().list().execute.return_value = {
-        'files': [
-            {
-                'id': 'doc1',
-                'name': 'Document 1',
-                'createdTime': '2024-01-01T00:00:00Z',
-                'modifiedTime': '2024-01-02T00:00:00Z'
-            },
-            {
-                'id': 'doc2',
-                'name': 'Document 2',
-                'createdTime': '2024-01-01T00:00:00Z',
-                'modifiedTime': '2024-01-03T00:00:00Z'
-            }
-        ]
+
+    mock_drive_service.files.return_value.list.return_value.execute.return_value = {
+        "files": [
+            {"id": "doc1", "name": "Meeting Notes"},
+            {"id": "doc2", "name": "Meeting Agenda"},
+        ],
+        "nextPageToken": None,
     }
-    
-    with patch('app.tools.google_docs._get_services', return_value=(mock_docs_service, mock_drive_service)):
-        result = tf.execute_tool("ListGoogleDocs", {
-            "max_results": 10
-        })
-        
-        assert result["success"] is True
-        assert result["count"] == 2
-        assert len(result["documents"]) == 2
-        assert result["documents"][0]["id"] == "doc1"
+
+    with patch("app.tools.google_docs._get_services", return_value=(mock_docs_service, mock_drive_service)):
+        result = tf.execute_tool("SearchGoogleDrive", {"query": "Meeting"})
+
+    assert result["success"] is True
+    assert result["count"] == 2
+    assert [entry["id"] for entry in result["results"]] == ["doc1", "doc2"]
+
+    call_kwargs = mock_drive_service.files.return_value.list.call_args.kwargs
+    assert call_kwargs["q"] == (
+        "trashed=false and mimeType='application/vnd.google-apps.document' and name contains 'Meeting'"
+    )
+    assert call_kwargs["pageToken"] is None
+
+
+def test_search_drive_full_text_and_all_types():
+    """SearchGoogleDrive should search contents when configured and handle pagination."""
+    mock_docs_service = MagicMock()
+    mock_drive_service = MagicMock()
+
+    list_mock = mock_drive_service.files.return_value.list
+    list_mock.return_value.execute.side_effect = [
+        {
+            "files": [{"id": "doc3", "name": "Project Plan"}],
+            "nextPageToken": "token123",
+        },
+        {
+            "files": [{"id": "sheet1", "name": "Project Spreadsheet"}],
+            "nextPageToken": None,
+        },
+    ]
+
+    with patch("app.tools.google_docs._get_services", return_value=(mock_docs_service, mock_drive_service)):
+        result = tf.execute_tool(
+            "SearchGoogleDrive",
+            {"query": "Project", "titles_only": False, "docs_only": False},
+        )
+
+    assert result["success"] is True
+    assert result["count"] == 2
+    assert [entry["id"] for entry in result["results"]] == ["doc3", "sheet1"]
+
+    first_call_kwargs = list_mock.call_args_list[0].kwargs
+    second_call_kwargs = list_mock.call_args_list[1].kwargs
+
+    assert first_call_kwargs["q"] == (
+        "trashed=false and (name contains 'Project' or fullText contains 'Project')"
+    )
+    assert "mimeType" not in first_call_kwargs["q"]
+    assert first_call_kwargs["pageToken"] is None
+    assert second_call_kwargs["pageToken"] == "token123"
+
+
+def test_search_drive_escapes_quotes():
+    """SearchGoogleDrive should escape single quotes in the query."""
+    mock_docs_service = MagicMock()
+    mock_drive_service = MagicMock()
+
+    mock_drive_service.files.return_value.list.return_value.execute.return_value = {
+        "files": [],
+        "nextPageToken": None,
+    }
+
+    with patch("app.tools.google_docs._get_services", return_value=(mock_docs_service, mock_drive_service)):
+        result = tf.execute_tool("SearchGoogleDrive", {"query": "Bob's Plan"})
+
+    assert result["success"] is True
+
+    query_string = mock_drive_service.files.return_value.list.call_args.kwargs["q"]
+    assert "Bob\\'s Plan" in query_string
 
 
 def test_error_handling():

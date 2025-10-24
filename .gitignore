@@ -17,6 +17,7 @@ logs/
 # Docker & runtime artifacts
 *.log
 *.mp3
+logs_since_*.json
 sounds/
 tests/live_test_file.mp3
 

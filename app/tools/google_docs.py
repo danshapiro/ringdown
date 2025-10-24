@@ -11,6 +11,7 @@ Required env vars (same as Gmail):
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import re
@@ -19,6 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2 import service_account
 
 from ..tool_framework import register_tool
@@ -177,6 +179,11 @@ def _extract_doc_id(doc_input: str) -> str:
     raise ValueError(f"Could not extract document ID from: {doc_input}")
 
 
+def _escape_drive_query_term(term: str) -> str:
+    """Escape characters for inclusion in Drive query strings."""
+    return term.replace("\\", "\\\\").replace("'", "\\'")
+
+
 def _is_document_in_default_folder(doc_id: str) -> bool:
     """Check if a document is in the agent's default folder.
     
@@ -232,14 +239,14 @@ def _is_document_in_default_folder(doc_id: str) -> bool:
 
 class CreateDocArgs(BaseModel):
     title: str = Field(..., description="Document title")
-    content: str = Field("", description="Initial document content")
+    content: str = Field("", description="Document content formatted nicely in markdown")
     
 
 
 
 @register_tool(
     name="CreateGoogleDoc",
-    description="Create a new Google Doc with optional initial content",
+    description="Create a new Google Doc from markdown content",
     param_model=CreateDocArgs,
     async_execution=True,  # Changed back to async
     category="output",
@@ -282,34 +289,40 @@ def create_google_doc(args: CreateDocArgs) -> Dict[str, Any]:
                 "error": "Unable to resolve an allowed folder for document creation"
             }
 
-        # Create the document
-        doc = docs_service.documents().create(body={"title": args.title}).execute()
-        doc_id = doc["documentId"]
-        logger.info("Created document '%s' with ID: %s", args.title, doc_id)
+        markdown_content = args.content or ""
 
-        # Add initial content if provided
-        if args.content:
-            requests = [{
-                "insertText": {
-                    "location": {"index": 1},
-                    "text": args.content,
-                }
-            }]
-            docs_service.documents().batchUpdate(
-                documentId=doc_id,
-                body={"requests": requests},
+        if markdown_content:
+            file_metadata = {
+                "name": args.title,
+                "mimeType": "application/vnd.google-apps.document",
+                "parents": [target_folder_id],
+            }
+            media = MediaIoBaseUpload(
+                io.BytesIO(markdown_content.encode("utf-8")),
+                mimetype="text/markdown",
+                resumable=False,
+            )
+            created_file = drive_service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id, parents",
             ).execute()
+            doc_id = created_file["id"]
+            logger.info("Uploaded markdown document '%s' with ID: %s", args.title, doc_id)
+        else:
+            doc = docs_service.documents().create(body={"title": args.title}).execute()
+            doc_id = doc["documentId"]
+            logger.info("Created empty document '%s' with ID: %s", args.title, doc_id)
 
-        # Move document into the selected folder
-        file_meta = drive_service.files().get(fileId=doc_id, fields="parents").execute()
-        prev_parents = ",".join(file_meta.get("parents", []))
-        drive_service.files().update(
-            fileId=doc_id,
-            addParents=target_folder_id,
-            removeParents=prev_parents if prev_parents else None,
-            fields="id, parents",
-        ).execute()
-        logger.info("Moved document '%s' to folder '%s'", doc_id, target_folder_name)
+            file_meta = drive_service.files().get(fileId=doc_id, fields="parents").execute()
+            prev_parents = ",".join(file_meta.get("parents", []))
+            drive_service.files().update(
+                fileId=doc_id,
+                addParents=target_folder_id,
+                removeParents=prev_parents if prev_parents else None,
+                fields="id, parents",
+            ).execute()
+            logger.info("Moved empty document '%s' to folder '%s'", doc_id, target_folder_name)
 
         return {
             "success": True,
@@ -323,6 +336,83 @@ def create_google_doc(args: CreateDocArgs) -> Dict[str, Any]:
         return {
             "success": False,
             "error": str(e)
+        }
+
+
+class SearchDriveArgs(BaseModel):
+    query: str = Field(..., description="Text to match when searching Google Drive. Use defaults unless specified otherwise.")
+    titles_only: bool = Field(True, description="Default true to only search file titles; false searches titles and content")
+    docs_only: bool = Field(True, description="Default true to restrict results to Google Docs files; false includes sheets, pdfs, etc.")
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("Search query cannot be empty.")
+        return trimmed
+
+
+@register_tool(
+    name="SearchGoogleDrive",
+    description="Search Google Drive by title or content",
+    param_model=SearchDriveArgs,
+)
+def search_google_drive(args: SearchDriveArgs) -> Dict[str, Any]:
+    """Search Google Drive and return matching file names and IDs."""
+    try:
+        _, drive_service = _get_services()
+
+        escaped_term = _escape_drive_query_term(args.query)
+
+        if args.titles_only:
+            search_clause = f"name contains '{escaped_term}'"
+        else:
+            search_clause = f"(name contains '{escaped_term}' or fullText contains '{escaped_term}')"
+
+        query_parts = ["trashed=false", search_clause]
+
+        if args.docs_only:
+            query_parts.insert(1, "mimeType='application/vnd.google-apps.document'")
+
+        query = " and ".join(query_parts)
+
+        results: List[Dict[str, str]] = []
+        page_token: Optional[str] = None
+
+        while True:
+            response = drive_service.files().list(
+                q=query,
+                spaces="drive",
+                fields="nextPageToken, files(id, name)",
+                pageToken=page_token,
+                pageSize=100,
+            ).execute()
+
+            for file in response.get("files", []):
+                results.append({
+                    "id": file.get("id", ""),
+                    "name": file.get("name", ""),
+                })
+
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+        return {
+            "success": True,
+            "results": results,
+            "count": len(results),
+            "query": args.query,
+            "titles_only": args.titles_only,
+            "docs_only": args.docs_only,
+        }
+
+    except Exception as exc:
+        logger.error(f"Failed to search Google Drive: {exc}")
+        return {
+            "success": False,
+            "error": str(exc)
         }
 
 
@@ -454,70 +544,3 @@ def append_google_doc(args: AppendDocArgs) -> Dict[str, Any]:
         }
 
 
-class ListDocsArgs(BaseModel):
-    folder_name: Optional[str] = Field(None, description="Folder to list documents from")
-    max_results: int = Field(10, ge=1, le=50, description="Maximum number of results")
-    
-    @field_validator("folder_name")
-    @classmethod
-    def validate_folder(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and not _is_folder_allowed(v):
-            allowed = _get_allowed_folders()
-            allowed_str = ", ".join(f"'{p}'" for p in allowed)
-            raise ValueError(
-                f"Folder '{v}' not in greenlist. Allowed: {allowed_str}"
-            )
-        return v
-
-
-@register_tool(
-    name="ListGoogleDocs",
-    description="List Google Docs from Drive, optionally filtered by folder",
-    param_model=ListDocsArgs
-)
-def list_google_docs(args: ListDocsArgs) -> Dict[str, Any]:
-    """List documents from Google Drive."""
-    try:
-        _, drive_service = _get_services()
-        
-        # Build query
-        query_parts = ["mimeType='application/vnd.google-apps.document'", "trashed=false"]
-        
-        if args.folder_name:
-            folder_id = _find_or_create_folder(args.folder_name, drive_service=drive_service)
-            query_parts.append(f"'{folder_id}' in parents")
-        
-        query = " and ".join(query_parts)
-        
-        # List documents
-        results = drive_service.files().list(
-            q=query,
-            spaces='drive',
-            fields='files(id, name, createdTime, modifiedTime)',
-            pageSize=args.max_results,
-            orderBy='modifiedTime desc'
-        ).execute()
-        
-        documents = []
-        for file in results.get('files', []):
-            documents.append({
-                "id": file['id'],
-                "title": file['name'],
-                "created": file.get('createdTime', ''),
-                "modified": file.get('modifiedTime', ''),
-                "url": f"https://docs.google.com/document/d/{file['id']}/edit"
-            })
-        
-        return {
-            "success": True,
-            "documents": documents,
-            "count": len(documents),
-            "folder": args.folder_name
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to list documents: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        } 

@@ -52,21 +52,15 @@ from live_test_call import (
 PROMPTS: List[str] = [
     # Change model (must be first)
     "Switch your model to gpt five mini.",
-    # Google Docs - create a document
-    "Create a new Google Doc titled 'Integration Test Document' and write 'Hello from the automated integration test!' inside.",
-    # Tavily search
     "Search the web for the latest news about OpenAI's research breakthroughs and summarize the key points in a single sentence.",
-    # Send email
-    "Send an email to 'dan at dan shapiro dot com' with the subject 'Test'. The body is the openai research summary.",
-    # Calendar event
+    "Create a new Google Doc titled 'Integration Test Document' and write 'Hello from the automated integration test!' inside.",
+    "Search for a document with the word parsnip in the title.",
+    "Read the document to find out dan's alternate email and tell me what it is."
+    "Send the sentence about OpenAI's research breakthroughs, nicely formatted, to dan's alternate email address, subject 'integration test'.",
     "Add a calendar event titled 'Ringdown Integration Test' tomorrow at noon lasting 30 minutes.",
-    # Delete the calendar event
     "Delete the calendar event you just scheduled.",
-    # Reset memory so the next test run starts fresh
     "Reset your conversation memory now.",
-    # Memory check question - should fail if memory was truly reset
-    "What is the subject of the email we created earlier in this call?",
-    # Request the assistant to terminate the call
+    "What is Dan's alternate email?",
     "Hang up this call.",
 ]
 
