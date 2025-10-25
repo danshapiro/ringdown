@@ -27,6 +27,26 @@ def test_log_turn_persists_id(tmp_path, monkeypatch):
         assert row is not None
         assert row.id is not None and row.id > 0
         assert row.text == "hello world"
+        assert row.source is None
+
+
+def test_log_turn_records_source(tmp_path, monkeypatch):
+    """log_turn should persist the provided source label."""
+
+    from sqlmodel import SQLModel, create_engine, Session, select
+
+    engine = create_engine("sqlite:///:memory:")
+    SQLModel.metadata.create_all(engine)
+
+    monkeypatch.setattr(memory, "engine", engine)
+    monkeypatch.setattr(memory, "Session", Session)
+
+    memory.log_turn("user", "hello world", source="android-realtime")
+
+    with Session(engine) as sess:
+        row = sess.exec(select(memory.Turn).order_by(memory.Turn.id.desc())).first()
+        assert row is not None
+        assert row.source == "android-realtime"
 
 
 def test_execute_tool_invalid_args_raises():

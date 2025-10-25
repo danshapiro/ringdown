@@ -1,99 +1,197 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
+from pathlib import Path
+from typing import Iterator
 
 import pytest
+import yaml
+from fastapi.testclient import TestClient
 
-import app.api.mobile as mobile_api
-from app.api.mobile import MobileVoiceSession
-
-
-class _StubTrack:
-    def __init__(self) -> None:
-        self.frames = []
-        self.closed = False
-
-    def enqueue(self, frame) -> None:
-        self.frames.append(frame)
-
-    def close(self) -> None:
-        self.closed = True
+from app import settings
+from app.main import app
+import app.api.mobile as mobile
 
 
-@pytest.fixture(autouse=True)
-def _stub_openai_client(monkeypatch):
-    class _Transcriptions:
-        def create(self, *args, **kwargs):
-            raise AssertionError("Unexpected transcription call")
+@pytest.fixture
+def isolated_mobile_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    project_root = Path(__file__).resolve().parents[1]
+    source_config = project_root / "config.example.yaml"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
 
-    dummy_client = SimpleNamespace(audio=SimpleNamespace(transcriptions=_Transcriptions()))
-    monkeypatch.setattr(mobile_api, "_get_openai_client", lambda: dummy_client)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    devices = data.setdefault("mobile_devices", {})
+    devices["device-123"] = {
+        "label": "Pixel 9",
+        "agent": "unknown-caller",
+        "enabled": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setenv("RINGDOWN_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    settings.refresh_config_cache()
+    try:
+        yield config_path
+    finally:
+        settings.refresh_config_cache()
+
+
+def _fake_secret() -> SimpleNamespace:
+    return SimpleNamespace(
+        value="test-secret",
+        expires_at=int(datetime.now(timezone.utc).timestamp()) + 600,
+    )
+
+
+def test_voice_session_success(isolated_mobile_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_mint(session_payload, *, expires_after_seconds):  # type: ignore[no-untyped-def]
+        assert session_payload["model"] == "gpt-4o-realtime-preview-2024-12-17"
+        assert expires_after_seconds == 600
+        return _fake_secret()
+
+    monkeypatch.setattr("app.api.mobile._mint_realtime_client_secret", fake_mint)
+
+    client = TestClient(app)
+    response = client.post("/v1/mobile/voice/session", json={"deviceId": "device-123"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["clientSecret"] == "test-secret"
+    assert body["agent"] == "unknown-caller"
+    assert body["model"] == "gpt-4o-realtime-preview-2024-12-17"
+    assert body["transcriptsChannel"] == "ringdown-transcripts"
+    assert body["controlChannel"] == "ringdown-control"
+    assert body["turnDetection"]["type"] == "server_vad"
+
+
+def test_voice_session_requires_enabled_device(
+    isolated_mobile_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = yaml.safe_load(isolated_mobile_config.read_text(encoding="utf-8")) or {}
+    data["mobile_devices"]["device-123"]["enabled"] = False
+    isolated_mobile_config.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    settings.refresh_config_cache()
+
+    async def fail_mint(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("Should not mint secret for disabled device")
+
+    monkeypatch.setattr("app.api.mobile._mint_realtime_client_secret", fail_mint)
+
+    client = TestClient(app)
+    response = client.post("/v1/mobile/voice/session", json={"deviceId": "device-123"})
+
+    assert response.status_code == 403
+
+
+def test_voice_session_agent_mismatch(isolated_mobile_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fail_mint(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("Should not mint secret when agent mismatched")
+
+    monkeypatch.setattr("app.api.mobile._mint_realtime_client_secret", fail_mint)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/mobile/voice/session",
+        json={"deviceId": "device-123", "agent": "ringdown-demo"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_voice_session_unknown_device(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    source_config = project_root / "config.example.yaml"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
+
+    monkeypatch.setenv("RINGDOWN_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    settings.refresh_config_cache()
+
+    async def fail_mint(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("Should not mint secret for unknown device")
+
+    monkeypatch.setattr("app.api.mobile._mint_realtime_client_secret", fail_mint)
+
+    client = TestClient(app)
+    response = client.post("/v1/mobile/voice/session", json={"deviceId": "missing-device"})
+
+    assert response.status_code == 404
+    settings.refresh_config_cache()
 
 
 @pytest.mark.asyncio
-async def test_voice_session_start_adds_greeting(monkeypatch):
-    track = _StubTrack()
-    session = MobileVoiceSession("device-1", {"agent": "unknown-caller"}, track)
+async def test_voice_session_streams_transcripts(
+    isolated_mobile_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class StubTrack:
+        def __init__(self) -> None:
+            self.closed = False
+            self.frames = []
 
-    captured: list[str] = []
+        def enqueue(self, frame) -> None:  # noqa: ANN001 - aiortc frame type
+            self.frames.append(frame)
 
-    async def fake_speak(self, text: str) -> None:
-        captured.append(text)
+        def close(self) -> None:
+            self.closed = True
 
-    monkeypatch.setattr(MobileVoiceSession, "_speak", fake_speak)
+    class StubChannel:
+        readyState = "open"
 
-    await session.start()
+        def __init__(self) -> None:
+            self.payloads: list[str] = []
 
-    assert captured, "Expected greeting to be spoken"
-    assert session.messages[-1]["role"] == "assistant"
-    assert session.messages[-1]["content"] == captured[-1]
+        def send(self, data: str) -> None:
+            self.payloads.append(data)
 
+    monkeypatch.setattr(mobile, "_get_openai_client", lambda: SimpleNamespace())
 
-@pytest.mark.asyncio
-async def test_generate_response_handles_tool_marker(monkeypatch):
-    track = _StubTrack()
-    session = MobileVoiceSession("device-2", {"agent": "unknown-caller"}, track)
+    device_cfg = settings.get_mobile_device("device-123")
+    assert device_cfg is not None
 
-    spoken: list[str] = []
+    track = StubTrack()
+    session = mobile.MobileVoiceSession("device-123", device_cfg, track)
 
-    async def fake_speak(self, text: str) -> None:
-        spoken.append(text)
+    channel = StubChannel()
+    session.attach_transcripts_channel(channel)
 
-    monkeypatch.setattr(MobileVoiceSession, "_speak", fake_speak)
+    logged: list[tuple[str, str, str | None]] = []
 
-    async def fake_stream(user_text, agent_cfg, messages):
-        yield {"type": "tool_executing"}
-        yield "All set."
+    def fake_log_turn(who: str, text: str, *, source: str | None = None) -> None:
+        logged.append((who, text, source))
 
-    monkeypatch.setattr(mobile_api, "stream_response", fake_stream)
+    async def immediate_to_thread(func, *args, **kwargs):  # type: ignore[no-untyped-def]
+        return func(*args, **kwargs)
 
-    result = await session._generate_response("status?")
+    async def fake_transcribe(pcm_bytes: bytes) -> str:
+        return "hello from android"
 
-    assert result == "All set."
-    assert "moment while I work on that" in spoken[0]
+    async def fake_generate_response(_text: str) -> str:
+        return ""
 
+    async def fake_speak(_text: str) -> None:
+        return None
 
-@pytest.mark.asyncio
-async def test_process_chunk_updates_conversation(monkeypatch):
-    track = _StubTrack()
-    session = MobileVoiceSession("device-3", {"agent": "unknown-caller"}, track)
+    monkeypatch.setattr(mobile, "log_turn", fake_log_turn)
+    monkeypatch.setattr(mobile.asyncio, "to_thread", immediate_to_thread, raising=False)
+    monkeypatch.setattr(session, "_transcribe", fake_transcribe)
+    monkeypatch.setattr(session, "_generate_response", fake_generate_response)
+    monkeypatch.setattr(session, "_speak", fake_speak)
 
-    async def fake_transcribe(self, pcm_bytes: bytes) -> str:
-        return "hello bot"
+    pcm = b"\x01\x00" * (session._min_samples)  # type: ignore[attr-defined]
+    await session._process_chunk(pcm)  # type: ignore[attr-defined]
 
-    async def fake_generate(self, user_text: str) -> str:
-        assert user_text == "hello bot"
-        return "greetings human"
-
-    async def fake_speak(self, text: str) -> None:
-        track.enqueue(text)
-
-    monkeypatch.setattr(MobileVoiceSession, "_transcribe", fake_transcribe)
-    monkeypatch.setattr(MobileVoiceSession, "_generate_response", fake_generate)
-    monkeypatch.setattr(MobileVoiceSession, "_speak", fake_speak)
-
-    pcm_bytes = b"\x01\x00" * (session._min_samples + 10)
-
-    await session._process_chunk(pcm_bytes)
-
-    assert session.messages[-2]["content"] == "hello bot"
-    assert session.messages[-1]["content"] == "greetings human"
-    assert track.frames[-1] == "greetings human"
+    assert logged == [("user", "hello from android", "android-realtime")]
+    assert channel.payloads, "expected transcript payload to be sent"
+    payload = json.loads(channel.payloads[-1])
+    assert payload["type"] == "transcript"
+    assert payload["speaker"] == "user"
+    assert payload["source"] == "android-realtime"
+    assert payload["text"] == "hello from android"
+    assert payload["final"] is True

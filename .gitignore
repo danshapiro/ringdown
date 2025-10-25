@@ -59,3 +59,5 @@ android/.android-sdk-win/
 android/.jdk-win/
 android/app/tmp-apk/
 android/app/tmp_apk/
+android/.gradle/
+*.zip

@@ -1,3 +1,4 @@
+import copy
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -233,6 +234,16 @@ def get_mobile_device(device_id: str) -> Dict[str, Any] | None:
 
     devices = get_mobile_devices()
     return devices.get(device_id)
+
+
+def get_mobile_realtime_config() -> Dict[str, Any]:
+    """Return realtime session defaults for Android clients."""
+
+    cfg = _load_config()
+    realtime = cfg.get("mobile_realtime")
+    if not realtime:
+        raise ValueError("mobile_realtime missing in config.yaml")
+    return copy.deepcopy(realtime)
 
 
 def get_calendar_user_name() -> str:

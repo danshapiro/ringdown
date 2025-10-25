@@ -3,6 +3,7 @@ from pathlib import Path
 
 import logging
 
+from sqlalchemy.exc import OperationalError
 from sqlmodel import SQLModel, create_engine, Field, Session
 import json
 
@@ -25,13 +26,41 @@ class Turn(SQLModel, table=True):
     ts: datetime = Field(default_factory=datetime.utcnow)
     who: str = Field(index=True)  # "user" | "bot"
     text: str
+    source: str | None = Field(default=None, index=True)
 
 
-def log_turn(who: str, text: str) -> None:
+_TURN_SOURCE_COLUMN_READY = False
+
+
+def _ensure_turn_source_column() -> None:
+    """Ensure the ``turn`` table has a ``source`` column (adds it lazily)."""
+
+    global _TURN_SOURCE_COLUMN_READY
+    if _TURN_SOURCE_COLUMN_READY:
+        return
+
+    table_name = Turn.__tablename__ or "turn"
+
+    with engine.connect() as connection:  # type: ignore[no-redef]
+        result = connection.exec_driver_sql(f"PRAGMA table_info({table_name})")
+        columns = {row[1] for row in result.fetchall()}
+        if "source" not in columns:
+            try:
+                connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN source TEXT")
+            except OperationalError as exc:  # pragma: no cover - defensive
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+
+    _TURN_SOURCE_COLUMN_READY = True
+
+
+def log_turn(who: str, text: str, *, source: str | None = None) -> None:
     """Persist a single conversational turn."""
 
+    _ensure_turn_source_column()
+
     with Session(engine) as sess:
-        turn = Turn(who=who, text=text)
+        turn = Turn(who=who, text=text, source=source)
         sess.add(turn)
         sess.commit()
 

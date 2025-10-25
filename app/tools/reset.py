@@ -95,29 +95,23 @@ def reset_conversation(args: ResetArgs) -> dict[str, str]:
 
         config = _settings._load_config()
         defaults = config.get("defaults", {})
-        greeting_raw = str(defaults.get("welcome_greeting", "Hello."))
 
         for agent_name in config.get("agents", {}):
             candidate = _settings.get_agent_config(agent_name)
             candidate_tools = {str(t).lower() for t in candidate.get("tools", [])}
             if "reset" in candidate_tools:
                 agent_cfg = candidate
-                greeting_raw = str(candidate.get("welcome_greeting", greeting_raw))
                 break
         else:
             agent_cfg = defaults
-        greeting = greeting_raw.strip().rstrip(".")
-        return {
-            "action": "reset_conversation",
-            "message": f"Reset. {greeting}",
-            "status": "Conversation has been reset to the starting state.",
-        }
 
-    greeting_raw = str(agent_cfg.get("welcome_greeting", "Hello.")).strip()
-    greeting = greeting_raw.rstrip(".")
+    # Reset markers are consumed by the websocket layer which now expects a
+    # single-word acknowledgement so the live regression harness can match it
+    # reliably. Any follow-up greeting is sent separately by the chat loop.
+    reset_marker = "resetting"
 
     return {
         "action": "reset_conversation",
-        "message": f"Reset. {greeting}",
+        "message": reset_marker,
         "status": "Conversation has been reset to the starting state."
     }

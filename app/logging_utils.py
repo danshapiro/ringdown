@@ -214,7 +214,7 @@ def setup_logging(logger: logging.Logger | None = None) -> logging.Logger:
             )
             file_handler.setFormatter(file_formatter)
 
-            console_handler = logging.StreamHandler()
+            console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setLevel(logging.INFO)
             console_formatter = logging.Formatter("%(message)s")
             console_handler.setFormatter(console_formatter)

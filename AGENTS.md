@@ -40,6 +40,7 @@ Instead of performing these actions, only recommend them, and have the user conf
 - **Voice smoke test:** once a device/emulator shows up in `adb devices`, run `bash android/scripts/run-voice-smoke.sh --backend $BACKEND_URL`. The script wraps `connectedDebugAndroidTest` and expects the same `ANDROID_SERIAL` that `mobile-mcp` uses.
 - **Instrumentation toggles:** to force the fake transport during tests set `DebugFeatureFlags.overrideVoiceTransportStub(true)`—handled automatically by the existing `VoiceMvpSuite`; no manual changes needed when running the suite.
 - **Mobile MCP deploy:** `bash android/scripts/install.sh --device $ANDROID_SERIAL` deploys the latest debug APK; ensure `uv run pytest tests` is clean before pushing to devices.
+- Connected suite: `./gradlew.bat :app:connectedVoiceMvpAndroidTest` (JDK/SDK paths set). Keep the resulting debug APK installed for manual QA.
 
 ### Deployment (Cloud Run)
 - From the repo root, activate the matching virtual environment (`.venv` on PowerShell/CMD, `.venv-wsl` on bash).
@@ -47,6 +48,12 @@ Instead of performing these actions, only recommend them, and have the user conf
 - Run `python cloudrun-deploy.py` and wait for it to finish; it builds the image, updates secrets, and redeploys the service.
 - The deploy script can exceed the default 2‑minute timeout in the Codex harness—if it gets killed mid-run, rerun it from a local shell outside the harness or split the workflow into smaller steps.
 - Always run ``live_test_all_functions.py`` after every deploy to confirm things work.
+
+### Deployment (Handset)
+- Export `JAVA_HOME=D:/Users/Dan/GoogleDrivePersonal/code/ringdown/android/.jdk` before Gradle calls.
+- Build + instrumented tests: `cd android && ./gradlew.bat :app:connectedVoiceMvpAndroidTest`.
+- Keep the debug APK installed for manual QA: `adb -s <serial> install -r app/build/outputs/apk/debug/app-debug.apk`.
+- Mobile MCP deploy shortcut: `mobile://adb/install?serial=<serial>&path=android/app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Helpful tools
 - `gh` for github work including CI status

@@ -270,6 +270,9 @@ def retrieve_cloudrun_logs(
                 parts.append(f'resource.labels.service_name="{service_name}"')
             if include_service and region:
                 parts.append(f'resource.labels.location="{region}"')
+            stdout_log = f'projects/{project_id}/logs/run.googleapis.com%2Fstdout'
+            stderr_log = f'projects/{project_id}/logs/run.googleapis.com%2Fstderr'
+            parts.append(f'(logName="{stdout_log}" OR logName="{stderr_log}")')
             return " AND ".join(parts)
 
         attempt_specs = [

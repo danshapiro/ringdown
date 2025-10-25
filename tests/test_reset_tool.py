@@ -23,7 +23,7 @@ class TestResetTool:
 
         assert isinstance(result, dict), "Reset tool should return a dict"
         assert result["action"] == "reset_conversation", "Should return reset action"
-        assert result["message"].startswith("Reset."), "Should return reset marker"
+        assert result["message"] == "resetting", "Should return reset marker"
         assert "status" in result, "Should include status message"
 
     def test_reset_tool_in_ringdown_demo_config(self):
@@ -76,7 +76,7 @@ class TestResetTool:
         
         # Verify specific values
         assert result["action"] == "reset_conversation"
-        assert result["message"].startswith("Reset.")
+        assert result["message"] == "resetting"
         assert isinstance(result["status"], str) and len(result["status"]) > 0
 
     # Removed detailed text checks – prompt wording may evolve.
@@ -109,7 +109,7 @@ class TestResetTool:
         # Mock litellm.acompletion to simulate reset tool call
         mock_response = AsyncMock()
         mock_chunks = [
-            MagicMock(choices=[MagicMock(delta={"content": "Resetting..."}, finish_reason=None)]),
+            MagicMock(choices=[MagicMock(delta={"content": "resetting..."}, finish_reason=None)]),
             MagicMock(choices=[MagicMock(delta={
                 "tool_calls": [{
                     "index": 0,
@@ -138,8 +138,8 @@ class TestResetTool:
         # Check for reset marker
         reset_markers = [t for t in collected_output if isinstance(t, dict) and t.get("type") == "reset_conversation"]
         assert len(reset_markers) == 1, "Should yield exactly one reset_conversation marker"
-        assert reset_markers[0]["message"] == "Reset. Welcome back", "Reset marker should contain the message"
+        assert reset_markers[0]["message"] == "resetting", "Reset marker should contain the message"
         
         # The reset message should NOT be yielded as separate text (it's sent by WebSocket handler)
         text_tokens = [t for t in collected_output if isinstance(t, str)]
-        assert "Reset. Welcome back" not in text_tokens, "Reset message should not be yielded as text - WebSocket handler sends it"
+        assert "resetting" not in text_tokens, "Reset message should not be yielded as text - WebSocket handler sends it"

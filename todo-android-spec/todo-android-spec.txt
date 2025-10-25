@@ -1,5 +1,5 @@
 Ringdown Android Client UX Specification
-Date: 2025-10-18
+Date: 2025-10-25
 
 1. Purpose
 - Deliver a personal, data-only Android interface for the existing Ringdown backend.
@@ -8,7 +8,7 @@ Date: 2025-10-18
 
 2. Core Assumptions
 - Single trusted user per phone and per bot, with only a handful of users total, but multiple preconfigured personas exist in backend config (mirrors caller-ID agents today).
-- The Android client talks directly to the current FastAPI backend (Twilio ConversationRelay-compatible websocket and HTTP endpoints) with no additional middle tier.
+- The Android client keeps using the existing FastAPI backend for conversation state, agent selection, and tool invocation, but voice capture/playback tunnels through a new OpenAI Realtime WebRTC session that is federated by that backend.
 - Credentials are baked into the app build; no login or user-managed auth inside the UI.
 - Bluetooth audio accessories are commonly in use; the user may be driving and unable to interact with the screen once a session starts.
 
@@ -50,19 +50,26 @@ Date: 2025-10-18
 7. Voice Session Experience
 → See mockups: mockup-3-voice-active.html (active session), mockup-4-voice-reconnecting.html (reconnecting state), mockup-8-background-notification.html (backgrounded)
 
-- Entry: Upon successful permissions and registration, the app auto-connects to the backend call websocket using the device's mapped agent. No user confirmation.
-- Screen: The voice UI displays only a large, circular, Hang Up button centered vertically and horizontally that takes up 50% of the screen width.
-- Audio routing: Immediately request Bluetooth SCO routing and stay locked to it while available. If Bluetooth disconnects, fall back to device speakerphone. No manual route picker in UI.
-- Backgrounding: If the user locks the device, switches apps, or the UI otherwise loses foreground focus, keep the voice session active. Show a persistent system notification (ongoing call category) with:
-  - Title indicating active connection (e.g., Danbot call in progress).
-  - Single action Hang Up, which terminates the session and returns the state to the idle main screen when the user reopens the app.
-- Unexpected disconnects (network, backend error):
-  - Immediately play the local reconnecting audio clip on a loop with a delay between repeats. Cancel it when it is reconnected.
-  - Surface a short banner at the bottom with the best possible user-facing explanation for the hangup (e.g., Network unavailable, AI timeout).
-  - The app initiates up to 1 minute of reconnect attempts with a backoff suited for real-time use (e.g., 3–5 seconds); no user intervention required.
-  - The Hang Up button remains available to abort the loop. When pressed, retries stop and the app returns to the idle main screen.
-- Successful reconnect after a failure removes banners and resumes normal audio.
-- **Implementation note:** All voice session screens must match mockup visual details (button proportions, banner placement, notification copy) unless explicitly deferred in a later phase. Honor any motion cues in the references (e.g., reconnect banner slide-up, hang-up button press feedback) and log gaps when specs are missing.
+- Transport handshake (OpenAI Realtime):
+  - Immediately after permissions and registration succeed, call the backend `POST /mobile/voice/session` endpoint to exchange the device + agent id for a short-lived OpenAI client secret. The backend mints this secret with `POST /v1/realtime/client_secrets`, wiring in the configured realtime model/voice and returning the secret plus any server-vad tuning parameters the client should apply.
+  - Create a single `RTCPeerConnection` with microphone audio track and gather ICE candidates (note: TURN remains optional but must be supported). Use `pc.createOffer()` and send the SDP offer to `https://api.openai.com/v1/realtime?model=<default realtime model>` with the `Authorization: Bearer <client_secret>` header and `Content-Type: application/sdp`. Apply the remote description from the response, add the provided remote audio track, and open two negotiated data channels: `ringdown-transcripts` (ordered, reliable) for JSON events and `ringdown-control` (unordered) for application metrics and keep-alives.
+  - Once `pc.setRemoteDescription` resolves, transmit a `session.update` message enabling `server_vad` with the backend-provided thresholds and setting `response.mode = "manual"` so OpenAI Realtime handles turn detection but never pushes audio until the client explicitly asks.
+- Conversation bridging and timing:
+  - The existing Ringdown conversation websocket remains authoritative. Partial realtime transcripts update on-screen captions only; the final transcript payload from Realtime is forwarded to the backend as the user turn (schema identical to telephony path, speaker=`user`, source=`android-realtime`). The backend therefore continues to run the exact same LLM and tool orchestration code.
+  - When the backend streams back assistant text, enqueue it into the Realtime session with `conversation.item.create` (role=`assistant`, metadata linking the backend message id) and immediately issue `response.create` with `modalities=["audio"]`, `instructions=<assistant text>`, and the preferred voice. This yields synthesized speech that matches the backend-produced content while keeping the chat transcript identical across transports.
+  - Track the `session.expiration` timestamp surfaced on the control channel. Any call exceeding 25 minutes should refresh by looping through the handshake above before expiration so drives or long conversations remain seamless.
+- Model and voice selection:
+  - Default to `gpt-4o-mini-realtime-preview` for production traffic (audio input tokens $10/M, audio output tokens $20/M, cached audio/text $0.30/M) to keep cost low while retaining flexibility to switch to `gpt-realtime` ($32/M audio input, $64/M audio output, cached input $0.40/M) for higher fidelity sessions. Both models share the same WebRTC handshake.
+  - Surface the realtime model + voice mapping in backend config (`config.yaml` agent entries) so switching providers or voices only requires a config change; the Android client simply consumes what the backend returns in the session token payload.
+- Screen: The voice UI still presents a single large Hang Up button centered vertically and horizontally occupying 50% of screen width; no additional chrome.
+- Audio routing: Request Bluetooth SCO routing as soon as the peer connection becomes active and hold it while available. If Bluetooth drops, fall back to speakerphone automatically. No manual route picker.
+- Backgrounding: If the app loses foreground focus, leave the Realtime connection active, keep the microphone + remote tracks alive, and persist an ongoing-call notification with only a Hang Up action. When the user taps Hang Up in the notification, tear down the peer connection, notify the backend to end the conversation turn, and return to the idle main screen.
+- Unexpected disconnects (network, backend error, Realtime session expiry):
+  - Immediately play the local reconnecting audio loop and surface the reconnect banner with contextual copy (backend-provided reason if available).
+  - Kick off an automatic reconnect loop (up to 1 minute) that requests a fresh client secret on every attempt before rebuilding the peer connection. Backoff 3–5 seconds between attempts to avoid hammering the backend or OpenAI edge.
+  - The Hang Up button remains available at all times. When pressed, cancel any in-flight reconnect, close the peer connection, and return to idle.
+  - On successful reconnect, stop the local loop audio, clear banners, and resume normal audio playback where the conversation left off.
+- **Implementation note:** Maintain parity with mockup visuals (button dimensions, banner placement, notification copy). Log and track any deviations, especially around motion cues (reconnect banner animation, hang up press feedback), and record all session + handshake errors to the existing telemetry sink for backend tuning.
 
 8. Mode Switching Between Voice and Chat
 - Hang Up button (during active call) ends the current session and transitions to the idle main screen.
@@ -154,25 +161,25 @@ Phase 2 – Backend Integration & Permission Handling
 - After resolving AAPT2, immediately run `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest` followed by `bash android/scripts/gradle.sh ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.ringdown.registration.RegistrationSuite`.
 - Deploy to USB device with `bash android/scripts/install.sh --device $ANDROID_SERIAL` (Codex CLI sets serial). Deliverable: device auto-registers and transitions to idle when backend approval flips.
 
-Phase 3 - Voice Session MVP (Fast Track)
-- Implement a WebRTC voice client that connects to an `aiortc` peer hosted inside the FastAPI service; reuse the existing WebSocket channel purely for signaling. Compose Hang Up UI, audio routing via `AudioManager` + Bluetooth SCO utilities, and start ForegroundService with persistent notification.
-- Define a thin VoiceTransport interface (connect, sendAudioFrame, receiveAudioFrame, teardown) so the WebRTC stack can be swapped for LiveKit/Daily or a future transport without touching UI/domain layers.
-- Add CLI automation for live call smoke test: `bash android/scripts/run-voice-smoke.sh --backend $BACKEND_URL` (script launches instrumentation that connects, streams dummy audio, asserts hang-up path).
-- Run `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:connectedVoiceMvpAndroidTest`. Deliverable: first end-to-end voice call from emulator and USB device using only scripted commands.
+Phase 3 - Realtime Voice MVP (Fast Track)
+- Implement the Android Realtime voice client: fetch the OpenAI client secret from backend, build the WebRTC peer connection (audio track + transcripts/control data channels), enable manual-response mode, and plumb server-vad parameters into the Compose layer for captions. Compose Hang Up UI, Bluetooth routing, and ForegroundService notification exactly as in Section 7.
+- Extend the FastAPI backend with `/v1/mobile/voice/session` (mint client secrets, emit server-vad thresholds, enforce agent/device mapping) and update the existing conversation websocket to tag android-realtime turns while reusing the same LLM + tool orchestration.
+- Add CLI automation for live call smoke test: `bash android/scripts/run-voice-smoke.sh --backend $BACKEND_URL` should mint a secret, negotiate with OpenAI Realtime, speak a canned backend response, and assert hang-up + reconnect behaviour.
+- Run `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:connectedVoiceMvpAndroidTest`. Deliverable: first end-to-end realtime voice call from emulator and USB device using only scripted commands.
 - Configure the Android `.env` to point at the production HTTPS backend (the service is live). Loops at `127.0.0.1` or any other cleartext URL are not acceptable—Phase 3 validation requires hitting the real backend over TLS so the voice flow mirrors production.
-- Ensure backend prerequisites are in place before client testing: deploy the FastAPI WebRTC transport (`app/api/mobile.py`), `/v1/mobile/devices/register`, and `ws/mobile/voice` signaling with working OpenAI transcription (`VOICE_TRANSCRIPTION_MODEL`) and TTS (`VOICE_TTS_MODEL`).
+- Ensure backend prerequisites are in place before client testing: `/v1/mobile/devices/register`, conversation websocket, and the new `/v1/mobile/voice/session` endpoint must be deployed with configured realtime model/voice slots.
 - After each new device registers, mirror the updated `config.yaml` to `gs://<project>-test-assets/config/pending/config.yaml` so the approval helper has fresh input. The backend (or automation hook) should remove that pending object once `authorize_new_phone.py` promotes it.
 - Confirm the backend reloads config changes produced by `authorize_new_phone.py` (watch the `config/live/config.yaml` object or redeploy automatically) so newly enabled devices can connect without manual restarts.
 - Add admin helper `python authorize_new_phone.py` to streamline device approvals: the script resolves the repo root, downloads the pending config from `gs://<project>-test-assets/config/pending/config.yaml`, shows a unified diff against the local `config.yaml`, flips all `enabled: false` phone entries to `true`, writes a timestamped backup, promotes the approved config to `gs://<project>-test-assets/config/live/config.yaml`, and deletes the pending artifact once confirmed.
 - Ensure the end-to-end “promote pending phone” workflow (authorize script + backend job) runs as part of Phase 3 validation so device approvals remain deployable without manual YAML edits.
 - Outstanding (Phase 3 follow-up):
-  - [Completed 2025-10-20] WebRTC transport now streams live assistant audio end-to-end (microphone uplink with OpenAI transcription + aiortc downlink TTS); remaining follow-ups below carry forward.
-  - Wire the new WebRTC smoke script (`android/scripts/run-voice-smoke.sh`) into CI after ensuring emulator/device `adb` visibility; at present it must be run manually against a tethered device.
-  - Broaden instrumentation coverage to exercise the voice WebRTC path (connectedVoiceMvpAndroidTest) and verify audio frame exchange to guard regressions.
+  - Add automated coverage that toggles server-vad parameters and verifies transcripts still route through the backend without double responses.
+  - Wire the realtime smoke script (`android/scripts/run-voice-smoke.sh`) into CI after ensuring emulator/device `adb` visibility; at present it must be run manually against a tethered device.
+  - Broaden instrumentation coverage to exercise the realtime voice path (connectedVoiceMvpAndroidTest) and verify manual-response flow plus session refresh.
 
 Phase 4 – Reconnect Loop & Audio Asset Polish
 - Bundle reconnect audio asset under `android/app/app/src/main/res/raw/reconnect_loop.ogg`; script `bash android/scripts/convert-audio.sh assets/reconnect.mp3` handles conversion.
-- Implement reconnect backoff scheduler, banner messaging, and ensure notification removal on completion. Extend smoke test script to toggle network via `adb shell cmd connectivity airplane-mode enable/disable` within bash automation.
+- Implement reconnect backoff scheduler, banner messaging, and ensure notification removal on completion. Each reconnect attempt must request a fresh client secret, rebuild the peer connection, and resend the `session.update` manual-response settings before resuming audio. Extend smoke test script to toggle network via `adb shell cmd connectivity airplane-mode enable/disable` within bash automation.
 - Tests: `bash android/scripts/gradle.sh ./gradlew :app:testDebugUnitTest --tests "*Reconnect*" :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=ReconnectSuite`.
 - Outstanding (Phase 4 follow-up): wire the reconnect audio loop, banner messaging, and notification lifecycle once the transport is live so reconnect UX matches spec.
 

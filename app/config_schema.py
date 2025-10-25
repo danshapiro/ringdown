@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, Literal
 
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
@@ -138,6 +138,86 @@ class MobileDeviceConfig(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
+class MobileRealtimeTurnDetectionConfig(BaseModel):
+    """Turn detection parameters forwarded to the Realtime session."""
+
+    type: Literal["server_vad", "semantic_vad"]
+    threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    silence_duration_ms: Optional[int] = Field(default=None, ge=0, alias="silenceDurationMs")
+    idle_timeout_ms: Optional[int] = Field(default=None, ge=0, alias="idleTimeoutMs")
+    prefix_padding_ms: Optional[int] = Field(default=None, ge=0, alias="prefixPaddingMs")
+    create_response: Optional[bool] = Field(default=None, alias="createResponse")
+    interrupt_response: Optional[bool] = Field(default=None, alias="interruptResponse")
+    eagerness: Optional[Literal["low", "medium", "high", "auto"]] = None
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
+class MobileRealtimeAudioInputConfig(BaseModel):
+    """Input audio configuration forwarded to the Realtime session."""
+
+    format: Optional[str] = None
+    noise_reduction: Optional[Dict[str, Any]] = Field(default=None, alias="noiseReduction")
+    transcription: Optional[Dict[str, Any]] = None
+    turn_detection: Optional[MobileRealtimeTurnDetectionConfig] = Field(
+        default=None, alias="turnDetection"
+    )
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
+class MobileRealtimeAudioOutputConfig(BaseModel):
+    """Output audio preferences for the Realtime session."""
+
+    format: Optional[str] = None
+    voice: Optional[str] = None
+    speed: Optional[float] = Field(default=None, ge=0.25, le=1.5)
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
+class MobileRealtimeAudioConfig(BaseModel):
+    """Wrapper combining input/output audio configuration."""
+
+    input: Optional[MobileRealtimeAudioInputConfig] = None
+    output: Optional[MobileRealtimeAudioOutputConfig] = None
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
+class MobileRealtimeSessionConfig(BaseModel):
+    """Session template used when minting Realtime client secrets."""
+
+    model: str = Field(..., min_length=1)
+    instructions: Optional[str] = None
+    output_modalities: List[Literal["text", "audio"]] = Field(
+        default_factory=list, alias="outputModalities"
+    )
+    include: List[str] = Field(default_factory=list)
+    max_output_tokens: Optional[Union[int, Literal["inf"]]] = Field(
+        default=None, alias="maxOutputTokens"
+    )
+    audio: Optional[MobileRealtimeAudioConfig] = None
+    tool_choice: Optional[Dict[str, Any]] = Field(default=None, alias="toolChoice")
+    tools: Optional[Dict[str, Any]] = None
+    tracing: Optional[Dict[str, Any]] = None
+    truncation: Optional[Dict[str, Any]] = None
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
+class MobileRealtimeConfig(BaseModel):
+    """Top-level configuration for Android realtime voice sessions."""
+
+    session: MobileRealtimeSessionConfig
+    expires_after_seconds: int = Field(
+        600, ge=10, le=7200, alias="expiresAfterSeconds"
+    )
+    ice_servers: List[Dict[str, Any]] = Field(default_factory=list, alias="iceServers")
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
 class ConfigModel(BaseModel):
     """Complete Ringdown configuration schema."""
 
@@ -149,8 +229,9 @@ class ConfigModel(BaseModel):
     hints: str | None = None
     docs_folder_greenlist_defaults: List[str] = Field(default_factory=list)
     mobile_devices: Dict[str, MobileDeviceConfig] = Field(default_factory=dict, alias="mobileDevices")
+    mobile_realtime: MobileRealtimeConfig = Field(alias="mobileRealtime")
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @model_validator(mode="before")
     def _check_agents(cls, values: Dict[str, Any]) -> Dict[str, Any]:
