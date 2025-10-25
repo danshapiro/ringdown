@@ -14,6 +14,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import websockets
 from twilio.request_validator import RequestValidator
 
+from app.logging_utils import redact_sensitive_data
+
 
 @dataclass(slots=True)
 class SmokeConfig:
@@ -26,7 +28,7 @@ class SmokeConfig:
 
 def _json_log(level: str, message: str, **fields: Any) -> None:
     payload = {"severity": level.upper(), "message": message, **fields}
-    print(json.dumps(payload, ensure_ascii=True))
+    print(json.dumps(redact_sensitive_data(payload), ensure_ascii=True))
 
 
 def _compute_signature(full_url: str, params: dict[str, str], auth_token: str) -> str:
