@@ -1,20 +1,23 @@
 package com.ringdown.mobile
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
-import androidx.core.content.PermissionChecker
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import com.ringdown.mobile.ui.MainUiState
 import com.ringdown.mobile.ui.MainViewModel
 import com.ringdown.mobile.ui.RingdownApp
 import com.ringdown.mobile.ui.theme.RingdownTheme
@@ -24,57 +27,65 @@ import dagger.hilt.android.AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-
         setContent {
+            val viewModel: MainViewModel = hiltViewModel()
+            val uiState by viewModel.state.collectAsStateWithLifecycle()
             val context = LocalContext.current
-            val viewModel: MainViewModel = viewModel()
-            val state by viewModel.state.collectAsStateWithLifecycle()
 
+            val permissions = remember { requiredVoicePermissions() }
             val permissionLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestPermission(),
-            ) { granted ->
+                contract = ActivityResultContracts.RequestMultiplePermissions(),
+            ) { result ->
+                val granted = permissions.all { permission -> result[permission] == true }
                 viewModel.onPermissionResult(granted)
             }
 
             LaunchedEffect(Unit) {
-                val granted = isMicrophoneGranted()
+                val granted = permissions.all { permission ->
+                    ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+                }
                 viewModel.onPermissionResult(granted, fromUserAction = false)
             }
 
             RingdownTheme(useDarkTheme = isSystemInDarkTheme()) {
-                RingdownApp(
-                    state = state,
-                    onReconnect = {
-                        if (isMicrophoneGranted()) {
+                MainScreenContent(
+                    viewModel = viewModel,
+                    state = uiState,
+                    onRequestMicrophone = {
+                        val granted = permissions.all { permission ->
+                            ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+                        }
+                        if (granted) {
                             viewModel.onPermissionResult(true)
-                            Toast.makeText(
-                                context,
-                                "Voice session coming soon.",
-                                Toast.LENGTH_SHORT,
-                            ).show()
                         } else {
-                            permissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                            permissionLauncher.launch(permissions)
                         }
                     },
-                    onOpenChat = {
-                        Toast.makeText(
-                            context,
-                            "Chat mode coming soon.",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    },
-                    onCheckAgain = viewModel::onCheckAgainClicked,
-                    onErrorDismissed = viewModel::acknowledgeError,
                 )
             }
         }
     }
+}
 
-    private fun ComponentActivity.isMicrophoneGranted(): Boolean {
-        return ContextCompat.checkSelfPermission(
-            this,
-            android.Manifest.permission.RECORD_AUDIO,
-        ) == PermissionChecker.PERMISSION_GRANTED
+@Composable
+private fun MainScreenContent(
+    viewModel: MainViewModel,
+    state: MainUiState,
+    onRequestMicrophone: () -> Unit,
+) {
+    RingdownApp(
+        state = state,
+        onReconnect = onRequestMicrophone,
+        onOpenChat = { /* Chat flow to follow in ringdown-11 */ },
+        onCheckAgain = viewModel::onCheckAgainClicked,
+        onErrorDismissed = viewModel::acknowledgeError,
+    )
+}
+
+private fun requiredVoicePermissions(): Array<String> {
+    val required = mutableListOf(Manifest.permission.RECORD_AUDIO)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        required += Manifest.permission.BLUETOOTH_CONNECT
     }
+    return required.toTypedArray()
 }

@@ -10,6 +10,7 @@ import javax.inject.Qualifier
 import javax.inject.Singleton
 
 @Qualifier
+@Retention(AnnotationRetention.BINARY)
 annotation class IoDispatcher
 
 @Module
@@ -20,3 +21,4 @@ object DispatchersModule {
     @IoDispatcher
     fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
 }
+

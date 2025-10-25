@@ -108,12 +108,6 @@ private fun IdleContent(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            text = "Ringdown Android Preview",
-            style = MaterialTheme.typography.headlineMedium,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(modifier = Modifier.height(24.dp))
         Button(onClick = onReconnect) {
             Text(text = stringResource(id = R.string.reconnect_button))
         }
@@ -128,14 +122,6 @@ private fun IdleContent(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
                 textAlign = TextAlign.Center,
-            )
-        }
-        state.lastApprovedAgent?.let {
-            Spacer(modifier = Modifier.height(24.dp))
-            Text(
-                text = "Agent: $it",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
             )
         }
     }
