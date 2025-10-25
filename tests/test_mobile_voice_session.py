@@ -173,10 +173,12 @@ async def test_voice_session_streams_transcripts(
         return "hello from android"
 
     async def fake_generate_response(_text: str) -> str:
-        return ""
+        return "assistant reply"
 
-    async def fake_speak(_text: str) -> None:
-        return None
+    spoken: list[str] = []
+
+    async def fake_speak(text: str) -> None:
+        spoken.append(text)
 
     monkeypatch.setattr(mobile, "log_turn", fake_log_turn)
     monkeypatch.setattr(mobile.asyncio, "to_thread", immediate_to_thread, raising=False)
@@ -187,7 +189,10 @@ async def test_voice_session_streams_transcripts(
     pcm = b"\x01\x00" * (session._min_samples)  # type: ignore[attr-defined]
     await session._process_chunk(pcm)  # type: ignore[attr-defined]
 
-    assert logged == [("user", "hello from android", "android-realtime")]
+    assert logged == [
+        ("user", "hello from android", "android-realtime"),
+        ("assistant", "assistant reply", "android-realtime"),
+    ]
     assert channel.payloads, "expected transcript payload to be sent"
     payload = json.loads(channel.payloads[-1])
     assert payload["type"] == "transcript"
@@ -195,3 +200,4 @@ async def test_voice_session_streams_transcripts(
     assert payload["source"] == "android-realtime"
     assert payload["text"] == "hello from android"
     assert payload["final"] is True
+    assert spoken == ["assistant reply"]

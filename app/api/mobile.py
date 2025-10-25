@@ -332,6 +332,12 @@ class MobileVoiceSession:
 
                 self.messages.append({"role": "assistant", "content": response_text})
                 await self._speak(response_text)
+                await asyncio.to_thread(
+                    log_turn,
+                    "assistant",
+                    response_text,
+                    source=ANDROID_REALTIME_SOURCE,
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
