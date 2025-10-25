@@ -118,7 +118,7 @@ private fun IdleContent(
         if (state.showMicrophoneReminder && !state.microphonePermissionGranted) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = stringResource(id = R.string.microphone_required),
+                text = stringResource(id = R.string.voice_permissions_required),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
                 textAlign = TextAlign.Center,

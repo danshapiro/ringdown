@@ -4,7 +4,7 @@
     <string name="connect_button">Connect</string>
     <string name="reconnect_button">Reconnect</string>
     <string name="open_chat_button">Open chat</string>
-    <string name="microphone_required">Microphone permission required.</string>
+    <string name="voice_permissions_required">Voice permissions required.</string>
     <string name="check_again">Check again</string>
     <string name="pending_dialog_title">Approval required</string>
     <string name="permission_rationale">Ringdown needs microphone access for voice calls.</string>
