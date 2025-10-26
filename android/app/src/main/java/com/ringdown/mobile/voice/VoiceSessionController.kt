@@ -10,6 +10,7 @@ import com.ringdown.mobile.domain.VoiceSessionBootstrap
 import com.squareup.moshi.Json
 import com.squareup.moshi.Moshi
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -126,7 +127,11 @@ class VoiceSessionController @Inject constructor(
                     throw error
                 }
                 Log.e(TAG, "Unable to start voice session", error)
-                _state.value = VoiceConnectionState.Failed(error.message ?: "Call failed")
+                val friendlyMessage = when (error) {
+                    is UnknownHostException -> "Unable to reach the Ringdown service. Check your connection and try again."
+                    else -> error.message ?: "Call failed"
+                }
+                _state.value = VoiceConnectionState.Failed(friendlyMessage)
                 cleanup()
             }
         }
