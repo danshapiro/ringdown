@@ -19,6 +19,6 @@ class VoicePermissionCopyTest {
 
         val message = context.getString(R.string.voice_permissions_required)
 
-        assertThat(message).isEqualTo("Voice permissions required.")
+        assertThat(message).isEqualTo("Microphone permission required.")
     }
 }

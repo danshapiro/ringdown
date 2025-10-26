@@ -47,20 +47,32 @@ class MainActivity : ComponentActivity() {
                 viewModel.onPermissionResult(granted, fromUserAction = false)
             }
 
+            LaunchedEffect(uiState.permissionRequestVersion) {
+                if (uiState.permissionRequestVersion <= 0) return@LaunchedEffect
+                val granted = permissions.all { permission ->
+                    ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+                }
+                if (!granted) {
+                    permissionLauncher.launch(permissions)
+                }
+            }
+
             RingdownTheme(useDarkTheme = isSystemInDarkTheme()) {
                 MainScreenContent(
                     viewModel = viewModel,
                     state = uiState,
-                    onRequestMicrophone = {
+                    onReconnect = {
                         val granted = permissions.all { permission ->
                             ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
                         }
                         if (granted) {
                             viewModel.onPermissionResult(true)
+                            viewModel.startVoiceSession()
                         } else {
-                            permissionLauncher.launch(permissions)
+                            viewModel.startVoiceSession()
                         }
                     },
+                    onHangUp = viewModel::stopVoiceSession,
                 )
             }
         }
@@ -71,11 +83,13 @@ class MainActivity : ComponentActivity() {
 private fun MainScreenContent(
     viewModel: MainViewModel,
     state: MainUiState,
-    onRequestMicrophone: () -> Unit,
+    onReconnect: () -> Unit,
+    onHangUp: () -> Unit,
 ) {
     RingdownApp(
         state = state,
-        onReconnect = onRequestMicrophone,
+        onReconnect = onReconnect,
+        onHangUp = onHangUp,
         onOpenChat = { /* Chat flow to follow in ringdown-11 */ },
         onCheckAgain = viewModel::onCheckAgainClicked,
         onErrorDismissed = viewModel::acknowledgeError,

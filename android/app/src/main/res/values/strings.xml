@@ -4,8 +4,13 @@
     <string name="connect_button">Connect</string>
     <string name="reconnect_button">Reconnect</string>
     <string name="open_chat_button">Open chat</string>
-    <string name="voice_permissions_required">Voice permissions required.</string>
+    <string name="voice_permissions_required">Microphone permission required.</string>
     <string name="check_again">Check again</string>
     <string name="pending_dialog_title">Approval required</string>
+    <string name="pending_dialog_body">Device ID %1$s is pending approval. Ask your admin to enable it in config.yaml.</string>
     <string name="permission_rationale">Ringdown needs microphone access for voice calls.</string>
+    <string name="hang_up_button">Hang up</string>
+    <string name="voice_connecting_message">Connecting to your assistant...</string>
+    <string name="voice_session_title">Live conversation</string>
+    <string name="voice_transcript_empty">Waiting for the first response...</string>
 </resources>

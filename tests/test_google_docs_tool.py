@@ -344,13 +344,18 @@ def test_search_drive_default_filters():
 
     assert result["success"] is True
     assert result["count"] == 2
+    assert result["truncated"] is False
     assert [entry["id"] for entry in result["results"]] == ["doc1", "doc2"]
+    assert all("mimeType" in entry for entry in result["results"])
 
     call_kwargs = mock_drive_service.files.return_value.list.call_args.kwargs
     assert call_kwargs["q"] == (
         "trashed=false and mimeType='application/vnd.google-apps.document' and name contains 'Meeting'"
     )
     assert call_kwargs["pageToken"] is None
+    assert call_kwargs["pageSize"] == 50
+    assert call_kwargs["orderBy"] == "modifiedTime desc"
+    assert call_kwargs["fields"] == "nextPageToken, files(id, name, mimeType)"
 
 
 def test_search_drive_full_text_and_all_types():
@@ -378,6 +383,7 @@ def test_search_drive_full_text_and_all_types():
 
     assert result["success"] is True
     assert result["count"] == 2
+    assert result["truncated"] is False
     assert [entry["id"] for entry in result["results"]] == ["doc3", "sheet1"]
 
     first_call_kwargs = list_mock.call_args_list[0].kwargs
@@ -388,7 +394,13 @@ def test_search_drive_full_text_and_all_types():
     )
     assert "mimeType" not in first_call_kwargs["q"]
     assert first_call_kwargs["pageToken"] is None
+    assert first_call_kwargs["pageSize"] == 50
+    assert first_call_kwargs["orderBy"] == "modifiedTime desc"
+    assert first_call_kwargs["fields"] == "nextPageToken, files(id, name, mimeType)"
     assert second_call_kwargs["pageToken"] == "token123"
+    assert second_call_kwargs["pageSize"] == 49
+    assert second_call_kwargs["orderBy"] == "modifiedTime desc"
+    assert second_call_kwargs["fields"] == "nextPageToken, files(id, name, mimeType)"
 
 
 def test_search_drive_escapes_quotes():
@@ -405,11 +417,74 @@ def test_search_drive_escapes_quotes():
         result = tf.execute_tool("SearchGoogleDrive", {"query": "Bob's Plan"})
 
     assert result["success"] is True
+    call_kwargs = mock_drive_service.files.return_value.list.call_args.kwargs
+    assert call_kwargs["pageSize"] == 50
+    assert call_kwargs["orderBy"] == "modifiedTime desc"
+    assert call_kwargs["fields"] == "nextPageToken, files(id, name, mimeType)"
 
-    query_string = mock_drive_service.files.return_value.list.call_args.kwargs["q"]
+    query_string = call_kwargs["q"]
     assert "Bob\\'s Plan" in query_string
 
 
+def test_search_drive_respects_max_results():
+    """SearchGoogleDrive should stop once max_results is reached."""
+    mock_docs_service = MagicMock()
+    mock_drive_service = MagicMock()
+
+    list_mock = mock_drive_service.files.return_value.list
+    list_mock.return_value.execute.side_effect = [
+        {
+            "files": [
+                {"id": "doc1", "name": "Doc 1", "mimeType": "application/vnd.google-apps.document"},
+                {"id": "doc2", "name": "Doc 2", "mimeType": "application/vnd.google-apps.document"},
+                {"id": "doc3", "name": "Doc 3", "mimeType": "application/vnd.google-apps.document"},
+            ],
+            "nextPageToken": "more",
+        },
+        {
+            "files": [
+                {"id": "doc4", "name": "Doc 4", "mimeType": "application/vnd.google-apps.document"},
+            ],
+            "nextPageToken": None,
+        },
+    ]
+
+    with patch("app.tools.google_docs._get_services", return_value=(mock_docs_service, mock_drive_service)):
+        result = tf.execute_tool("SearchGoogleDrive", {"query": "Doc", "max_results": 3})
+
+    assert result["success"] is True
+    assert result["count"] == 3
+    assert result["truncated"] is True
+    assert result["truncation_reason"] == "max_results"
+    assert [entry["id"] for entry in result["results"]] == ["doc1", "doc2", "doc3"]
+    assert list_mock.call_count == 1
+
+    call_kwargs = list_mock.call_args.kwargs
+    assert call_kwargs["pageSize"] == 3
+    assert call_kwargs["orderBy"] == "modifiedTime desc"
+
+
+def test_search_drive_runtime_limit_truncates():
+    """SearchGoogleDrive should enforce the 30-second runtime budget."""
+    mock_docs_service = MagicMock()
+    mock_drive_service = MagicMock()
+
+    mock_drive_service.files.return_value.list.return_value.execute.return_value = {
+        "files": [
+            {"id": "doc1", "name": "Doc 1", "mimeType": "application/vnd.google-apps.document"},
+        ],
+        "nextPageToken": "token123",
+    }
+
+    with patch("app.tools.google_docs._get_services", return_value=(mock_docs_service, mock_drive_service)):
+        with patch("app.tools.google_docs.time.monotonic", side_effect=[0.0, 31.0, 31.0]):
+            result = tf.execute_tool("SearchGoogleDrive", {"query": "Doc"})
+
+    assert result["success"] is True
+    assert result["truncated"] is True
+    assert result["truncation_reason"] == "runtime_limit"
+    assert result["pages_fetched"] == 1
+    assert result["runtime_seconds"] >= 31.0
 def test_error_handling():
     """Test error handling when API calls fail - now async execution."""
     result = tf.execute_tool("CreateGoogleDoc", {

@@ -7,12 +7,15 @@ import com.ringdown.mobile.data.RegistrationException
 import com.ringdown.mobile.data.RegistrationGateway
 import com.ringdown.mobile.data.RegistrationRepository
 import com.ringdown.mobile.domain.RegistrationStatus
+import com.ringdown.mobile.voice.VoiceConnectionState
+import com.ringdown.mobile.voice.VoiceSessionGateway
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -24,11 +27,15 @@ data class MainUiState(
     val showMicrophoneReminder: Boolean = false,
     val microphonePermissionGranted: Boolean = false,
     val lastApprovedAgent: String? = null,
+    val pendingAutoConnect: Boolean = false,
+    val permissionRequestVersion: Int = 0,
+    val voiceState: VoiceConnectionState = VoiceConnectionState.Idle,
 )
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val registrationGateway: RegistrationGateway,
+    private val voiceGateway: VoiceSessionGateway,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -40,6 +47,20 @@ class MainViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             initialise()
+        }
+        viewModelScope.launch {
+            voiceGateway.state.collect { voiceState ->
+                _state.update { current ->
+                    when (voiceState) {
+                        is VoiceConnectionState.Failed -> current.copy(
+                            voiceState = VoiceConnectionState.Idle,
+                            errorMessage = voiceState.reason,
+                        )
+
+                        else -> current.copy(voiceState = voiceState)
+                    }
+                }
+            }
         }
     }
 
@@ -68,7 +89,11 @@ class MainViewModel @Inject constructor(
             it.copy(
                 microphonePermissionGranted = granted,
                 showMicrophoneReminder = if (fromUserAction) !granted else it.showMicrophoneReminder && !granted,
+                pendingAutoConnect = if (granted) it.pendingAutoConnect else false,
             )
+        }
+        if (granted) {
+            maybeStartVoiceSession()
         }
     }
 
@@ -88,11 +113,27 @@ class MainViewModel @Inject constructor(
         try {
             val status = registrationGateway.register(deviceId, lastDescriptor)
             _state.update {
+                val previousStatus = it.registrationStatus
+                val updatedAgent = when (status) {
+                    is RegistrationStatus.Approved -> status.agentName ?: it.lastApprovedAgent
+                    else -> it.lastApprovedAgent
+                }
+                val shouldAutoConnect = when (status) {
+                    is RegistrationStatus.Approved -> if (previousStatus is RegistrationStatus.Approved) {
+                        it.pendingAutoConnect
+                    } else {
+                        true
+                    }
+                    else -> false
+                }
                 it.copy(
                     isLoading = false,
                     registrationStatus = status,
+                    lastApprovedAgent = updatedAgent,
+                    pendingAutoConnect = shouldAutoConnect,
                 )
             }
+            maybeStartVoiceSession()
             schedulePollIfNeeded(status)
         } catch (error: Exception) {
             val message = when (error) {
@@ -119,7 +160,60 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    fun startVoiceSession() {
+        val current = _state.value
+        val deviceId = current.deviceId
+        if (deviceId.isBlank()) {
+            return
+        }
+        val status = current.registrationStatus
+        if (status !is RegistrationStatus.Approved) {
+            _state.update {
+                it.copy(errorMessage = "Device pending approval.")
+            }
+            return
+        }
+
+        if (!current.microphonePermissionGranted) {
+            _state.update {
+                it.copy(
+                    showMicrophoneReminder = true,
+                    pendingAutoConnect = true,
+                    permissionRequestVersion = it.permissionRequestVersion + 1,
+                )
+            }
+            return
+        }
+
+        val agent = status.agentName ?: current.lastApprovedAgent
+        _state.update {
+            it.copy(
+                showMicrophoneReminder = false,
+                pendingAutoConnect = false,
+                permissionRequestVersion = it.permissionRequestVersion,
+            )
+        }
+        voiceGateway.start(deviceId, agent)
+    }
+
+    fun stopVoiceSession() {
+        voiceGateway.stop()
+    }
+
+    private fun maybeStartVoiceSession() {
+        val current = _state.value
+        val status = current.registrationStatus
+        if (!current.pendingAutoConnect) return
+        if (status !is RegistrationStatus.Approved) return
+        startVoiceSession()
+    }
+
     companion object {
         private const val DEFAULT_POLL_SECONDS = 5
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        voiceGateway.stop()
     }
 }

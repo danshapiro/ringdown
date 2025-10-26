@@ -2,7 +2,9 @@ package com.ringdown.mobile.di
 
 import com.ringdown.mobile.data.BackendEnvironment
 import com.ringdown.mobile.data.remote.RegistrationApi
+import com.ringdown.mobile.data.remote.VoiceApi
 import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -20,7 +22,9 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideMoshi(): Moshi = Moshi.Builder().build()
+    fun provideMoshi(): Moshi = Moshi.Builder()
+        .addLast(KotlinJsonAdapterFactory())
+        .build()
 
     @Provides
     @Singleton
@@ -56,5 +60,11 @@ object NetworkModule {
     @Singleton
     fun provideRegistrationApi(retrofit: Retrofit): RegistrationApi {
         return retrofit.create(RegistrationApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideVoiceApi(retrofit: Retrofit): VoiceApi {
+        return retrofit.create(VoiceApi::class.java)
     }
 }
