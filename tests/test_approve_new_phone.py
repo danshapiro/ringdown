@@ -41,7 +41,7 @@ def _write_config(tmp_path: Path) -> Path:
 def test_list_pending_devices_sorted(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
 
-    from authorize_new_phone import list_pending_devices
+    from approve_new_phone import list_pending_devices
 
     pending = list_pending_devices(config_path)
 
@@ -58,9 +58,9 @@ def test_approve_device_sets_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     freeze = datetime(2025, 10, 25, 12, 0, tzinfo=timezone.utc)
 
-    from authorize_new_phone import approve_device
+    from approve_new_phone import approve_device
 
-    monkeypatch.setattr("authorize_new_phone._now", lambda: freeze)
+    monkeypatch.setattr("approve_new_phone._now", lambda: freeze)
 
     approve_device(config_path, "alpha-device", agent="ringdown-demo")
 
@@ -74,7 +74,7 @@ def test_approve_device_sets_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_approve_missing_device_raises(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
 
-    from authorize_new_phone import approve_device
+    from approve_new_phone import approve_device
 
     with pytest.raises(KeyError):
         approve_device(config_path, "missing-device")
