@@ -112,6 +112,8 @@ agents:
       - ReadGoogleDoc
       - SearchGoogleDrive
       - AppendGoogleDoc
+      - TodoRead
+      - TodoAdd
       - change_llm
       - reset
     email_greenlist_enforced: true
