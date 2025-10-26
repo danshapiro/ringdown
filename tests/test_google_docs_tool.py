@@ -390,9 +390,8 @@ def test_search_drive_full_text_and_all_types():
     second_call_kwargs = list_mock.call_args_list[1].kwargs
 
     assert first_call_kwargs["q"] == (
-        "trashed=false and (name contains 'Project' or fullText contains 'Project')"
+        "trashed=false and mimeType!='application/vnd.google-apps.folder' and (name contains 'Project' or fullText contains 'Project')"
     )
-    assert "mimeType" not in first_call_kwargs["q"]
     assert first_call_kwargs["pageToken"] is None
     assert first_call_kwargs["pageSize"] == 50
     assert first_call_kwargs["orderBy"] == "modifiedTime desc"

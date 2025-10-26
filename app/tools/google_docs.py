@@ -39,10 +39,13 @@ logger = logging.getLogger(__name__)
 _agent_context = threading.local()
 
 # Google API scopes needed for Docs and Drive operations
+# - documents: Full access to Google Docs for create/read/edit operations
+# - drive.file: Create and manage files created by the app (for CreateGoogleDoc, AppendGoogleDoc)
+# - drive.readonly: Read any file in Drive (for ReadGoogleDoc, SearchGoogleDrive)
 SCOPES = [
     "https://www.googleapis.com/auth/documents",
     "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
 ]
 
 # Known MIME types for Markdown files stored in Google Drive
@@ -546,6 +549,9 @@ def search_google_drive(args: SearchDriveArgs) -> Dict[str, Any]:
 
         if args.docs_only:
             query_parts.insert(1, "mimeType='application/vnd.google-apps.document'")
+        else:
+            # Exclude folders from search results
+            query_parts.insert(1, "mimeType!='application/vnd.google-apps.folder'")
 
         query = " and ".join(query_parts)
 
