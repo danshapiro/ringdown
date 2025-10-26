@@ -40,7 +40,7 @@ Instead of performing these actions, only recommend them, and have the user conf
 - **Voice smoke test:** once a device/emulator shows up in `adb devices`, run `bash android/scripts/run-voice-smoke.sh --backend $BACKEND_URL`. The script wraps `connectedDebugAndroidTest` and expects the same `ANDROID_SERIAL` that `mobile-mcp` uses.
 - **Instrumentation toggles:** to force the fake transport during tests set `DebugFeatureFlags.overrideVoiceTransportStub(true)`—handled automatically by the existing `VoiceMvpSuite`; no manual changes needed when running the suite.
 - **Mobile MCP deploy:** `bash android/scripts/install.sh --device $ANDROID_SERIAL` deploys the latest debug APK; ensure `uv run pytest tests` is clean before pushing to devices.
-- Connected suite: `./gradlew.bat :app:connectedVoiceMvpAndroidTest` (JDK/SDK paths set). Keep the resulting debug APK installed for manual QA.
+- Connected suite: on WSL/macOS run `bash android/scripts/gradle.sh :app:connectedVoiceMvpAndroidTest` (installs APKs and drives instrumentation via `adb`, so set `ANDROID_SERIAL` if multiple devices are attached); on Windows PowerShell use `./gradlew.bat :app:connectedVoiceMvpAndroidTest`. Keep the resulting debug APK installed for manual QA.
 
 ### Deployment (Cloud Run)
 - From the repo root, activate the matching virtual environment (`.venv` on PowerShell/CMD, `.venv-wsl` on bash).
