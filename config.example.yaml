@@ -162,24 +162,11 @@ docs_folder_greenlist_defaults:
 
 # Registered Android devices managed by the backend
 mobile_devices: {}
-mobile_realtime:
-  expires_after_seconds: 600
-  ice_servers:
-    - urls:
-        - stun:stun.l.google.com:19302
-  session:
-    model: gpt-4o-realtime-preview-2024-12-17
-    output_modalities:
-      - audio
-    audio:
-      input:
-        format: pcm16
-        turn_detection:
-          type: server_vad
-          threshold: 0.5
-          silence_duration_ms: 600
-          interrupt_response: true
-          create_response: false
-      output:
-        format: pcm16
-        voice: marin
+mobile_managed_av:
+  provider: daily
+  api_base_url: https://api.daily.co/v1
+  pipeline_handle: ringdown-pipecat
+  room_domain: ringdown.daily.co
+  session_ttl_seconds: 600
+  metadata:
+    product: ringdown

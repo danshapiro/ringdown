@@ -57,7 +57,6 @@ def _create_app() -> FastAPI:
     # Webhook routers for Twilio Voice and ConversationRelay streaming.
     application.include_router(twilio.router)
     application.include_router(mobile.router)
-    application.include_router(mobile.ws_router)
     application.include_router(websocket.router)
 
     return application

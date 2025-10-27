@@ -112,11 +112,5 @@ Listen for the greeting and ensure the call summary appears in your logs.
 - Testing: `pytest`, `pytest -m integration`, and the WebSocket smoke helper keep regressions away before you push changes.
 - Release workflow: bump `app.__version__`, update `pyproject.toml`, log changes in `CHANGELOG.md`, and tag (`v0.x.y`) when you publish a new build.
 
-## Android Realtime Voice
-- The Android client now calls `POST /v1/mobile/voice/session` and negotiates WebRTC audio with the backend via `/ws/mobile/voice`, streaming transcripts over the `ringdown-transcripts` data channel and tagging mobile turns as `android-realtime` in the call log.
-- UI states cover registration, connection progress, and a live transcript surface. The reconnect button starts a session immediately once microphone permission is granted; Hang up closes the peer connection and signaling socket cleanly.
-- Manual handshake harness (stub): `python android/scripts/manual_voice_harness.py --device <adb-serial>`. The script wakes the phone, launches the app, and tails `VoiceSession`/`RingdownApp` logcat output while you drive audio both directions. Stop with `Ctrl+C` after validating speech playback.
-- Unit coverage: backend session minting lives under `tests/test_mobile_voice_session.py`; Android-side coverage exercises the new repositories and `MainViewModel` (`./android/scripts/gradle.sh ./gradlew :app:testDebugUnitTest`).
-
 ## License
 Ringdown ships under the MIT License (see `LICENSE`).

@@ -236,14 +236,14 @@ def get_mobile_device(device_id: str) -> Dict[str, Any] | None:
     return devices.get(device_id)
 
 
-def get_mobile_realtime_config() -> Dict[str, Any]:
-    """Return realtime session defaults for Android clients."""
+def get_mobile_managed_av_config() -> Dict[str, Any]:
+    """Return managed audio/video configuration for Android clients."""
 
     cfg = _load_config()
-    realtime = cfg.get("mobile_realtime")
-    if not realtime:
-        raise ValueError("mobile_realtime missing in config.yaml")
-    return copy.deepcopy(realtime)
+    managed = cfg.get("mobile_managed_av")
+    if not managed:
+        raise ValueError("mobile_managed_av missing in config.yaml")
+    return copy.deepcopy(managed)
 
 
 def get_calendar_user_name() -> str:

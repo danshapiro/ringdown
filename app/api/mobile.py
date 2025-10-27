@@ -1,71 +1,32 @@
-"""Mobile client endpoints for device registration and WebRTC signaling."""
+"""Mobile client endpoints for device registration and managed A/V sessions."""
 
 from __future__ import annotations
 
 import asyncio
 import copy
-import io
-import json
 import os
-import wave
-from contextlib import suppress
 from datetime import datetime, timezone
-from fractions import Fraction
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Optional
 
-import httpx
-from aiortc import (
-    RTCPeerConnection,
-    RTCDataChannel,
-    RTCIceCandidate,
-    RTCSessionDescription,
-)
-from aiortc.mediastreams import AudioStreamTrack
-from av import AudioFrame, open as av_open
-from av.audio.resampler import AudioResampler
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
-import numpy as np
-from openai import OpenAI
-from openai.types.realtime.client_secret_create_response import ClientSecretCreateResponse
+from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import settings
 from app.chat import stream_response
 from app.logging_utils import logger
+from app.managed_av.client import ManagedAVClient, ManagedAVSession
+from app.managed_av.session_store import ManagedAVSessionStore, ManagedSessionState, get_session_store
 from app.mobile.config_store import ensure_device_entry
 from app.memory import log_turn
 
-SAMPLE_RATE = 48_000
-FRAME_DURATION_SEC = 0.02  # 20ms
-SAMPLES_PER_FRAME = int(SAMPLE_RATE * FRAME_DURATION_SEC)
-TTS_ENDPOINT = "https://api.openai.com/v1/audio/speech"
-DEFAULT_TTS_MODEL = "tts-1"
-DEFAULT_TTS_VOICE = "alloy"
-HTTP_TIMEOUT = 60.0
-TRANSCRIPTS_CHANNEL = "ringdown-transcripts"
-CONTROL_CHANNEL = "ringdown-control"
-ANDROID_REALTIME_SOURCE = "android-realtime"
-
 DEFAULT_POLL_AFTER_SECONDS = 5
-TRANSCRIPTION_MODEL = os.getenv("VOICE_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
-MIN_UTTERANCE_DURATION_SEC = 0.5
-MAX_UTTERANCE_DURATION_SEC = 12.0
-SILENCE_DURATION_SEC = 0.6
-ENERGY_THRESHOLD = 900.0
-
-_openai_client: OpenAI | None = None
-
-
-def _get_openai_client() -> OpenAI:
-    """Return a cached OpenAI client instance."""
-
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = OpenAI()
-    return _openai_client
+MANAGED_AV_API_KEY_ENV = "MANAGED_AV_API_KEY"
+ANDROID_MANAGED_SOURCE = "android-managed-av"
 
 router = APIRouter(prefix="/v1/mobile", tags=["mobile"])
-ws_router = APIRouter()
+
+_session_store: ManagedAVSessionStore = get_session_store()
+_managed_client: ManagedAVClient | None = None
 
 
 class MobileRegisterRequest(BaseModel):
@@ -85,14 +46,14 @@ class MobileRegisterResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    status: Literal["PENDING", "APPROVED", "DENIED"]
+    status: str
     message: str
     poll_after_seconds: Optional[int] = Field(default=None, alias="pollAfterSeconds")
     agent: Optional[str] = None
 
 
 class MobileVoiceSessionRequest(BaseModel):
-    """Payload requesting a new realtime voice session."""
+    """Payload requesting a new managed voice session."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -101,396 +62,89 @@ class MobileVoiceSessionRequest(BaseModel):
 
 
 class MobileVoiceSessionResponse(BaseModel):
-    """Response describing the realtime session bootstrap parameters."""
+    """Response describing managed session bootstrap parameters."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    client_secret: str = Field(..., alias="clientSecret")
-    expires_at: datetime = Field(..., alias="expiresAt")
+    session_id: str = Field(..., alias="sessionId")
     agent: str
-    model: str
-    voice: Optional[str] = None
-    session: Dict[str, Any]
-    turn_detection: Optional[Dict[str, Any]] = Field(default=None, alias="turnDetection")
-    ice_servers: List[Dict[str, Any]] = Field(default_factory=list, alias="iceServers")
-    transcripts_channel: str = Field(..., alias="transcriptsChannel")
-    control_channel: str = Field(..., alias="controlChannel")
+    room_url: str = Field(..., alias="roomUrl")
+    access_token: str = Field(..., alias="accessToken")
+    expires_at: datetime = Field(..., alias="expiresAt")
+    pipeline_session_id: Optional[str] = Field(default=None, alias="pipelineSessionId")
+    greeting: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-class QueuedAudioStreamTrack(AudioStreamTrack):
-    """Outbound audio track that plays queued audio frames."""
+class ManagedAVCompletionRequest(BaseModel):
+    """Request payload delivered by the managed A/V pipeline."""
 
-    kind = "audio"
+    model_config = ConfigDict(populate_by_name=True)
 
-    def __init__(self, sample_rate: int = SAMPLE_RATE) -> None:
-        super().__init__()
-        self._sample_rate = sample_rate
-        self._queue: asyncio.Queue[AudioFrame] = asyncio.Queue()
-        self._timestamp = 0
-        self._closing = False
-
-    async def recv(self) -> AudioFrame:
-        try:
-            frame = await asyncio.wait_for(self._queue.get(), timeout=FRAME_DURATION_SEC)
-        except asyncio.TimeoutError:
-            frame = AudioFrame(format="s16", layout="mono", samples=SAMPLES_PER_FRAME)
-            frame.pts = self._timestamp
-            frame.sample_rate = self._sample_rate
-            frame.time_base = Fraction(1, self._sample_rate)
-            for plane in frame.planes:
-                plane.update(b"\x00" * len(plane))
-            self._timestamp += SAMPLES_PER_FRAME
-            return frame
-
-        frame.pts = self._timestamp
-        frame.sample_rate = self._sample_rate
-        frame.time_base = Fraction(1, self._sample_rate)
-        self._timestamp += frame.samples
-        return frame
-
-    def enqueue(self, frame: AudioFrame) -> None:
-        self._queue.put_nowait(frame)
-
-    def close(self) -> None:
-        self._closing = True
+    session_id: str = Field(..., alias="sessionId")
+    text: str
+    final: bool = True
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-class MobileVoiceSession:
-    """Manage a mobile voice session with transcription, LLM, and TTS."""
+class ManagedAVCompletionResponse(BaseModel):
+    """Response payload returned to the managed pipeline."""
 
-    def __init__(
-        self,
-        device_id: str,
-        device_cfg: Dict[str, Any],
-        outbound_track: QueuedAudioStreamTrack,
-    ) -> None:
-        self.device_id = device_id
-        self.device_cfg = device_cfg
-        self._outbound_track = outbound_track
-        self._lock = asyncio.Lock()
-        self._tasks: set[asyncio.Task[Any]] = set()
-        self._active = True
-        self._silence_samples = int(SILENCE_DURATION_SEC * SAMPLE_RATE)
-        self._min_samples = int(MIN_UTTERANCE_DURATION_SEC * SAMPLE_RATE)
-        self._max_samples = int(MAX_UTTERANCE_DURATION_SEC * SAMPLE_RATE)
-        self._transcripts_channel: RTCDataChannel | None = None
+    model_config = ConfigDict(populate_by_name=True)
 
-        agent_name = device_cfg.get("agent") or "unknown-caller"
-        try:
-            agent_cfg = settings.get_agent_config(agent_name)
-        except KeyError:
-            logger.warning(
-                "Agent %s not found for device %s; falling back to unknown-caller",
-                agent_name,
-                device_id,
-            )
-            agent_name = "unknown-caller"
-            agent_cfg = settings.get_agent_config(agent_name)
-
-        self.agent_name = agent_name
-        self.agent_cfg = copy.deepcopy(agent_cfg)
-        prompt = self.agent_cfg.get("prompt", "")
-        self.messages: list[dict[str, Any]] = []
-        if prompt:
-            self.messages.append({"role": "system", "content": prompt})
-
-        self._voice = self.agent_cfg.get("voice") or DEFAULT_TTS_VOICE
-        self._client = _get_openai_client()
-
-    async def start(self) -> None:
-        """Play the configured greeting at session start."""
-
-        greeting = self._resolve_greeting()
-        if not greeting:
-            return
-
-        await self._speak(greeting)
-        self.messages.append({"role": "assistant", "content": greeting})
-
-    def _resolve_greeting(self) -> str | None:
-        candidate = self.agent_cfg.get("welcome_greeting")
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
-        return "You are connected to the Ringdown assistant."
-
-    def attach_incoming_track(self, track: AudioStreamTrack) -> None:
-        """Start consuming audio from the handset microphone."""
-
-        task = asyncio.create_task(self._consume_track(track))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    def attach_transcripts_channel(self, channel: RTCDataChannel) -> None:
-        """Bind the negotiated transcripts data channel."""
-
-        self._transcripts_channel = channel
-
-    async def close(self) -> None:
-        """Cancel background tasks and release resources."""
-
-        self._active = False
-        tasks = list(self._tasks)
-        for task in tasks:
-            task.cancel()
-        for task in tasks:
-            with suppress(asyncio.CancelledError):
-                await task
-
-        self._outbound_track.close()
-
-    async def _consume_track(self, track: AudioStreamTrack) -> None:
-        """Segment incoming audio into utterances and dispatch for processing."""
-
-        buffer = bytearray()
-        speaking = False
-        speech_samples = 0
-        silence_samples = 0
-
-        try:
-            while self._active:
-                try:
-                    frame = await track.recv()
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("Audio track for %s closed: %s", self.device_id, exc)
-                    break
-
-                samples = frame.to_ndarray(format="s16")
-                if samples.ndim == 2:
-                    mono = samples[0]
-                else:
-                    mono = samples
-                mono = np.asarray(mono, dtype=np.int16)
-
-                amplitude = float(np.abs(mono).mean())
-                pcm_chunk = mono.tobytes()
-
-                if not speaking:
-                    if amplitude < ENERGY_THRESHOLD:
-                        continue
-                    speaking = True
-                    speech_samples = len(mono)
-                    buffer.extend(pcm_chunk)
-                    silence_samples = 0
-                    continue
-
-                buffer.extend(pcm_chunk)
-                speech_samples += len(mono)
-
-                if amplitude < ENERGY_THRESHOLD:
-                    silence_samples += len(mono)
-                else:
-                    silence_samples = 0
-
-                should_flush = False
-                if silence_samples >= self._silence_samples:
-                    should_flush = True
-                elif speech_samples >= self._max_samples:
-                    should_flush = True
-
-                if should_flush:
-                    chunk = bytes(buffer)
-                    buffer.clear()
-                    speaking = False
-                    speech_samples = 0
-                    silence_samples = 0
-                    if chunk and len(chunk) >= self._min_samples * 2:
-                        self._schedule_chunk(chunk)
-
-        finally:
-            if buffer and len(buffer) >= self._min_samples * 2:
-                self._schedule_chunk(bytes(buffer))
-
-    def _schedule_chunk(self, pcm_bytes: bytes) -> None:
-        if not self._active or not pcm_bytes:
-            return
-        task = asyncio.create_task(self._process_chunk(pcm_bytes))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    async def _process_chunk(self, pcm_bytes: bytes) -> None:
-        try:
-            async with self._lock:
-                transcript = await self._transcribe(pcm_bytes)
-                if not transcript:
-                    return
-
-                logger.info("Mobile user %s said: %s", self.device_id, transcript)
-                self.messages.append({"role": "user", "content": transcript})
-                self._emit_transcript_event(transcript, final=True)
-                await asyncio.to_thread(
-                    log_turn,
-                    "user",
-                    transcript,
-                    source=ANDROID_REALTIME_SOURCE,
-                )
-
-                response_text = await self._generate_response(transcript)
-                if not response_text:
-                    return
-
-                self.messages.append({"role": "assistant", "content": response_text})
-                await self._speak(response_text)
-                await asyncio.to_thread(
-                    log_turn,
-                    "assistant",
-                    response_text,
-                    source=ANDROID_REALTIME_SOURCE,
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Error processing mobile audio chunk: %s", exc)
-
-    async def _transcribe(self, pcm_bytes: bytes) -> str:
-        if not pcm_bytes:
-            return ""
-
-        wav_buffer = io.BytesIO()
-        with wave.open(wav_buffer, "wb") as handle:
-            handle.setnchannels(1)
-            handle.setsampwidth(2)
-            handle.setframerate(SAMPLE_RATE)
-            handle.writeframes(pcm_bytes)
-
-        wav_buffer.seek(0)
-        wav_buffer.name = "utterance.wav"
-
-        try:
-            result = await asyncio.to_thread(
-                self._client.audio.transcriptions.create,
-                model=TRANSCRIPTION_MODEL,
-                file=wav_buffer,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Transcription failed for device %s: %s", self.device_id, exc)
-            return ""
-
-        text = getattr(result, "text", None)
-        if not text and isinstance(result, dict):
-            text = result.get("text")
-
-        return text.strip() if text else ""
-
-    async def _generate_response(self, user_text: str) -> str:
-        responses: list[str] = []
-        tool_announced = False
-
-        async for chunk in stream_response(user_text, self.agent_cfg, self.messages):
-            if isinstance(chunk, dict):
-                marker_type = chunk.get("type")
-                if marker_type == "tool_executing" and not tool_announced:
-                    tool_announced = True
-                    await self._speak("Give me a moment while I work on that.")
-                elif marker_type == "reset_conversation":
-                    reset_message = chunk.get("message") or "Conversation reset."
-                    self.messages = []
-                    prompt = self.agent_cfg.get("prompt", "")
-                    if prompt:
-                        self.messages.append({"role": "system", "content": prompt})
-                    return reset_message
-                continue
-
-            responses.append(chunk)
-
-        return "".join(responses).strip()
-
-    async def _speak(self, text: str) -> None:
-        if not text or not self._active:
-            return
-
-        try:
-            frames = await _synthesize_speech_frames(text, self._voice)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("TTS synthesis failed for device %s: %s", self.device_id, exc)
-            return
-
-        for frame in frames:
-            self._outbound_track.enqueue(frame)
-
-    def _emit_transcript_event(self, text: str, *, final: bool) -> None:
-        """Send a transcript event to the handset, if the data channel is available."""
-
-        channel = self._transcripts_channel
-        if not channel or channel.readyState != "open":
-            return
-
-        payload = {
-            "type": "transcript",
-            "speaker": "user",
-            "source": ANDROID_REALTIME_SOURCE,
-            "text": text,
-            "final": final,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-
-        try:
-            channel.send(json.dumps(payload, ensure_ascii=True))
-        except Exception as exc:  # noqa: BLE001 - data channel failures are non-fatal
-            logger.debug("Failed to send transcript payload for %s: %s", self.device_id, exc)
+    success: bool = True
+    response_text: str = Field(..., alias="responseText")
+    hold_text: Optional[str] = Field(default=None, alias="holdText")
+    reset: bool = False
 
 
-async def _synthesize_speech_frames(text: str, voice: str) -> list[AudioFrame]:
-    api_key = os.getenv("OPENAI_API_KEY")
+def _get_managed_client() -> ManagedAVClient:
+    """Return a cached client for the managed A/V provider."""
+
+    global _managed_client
+    if _managed_client is not None:
+        return _managed_client
+
+    cfg = settings.get_mobile_managed_av_config()
+    api_key = os.getenv(MANAGED_AV_API_KEY_ENV)
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not configured")
+        raise RuntimeError(f"{MANAGED_AV_API_KEY_ENV} must be configured")
 
-    payload = {
-        "model": os.getenv("VOICE_TTS_MODEL", DEFAULT_TTS_MODEL),
-        "input": text,
-        "voice": voice,
-        "format": "wav",
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        response = await client.post(TTS_ENDPOINT, headers=headers, json=payload)
-        response.raise_for_status()
-
-    return _decode_audio(response.content)
+    metadata = cfg.get("metadata")
+    _managed_client = ManagedAVClient(
+        base_url=str(cfg.get("api_base_url")),
+        api_key=api_key,
+        pipeline_handle=str(cfg.get("pipeline_handle")),
+        session_ttl_seconds=int(cfg.get("session_ttl_seconds", 600)),
+        metadata=metadata if isinstance(metadata, dict) else {},
+    )
+    return _managed_client
 
 
-def _decode_audio(data: bytes) -> list[AudioFrame]:
-    container = av_open(io.BytesIO(data))
-    try:
-        stream = next(s for s in container.streams if s.type == "audio")
-    except StopIteration as exc:  # pragma: no cover - defensive
-        container.close()
-        raise ValueError("No audio stream in synthesized output") from exc
-
-    resampler = AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
-    frames: list[AudioFrame] = []
-    for frame in container.decode(stream):
-        resampled_frames = resampler.resample(frame)
-        if resampled_frames is None:
-            continue
-        for resampled in resampled_frames:
-            resampled.pts = None
-            resampled.sample_rate = SAMPLE_RATE
-            resampled.time_base = Fraction(1, SAMPLE_RATE)
-            frames.append(resampled)
-
-    container.close()
-    if not frames:
-        raise ValueError("Synthesized audio did not produce any frames")
-    return frames
+def _resolve_greeting(agent_cfg: Dict[str, Any]) -> Optional[str]:
+    candidate = agent_cfg.get("welcome_greeting")
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate.strip()
+    return "You are connected to the Ringdown assistant."
 
 
 def _normalise_device_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     """Return a shallow copy of *entry* with snake_case keys where appropriate."""
 
     result: Dict[str, Any] = dict(entry or {})
-    # Harmonise possible camelCase keys saved from earlier versions.
     if "pollAfterSeconds" in result and "poll_after_seconds" not in result:
         result["poll_after_seconds"] = result["pollAfterSeconds"]
     if "blockedReason" in result and "blocked_reason" not in result:
         result["blocked_reason"] = result["blockedReason"]
+    if "approvedMessage" in result and "approved_message" not in result:
+        result["approved_message"] = result["approvedMessage"]
+    if "pendingMessage" in result and "pending_message" not in result:
+        result["pending_message"] = result["pendingMessage"]
     return result
+
+
+def _sanitise_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    return copy.deepcopy(config or {})
 
 
 @router.post("/devices/register", response_model=MobileRegisterResponse)
@@ -501,11 +155,11 @@ async def register_device(payload: MobileRegisterRequest) -> MobileRegisterRespo
     if not device_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid deviceId")
 
-    if not os.getenv("OPENAI_API_KEY"):
-        logger.error("OPENAI_API_KEY missing while registering device %s", device_id)
+    if not os.getenv(MANAGED_AV_API_KEY_ENV):
+        logger.error("%s missing while registering device %s", MANAGED_AV_API_KEY_ENV, device_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="OPENAI_API_KEY is required for voice calls.",
+            detail=f"{MANAGED_AV_API_KEY_ENV} is required for voice calls.",
         )
 
     metadata = {
@@ -545,266 +199,186 @@ async def register_device(payload: MobileRegisterRequest) -> MobileRegisterRespo
     )
 
 
-def _serialize_candidate(candidate: RTCIceCandidate) -> Dict[str, Any]:
-    return {
-        "candidate": candidate.candidate,
-        "sdpMid": candidate.sdpMid,
-        "sdpMLineIndex": candidate.sdpMLineIndex,
-    }
-
-
-async def _mint_realtime_client_secret(
-    session_payload: Dict[str, Any],
-    *,
-    expires_after_seconds: Optional[int],
-) -> ClientSecretCreateResponse:
-    """Create a short-lived Realtime client secret using the OpenAI API."""
-
-    kwargs: Dict[str, Any] = {"session": session_payload}
-    if expires_after_seconds is not None:
-        kwargs["expires_after"] = {"anchor": "created_at", "seconds": expires_after_seconds}
-
-    client = _get_openai_client()
-    return await asyncio.to_thread(client.realtime.client_secrets.create, **kwargs)
-
-
-def _extract_turn_detection(session_payload: Dict[str, Any]) -> Dict[str, Any] | None:
-    """Return the turn_detection configuration from the session payload, if present."""
-
-    audio_cfg = session_payload.get("audio") or {}
-    input_cfg = audio_cfg.get("input") or {}
-
-    turn_detection = input_cfg.get("turn_detection")
-    if turn_detection is None and "turnDetection" in input_cfg:
-        turn_detection = input_cfg.get("turnDetection")
-    if not isinstance(turn_detection, dict):
-        return None
-    return copy.deepcopy(turn_detection)
-
-
 @router.post("/voice/session", response_model=MobileVoiceSessionResponse)
-async def create_voice_session(payload: MobileVoiceSessionRequest) -> MobileVoiceSessionResponse:
-    """Mint an OpenAI Realtime client secret for an approved mobile device."""
+async def voice_session(payload: MobileVoiceSessionRequest) -> MobileVoiceSessionResponse:
+    """Create a managed audio/video session for the mobile client."""
 
     device_id = payload.device_id.strip()
     if not device_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid deviceId")
 
-    if not os.getenv("OPENAI_API_KEY"):
-        logger.error("OPENAI_API_KEY missing while creating realtime session for %s", device_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="OPENAI_API_KEY is required for voice calls.",
-        )
-
     device_cfg = settings.get_mobile_device(device_id)
     if not device_cfg:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not registered")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown device")
 
+    device_cfg = _normalise_device_entry(device_cfg)
     if not device_cfg.get("enabled"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device pending approval")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device not approved")
 
     configured_agent = device_cfg.get("agent")
-    if payload.agent and configured_agent and payload.agent != configured_agent:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Agent does not match device configuration",
-        )
+    if payload.agent and payload.agent != configured_agent:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Agent mismatch")
 
     agent_name = configured_agent or payload.agent
     if not agent_name:
-        logger.error("Device %s missing agent mapping in config.yaml", device_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Device configuration missing agent mapping",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Agent not specified")
 
     try:
-        settings.get_agent_config(agent_name)
+        agent_cfg = settings.get_agent_config(agent_name)
     except KeyError as exc:
-        logger.error("Agent %s referenced by device %s is not defined", agent_name, device_id)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Configured agent missing in backend",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Agent '{agent_name}' not found",
         ) from exc
 
-    realtime_cfg = settings.get_mobile_realtime_config()
-    session_template = copy.deepcopy(realtime_cfg.get("session") or {})
-    if not session_template:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="mobile_realtime.session missing in config.yaml",
-        )
-
-    session_template.setdefault("type", "realtime")
-    model_name = session_template.get("model")
-    if not model_name:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Realtime model not configured for mobile sessions",
-        )
-
-    expires_after = realtime_cfg.get("expires_after_seconds")
+    greeting = _resolve_greeting(agent_cfg)
 
     try:
-        secret = await _mint_realtime_client_secret(session_template, expires_after_seconds=expires_after)
+        client = _get_managed_client()
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Failed to mint realtime client secret for %s: %s", device_id, exc)
+        logger.exception("Failed to initialise managed A/V client: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Managed audio/video provider not configured",
+        ) from exc
+
+    metadata = {
+        "device": {
+            "label": device_cfg.get("label"),
+            "notes": device_cfg.get("notes"),
+            "context": device_cfg.get("context"),
+        }
+    }
+
+    try:
+        managed_session = await client.start_session(
+            device_id=device_id,
+            agent_name=agent_name,
+            greeting=greeting,
+            device_metadata=metadata,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to start managed A/V session for device %s: %s", device_id, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to mint realtime client secret",
+            detail="Failed to initialise managed audio/video session",
         ) from exc
 
-    turn_detection = _extract_turn_detection(session_template)
-    audio_cfg = session_template.get("audio") or {}
-    output_cfg = audio_cfg.get("output") or {}
-    voice_name = output_cfg.get("voice")
+    await _session_store.create_session(
+        session_id=managed_session.session_id,
+        device_id=device_id,
+        agent_name=agent_name,
+        agent_config=_sanitise_config(agent_cfg),
+        greeting=managed_session.greeting or greeting,
+        expires_at=managed_session.expires_at,
+        ttl_seconds=settings.get_mobile_managed_av_config().get("session_ttl_seconds"),
+        metadata=managed_session.metadata,
+    )
 
     return MobileVoiceSessionResponse(
-        client_secret=secret.value,
-        expires_at=datetime.fromtimestamp(secret.expires_at, tz=timezone.utc),
-        agent=agent_name,
-        model=model_name,
-        voice=voice_name if isinstance(voice_name, str) else None,
-        session=session_template,
-        turn_detection=turn_detection,
-        ice_servers=realtime_cfg.get("ice_servers", []),
-        transcripts_channel=TRANSCRIPTS_CHANNEL,
-        control_channel=CONTROL_CHANNEL,
+        session_id=managed_session.session_id,
+        agent=managed_session.agent,
+        room_url=managed_session.room_url,
+        access_token=managed_session.access_token,
+        expires_at=managed_session.expires_at,
+        pipeline_session_id=managed_session.pipeline_session_id,
+        greeting=managed_session.greeting or greeting,
+        metadata=managed_session.metadata,
     )
 
 
-@ws_router.websocket("/ws/mobile/voice")
-async def voice_signaling(websocket: WebSocket) -> None:
-    """Bidirectional signaling channel for WebRTC voice sessions."""
+@router.post("/managed-av/completions", response_model=ManagedAVCompletionResponse)
+async def managed_av_completions(payload: ManagedAVCompletionRequest) -> ManagedAVCompletionResponse:
+    """Process a transcript chunk from the managed pipeline and return the next response."""
 
-    device_id = websocket.query_params.get("device_id")
-    if not device_id:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+    session = await _session_store.get_session(payload.session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    device_cfg = settings.get_mobile_device(device_id)
-    if not device_cfg or not device_cfg.get("enabled"):
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+    now = datetime.now(timezone.utc)
+    if session.expires_at <= now:
+        await _session_store.delete_session(payload.session_id)
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Session expired")
 
-    if not os.getenv("OPENAI_API_KEY"):
-        await websocket.accept()
-        await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="OPENAI_API_KEY missing")
-        logger.error("OPENAI_API_KEY missing during voice signaling for %s", device_id)
-        return
+    user_text = payload.text.strip()
+    if not user_text:
+        return ManagedAVCompletionResponse(response_text="", hold_text=None, reset=False)
 
-    await websocket.accept()
+    async with session.lock:
+        session.messages.append({"role": "user", "content": user_text})
+        await asyncio.to_thread(log_turn, "user", user_text, source=ANDROID_MANAGED_SOURCE)
 
-    peer_connection = RTCPeerConnection()
-    transcripts_channel = peer_connection.createDataChannel(
-        TRANSCRIPTS_CHANNEL,
-        negotiated=True,
-        id=0,
-        ordered=True,
+        response_text, hold_text, reset_requested = await _generate_response(
+            session.agent_config,
+            session.messages,
+            user_text,
+        )
+
+        if reset_requested:
+            # After resetting, ensure the system prompt is re-applied.
+            session.messages = []
+            prompt = session.agent_config.get("prompt")
+            if isinstance(prompt, str) and prompt.strip():
+                session.messages.append({"role": "system", "content": prompt.strip()})
+
+        if response_text:
+            session.messages.append({"role": "assistant", "content": response_text})
+            await asyncio.to_thread(
+                log_turn,
+                "assistant",
+                response_text,
+                source=ANDROID_MANAGED_SOURCE,
+            )
+
+    return ManagedAVCompletionResponse(
+        response_text=response_text,
+        hold_text=hold_text,
+        reset=reset_requested,
     )
-    control_channel = peer_connection.createDataChannel(
-        CONTROL_CHANNEL,
-        negotiated=True,
-        id=1,
-        ordered=False,
-    )
 
-    audio_track = QueuedAudioStreamTrack()
-    peer_connection.addTrack(audio_track)
-    session = MobileVoiceSession(device_id, device_cfg, audio_track)
-    session.attach_transcripts_channel(transcripts_channel)
 
-    @transcripts_channel.on("open")
-    def _on_transcripts_open() -> None:
-        logger.debug("Transcripts channel open for %s", device_id)
+@router.delete("/managed-av/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def close_managed_session(session_id: str) -> Response:
+    """Dispose of conversation state when the managed pipeline ends a session."""
 
-    @transcripts_channel.on("close")
-    def _on_transcripts_close() -> None:
-        logger.debug("Transcripts channel closed for %s", device_id)
-
-    @control_channel.on("open")
-    def _on_control_open() -> None:
-        logger.debug("Control channel open for %s", device_id)
-
-    @control_channel.on("close")
-    def _on_control_close() -> None:
-        logger.debug("Control channel closed for %s", device_id)
-
-    @peer_connection.on("icecandidate")
-    def _on_icecandidate(candidate: Optional[RTCIceCandidate]) -> None:
-        if candidate is None:
-            return
-        payload = {
-            "type": "candidate",
-            "candidate": _serialize_candidate(candidate),
-        }
-        asyncio.create_task(websocket.send_text(json.dumps(payload)))
-
-    inbound_started = False
-
-    @peer_connection.on("track")
-    def _on_track(track) -> None:  # noqa: ANN001 - aiortc callback signature
-        nonlocal inbound_started
-        if track.kind == "audio" and not inbound_started:
-            inbound_started = True
-            logger.debug("Received audio track from %s", device_id)
-            session.attach_incoming_track(track)
-
-    greeting_started = False
+    await _session_store.delete_session(session_id)
 
     try:
-        while True:
-            data = await websocket.receive_text()
-            try:
-                message = json.loads(data)
-            except json.JSONDecodeError:
-                logger.warning("Dropping malformed signaling payload from %s: %s", device_id, data)
-                continue
+        client = _get_managed_client()
+    except Exception:  # noqa: BLE001
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-            mtype = message.get("type")
-            if mtype == "offer":
-                sdp = message.get("sdp")
-                if not isinstance(sdp, str):
-                    raise ValueError("offer missing sdp")
-                offer = RTCSessionDescription(sdp=sdp, type="offer")
-                await peer_connection.setRemoteDescription(offer)
-                answer = await peer_connection.createAnswer()
-                await peer_connection.setLocalDescription(answer)
-                response = {
-                    "type": "answer",
-                    "sdp": peer_connection.localDescription.sdp,
-                }
-                await websocket.send_text(json.dumps(response))
-                if not greeting_started:
-                    greeting_started = True
-                    await session.start()
-            elif mtype == "candidate":
-                candidate_payload = message.get("candidate") or {}
-                candidate_str = candidate_payload.get("candidate")
-                if candidate_str:
-                    index = candidate_payload.get("sdpMLineIndex")
-                    if isinstance(index, str) and index.isdigit():
-                        index = int(index)
-                    rtc_candidate = RTCIceCandidate(
-                        sdpMid=candidate_payload.get("sdpMid"),
-                        sdpMLineIndex=index,
-                        candidate=candidate_str,
-                    )
-                    await peer_connection.addIceCandidate(rtc_candidate)
-            elif mtype == "bye":
-                await websocket.close()
+    await client.close_session(session_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _generate_response(
+    agent_cfg: Dict[str, Any],
+    messages: list[Dict[str, Any]],
+    user_text: str,
+) -> tuple[str, Optional[str], bool]:
+    """Stream a response from the agent, capturing hold/reset markers."""
+
+    responses: list[str] = []
+    hold_text: Optional[str] = None
+    reset_requested = False
+
+    async for chunk in stream_response(user_text, agent_cfg, messages):
+        if isinstance(chunk, dict):
+            marker_type = chunk.get("type")
+            if marker_type == "tool_executing" and hold_text is None:
+                hold_text = "Give me a moment while I work on that."
+            elif marker_type == "reset_conversation":
+                reset_requested = True
+                reset_message = chunk.get("message") or "Conversation reset."
+                responses = [reset_message]
                 break
-            else:
-                logger.debug("Unhandled signaling message type %s from %s", mtype, device_id)
-    except WebSocketDisconnect:
-        logger.info("Voice signaling socket for %s closed", device_id)
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.exception("Error in voice signaling handler for %s: %s", device_id, exc)
-        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
-    finally:
-        await session.close()
-        await peer_connection.close()
+            continue
+
+        responses.append(chunk)
+
+    response_text = "".join(responses).strip()
+    return response_text, hold_text, reset_requested
 
 
-__all__ = ["router", "ws_router"]
+__all__ = ["router"]
