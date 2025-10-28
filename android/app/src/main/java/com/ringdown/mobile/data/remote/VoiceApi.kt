@@ -15,20 +15,12 @@ data class VoiceSessionRequest(
 )
 
 data class VoiceSessionResponse(
-    @Json(name = "clientSecret") val clientSecret: String,
-    @Json(name = "expiresAt") val expiresAt: String,
+    @Json(name = "sessionId") val sessionId: String,
     @Json(name = "agent") val agent: String,
-    @Json(name = "model") val model: String,
-    @Json(name = "voice") val voice: String?,
-    @Json(name = "session") val session: Map<String, Any>?,
-    @Json(name = "turnDetection") val turnDetection: Map<String, Any>?,
-    @Json(name = "iceServers") val iceServers: List<IceServerResponse>?,
-    @Json(name = "transcriptsChannel") val transcriptsChannel: String,
-    @Json(name = "controlChannel") val controlChannel: String,
-)
-
-data class IceServerResponse(
-    @Json(name = "urls") val urls: List<String>?,
-    @Json(name = "username") val username: String?,
-    @Json(name = "credential") val credential: String?,
+    @Json(name = "roomUrl") val roomUrl: String,
+    @Json(name = "accessToken") val accessToken: String,
+    @Json(name = "expiresAt") val expiresAt: String,
+    @Json(name = "pipelineSessionId") val pipelineSessionId: String?,
+    @Json(name = "greeting") val greeting: String?,
+    @Json(name = "metadata") val metadata: Map<String, Any?>?,
 )

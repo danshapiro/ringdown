@@ -33,7 +33,7 @@ class ManagedAVClient:
         *,
         base_url: str,
         api_key: str,
-        pipeline_handle: str,
+        agent_name: str,
         session_ttl_seconds: int,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -41,12 +41,12 @@ class ManagedAVClient:
             raise ValueError("base_url is required for ManagedAVClient")
         if not api_key:
             raise ValueError("api_key is required for ManagedAVClient")
-        if not pipeline_handle:
-            raise ValueError("pipeline_handle is required for ManagedAVClient")
+        if not agent_name:
+            raise ValueError("agent_name is required for ManagedAVClient")
 
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
-        self._pipeline_handle = pipeline_handle
+        self._agent_name = agent_name
         self._session_ttl_seconds = session_ttl_seconds
         self._metadata = metadata or {}
 
@@ -60,34 +60,38 @@ class ManagedAVClient:
     ) -> ManagedAVSession:
         """Request a new managed session for the given device/agent."""
 
-        payload: Dict[str, Any] = {
-            "pipelineHandle": self._pipeline_handle,
-            "agent": agent_name,
+        body_payload: Dict[str, Any] = {
             "device": {
                 "id": device_id,
                 "metadata": device_metadata or {},
             },
             "sessionTtlSeconds": self._session_ttl_seconds,
-            "metadata": self._metadata,
         }
         if greeting:
-            payload["greeting"] = greeting
+            body_payload["greeting"] = greeting
+        if self._metadata:
+            body_payload["metadata"] = self._metadata
+
+        request_payload: Dict[str, Any] = {
+            "createDailyRoom": True,
+            "body": body_payload,
+        }
 
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
             response = await client.post(
-                f"{self._base_url}/sessions",
-                json=payload,
+                f"{self._base_url}/{self._agent_name}/start",
+                json=request_payload,
                 headers=self._headers(),
             )
         response.raise_for_status()
         data = response.json()
 
         session_id = _require_str(data, "sessionId")
-        room_url = _require_str(data, "roomUrl")
-        access_token = _require_str(data, "accessToken")
-        agent = data.get("agent") or agent_name
-        pipeline_session_id = data.get("pipelineSessionId")
-        greeting_response = data.get("greeting") or greeting
+        agent = data.get("agentName") or agent_name
+
+        room_url = _coerce_room_url(data.get("dailyRoom"))
+        access_token = _coerce_meeting_token(data.get("dailyMeetingToken") or data.get("dailyToken"))
+
         metadata = data.get("metadata") or {}
 
         expires_at = _parse_expiry(data.get("expiresAt"), self._session_ttl_seconds)
@@ -98,8 +102,8 @@ class ManagedAVClient:
             room_url=room_url,
             access_token=access_token,
             expires_at=expires_at,
-            pipeline_session_id=pipeline_session_id,
-            greeting=greeting_response,
+            pipeline_session_id=session_id,
+            greeting=greeting,
             metadata=metadata if isinstance(metadata, dict) else {},
         )
 
@@ -112,8 +116,7 @@ class ManagedAVClient:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
             try:
                 response = await client.delete(
-                    f"{self._base_url}/sessions/{session_id}",
-                    json={"pipelineHandle": self._pipeline_handle},
+                    f"{self._base_url}/agents/{self._agent_name}/sessions/{session_id}",
                     headers=self._headers(),
                 )
                 # Consider 404 as already closed.
@@ -137,6 +140,26 @@ def _require_str(data: Dict[str, Any], key: str) -> str:
     return value
 
 
+def _coerce_room_url(room_payload: Any) -> str:
+    if isinstance(room_payload, str) and room_payload:
+        return room_payload
+    if isinstance(room_payload, dict):
+        candidate = room_payload.get("url")
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    raise ValueError("Managed A/V response missing Daily room URL")
+
+
+def _coerce_meeting_token(token_payload: Any) -> str:
+    if isinstance(token_payload, str) and token_payload:
+        return token_payload
+    if isinstance(token_payload, dict):
+        candidate = token_payload.get("token") or token_payload.get("value")
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    raise ValueError("Managed A/V response missing Daily access token")
+
+
 def _parse_expiry(expires_at: Any, ttl_seconds: int) -> datetime:
     if isinstance(expires_at, str) and expires_at:
         try:
@@ -150,4 +173,3 @@ def _parse_expiry(expires_at: Any, ttl_seconds: int) -> datetime:
 
     ttl = max(ttl_seconds, 60)
     return datetime.now(timezone.utc) + timedelta(seconds=ttl)
-

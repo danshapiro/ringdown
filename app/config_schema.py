@@ -143,8 +143,8 @@ class MobileManagedAVConfig(BaseModel):
 
     provider: str = Field(..., min_length=1)
     api_base_url: str = Field(..., alias="apiBaseUrl", min_length=1)
-    pipeline_handle: str = Field(..., alias="pipelineHandle", min_length=1)
-    room_domain: str = Field(..., alias="roomDomain", min_length=1)
+    agent_name: str = Field(..., alias="agentName", min_length=1)
+    room_domain: str | None = Field(default=None, alias="roomDomain")
     session_ttl_seconds: int = Field(600, ge=60, le=7200, alias="sessionTtlSeconds")
     metadata: Dict[str, Any] = Field(default_factory=dict)
 

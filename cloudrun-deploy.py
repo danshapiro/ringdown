@@ -800,9 +800,9 @@ def deploy(
         "--allow-unauthenticated",
     ]
     if env_flag:
-        cmd_parts.append(f"--set-env-vars {env_flag}")
+        cmd_parts.append(f"--set-env-vars={env_flag}")
     if secrets_flag:
-        cmd_parts.append(f"--update-secrets {secrets_flag}")
+        cmd_parts.append(f"--update-secrets={secrets_flag}")
 
     _run_cmd(" ".join(cmd_parts), capture=False)
 
@@ -949,7 +949,13 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = parser.parse_args(argv)
 
     global _AUTO_APPROVE
-    _AUTO_APPROVE = args.yes
+    assume_yes_env = os.environ.get("CLOUDRUN_DEPLOY_ASSUME_YES")
+    if assume_yes_env is None:
+        assume_yes = True
+    else:
+        assume_yes = assume_yes_env.strip().lower() in {"1", "true", "yes", "y"}
+
+    _AUTO_APPROVE = bool(args.yes or assume_yes or not sys.stdin.isatty())
 
     print("[cloudrun-deploy] resolving project id...")
     project_id = (
@@ -1218,7 +1224,12 @@ def _confirm_once(message: str) -> None:
     CI/DEPLOY_AUTO_APPROVE environment variables.
     """
 
-    if _AUTO_APPROVE or os.environ.get("CI") or os.environ.get("DEPLOY_AUTO_APPROVE"):
+    if (
+        _AUTO_APPROVE
+        or os.environ.get("CI")
+        or os.environ.get("DEPLOY_AUTO_APPROVE")
+        or not sys.stdin.isatty()
+    ):
         return
 
     try:

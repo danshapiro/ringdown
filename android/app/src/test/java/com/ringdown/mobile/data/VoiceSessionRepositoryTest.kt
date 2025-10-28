@@ -1,7 +1,6 @@
 package com.ringdown.mobile.data
 
 import com.google.common.truth.Truth.assertThat
-import com.ringdown.mobile.data.remote.IceServerResponse
 import com.ringdown.mobile.data.remote.VoiceApi
 import com.ringdown.mobile.data.remote.VoiceSessionRequest
 import com.ringdown.mobile.data.remote.VoiceSessionResponse
@@ -27,33 +26,29 @@ class VoiceSessionRepositoryTest {
         val api = object : VoiceApi {
             override suspend fun createVoiceSession(payload: VoiceSessionRequest): VoiceSessionResponse {
                 return VoiceSessionResponse(
-                    clientSecret = "secret-value",
-                    expiresAt = "2025-10-25T12:00:00Z",
+                    sessionId = "session-123",
                     agent = payload.agent ?: "agent-a",
-                    model = "gpt-4o-realtime-preview",
-                    voice = "alloy",
-                    session = emptyMap(),
-                    turnDetection = mapOf("type" to "server_vad"),
-                    iceServers = listOf(
-                        IceServerResponse(
-                            urls = listOf("stun:stun.test:3478"),
-                            username = null,
-                            credential = null,
-                        ),
+                    roomUrl = "https://daily.example.com/room",
+                    accessToken = "token-xyz",
+                    expiresAt = "2025-10-25T12:00:00Z",
+                    pipelineSessionId = "pipeline-1",
+                    greeting = "Hello",
+                    metadata = mapOf(
+                        "pipelineSessionId" to "pipeline-1",
+                        "notes" to "demo",
                     ),
-                    transcriptsChannel = "ringdown-transcripts",
-                    controlChannel = "ringdown-control",
                 )
             }
         }
 
         val repository = VoiceSessionRepository(api, dispatcherRule.dispatcher)
-        val bootstrap = repository.createSession("device-1", "agent-a")
+        val session = repository.createSession("device-1", "agent-a")
 
-        assertThat(bootstrap.clientSecret).isEqualTo("secret-value")
-        assertThat(bootstrap.model).isEqualTo("gpt-4o-realtime-preview")
-        assertThat(bootstrap.iceServers).hasSize(1)
-        assertThat(bootstrap.iceServers[0].urls).containsExactly("stun:stun.test:3478")
-        assertThat(bootstrap.turnDetection).containsEntry("type", "server_vad")
+        assertThat(session.sessionId).isEqualTo("session-123")
+        assertThat(session.agent).isEqualTo("agent-a")
+        assertThat(session.roomUrl).isEqualTo("https://daily.example.com/room")
+        assertThat(session.accessToken).isEqualTo("token-xyz")
+        assertThat(session.pipelineSessionId).isEqualTo("pipeline-1")
+        assertThat(session.metadata).containsAtLeastEntriesIn(mapOf("notes" to "demo"))
     }
 }

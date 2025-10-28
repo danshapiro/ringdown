@@ -105,6 +105,17 @@ python -m utils.websocket_smoke --url wss://<your-cloud-run-host>/ws --receive 3
 ```
 Listen for the greeting and ensure the call summary appears in your logs.
 
+### Managed A/V API key (Daily Pipecat)
+The Android client now depends on Daily's managed A/V pipeline. To generate the `PIPECAT_API_KEY` used by the backend and deployment flow:
+
+1. Sign in to https://dashboard.daily.co with the account that owns the Ringdown pipelines.
+2. Open https://pipecat.daily.co (same Daily credentials) and note the **Agent name** for the Ringdown pipeline (Agents → choose the deployment). This name is the `{agentName}` used by the Pipecat Cloud REST API and must match the `agent_name` field in `config.yaml` (for production we currently use `phone-danbot-agent`).
+3. In the Daily dashboard, navigate to **Developers → Tokens** and click **Generate token**.
+4. Copy the token and store it in 1Password or your preferred secrets manager – it will not be shown again.
+5. On your development machine either add `PIPECAT_API_KEY=<token>` to your local `.env` file (preferred) or export it in the shell (`setx PIPECAT_API_KEY "<token>"` in PowerShell, `export PIPECAT_API_KEY=<token>` in bash/zsh) so the deploy script can read it.
+6. When you run `cloudrun-deploy.py`, the helper reads `.env` automatically (via `python-dotenv`) and will upload the key into Google Secret Manager (`ringdown-managed-av-key`), wiring it into Cloud Run as the `PIPECAT_API_KEY` env var.
+7. After the first successful deploy, the mobile client should move past the “approval required” dialog and reach the new managed transport.
+
 ## Technical Details
 - Architecture: Twilio ConversationRelay streams audio to FastAPI over `/ws`, and the app routes messages through LiteLLM, SQLite conversation memory, and any tools you enabled.
 - Configuration: Override `RINGDOWN_CONFIG_PATH` to swap between “workday” and “weekend” personalities without editing files.

@@ -20,7 +20,7 @@ from app.mobile.config_store import ensure_device_entry
 from app.memory import log_turn
 
 DEFAULT_POLL_AFTER_SECONDS = 5
-MANAGED_AV_API_KEY_ENV = "MANAGED_AV_API_KEY"
+PIPECAT_API_KEY_ENV = "PIPECAT_API_KEY"
 ANDROID_MANAGED_SOURCE = "android-managed-av"
 
 router = APIRouter(prefix="/v1/mobile", tags=["mobile"])
@@ -106,15 +106,15 @@ def _get_managed_client() -> ManagedAVClient:
         return _managed_client
 
     cfg = settings.get_mobile_managed_av_config()
-    api_key = os.getenv(MANAGED_AV_API_KEY_ENV)
+    api_key = os.getenv(PIPECAT_API_KEY_ENV)
     if not api_key:
-        raise RuntimeError(f"{MANAGED_AV_API_KEY_ENV} must be configured")
+        raise RuntimeError(f"{PIPECAT_API_KEY_ENV} must be configured")
 
     metadata = cfg.get("metadata")
     _managed_client = ManagedAVClient(
         base_url=str(cfg.get("api_base_url")),
         api_key=api_key,
-        pipeline_handle=str(cfg.get("pipeline_handle")),
+        agent_name=str(cfg.get("agent_name")),
         session_ttl_seconds=int(cfg.get("session_ttl_seconds", 600)),
         metadata=metadata if isinstance(metadata, dict) else {},
     )
@@ -155,8 +155,8 @@ async def register_device(payload: MobileRegisterRequest) -> MobileRegisterRespo
     if not device_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid deviceId")
 
-    if not os.getenv(MANAGED_AV_API_KEY_ENV):
-        logger.error("%s missing while registering device %s", MANAGED_AV_API_KEY_ENV, device_id)
+    if not os.getenv(PIPECAT_API_KEY_ENV):
+        logger.error("%s missing while registering device %s", PIPECAT_API_KEY_ENV, device_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"{MANAGED_AV_API_KEY_ENV} is required for voice calls.",

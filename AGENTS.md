@@ -41,6 +41,7 @@ Instead of performing these actions, only recommend them, and have the user conf
 - **Instrumentation toggles:** to force the fake transport during tests set `DebugFeatureFlags.overrideVoiceTransportStub(true)`—handled automatically by the existing `VoiceMvpSuite`; no manual changes needed when running the suite.
 - **Mobile MCP deploy:** `bash android/scripts/install.sh --device $ANDROID_SERIAL` deploys the latest debug APK; ensure `uv run pytest tests` is clean before pushing to devices.
 - Connected suite: on WSL/macOS run `bash android/scripts/gradle.sh :app:connectedVoiceMvpAndroidTest` (installs APKs and drives instrumentation via `adb`, so set `ANDROID_SERIAL` if multiple devices are attached); on Windows PowerShell use `./gradlew.bat :app:connectedVoiceMvpAndroidTest`. Keep the resulting debug APK installed for manual QA.
+- **Gradle on Windows:** `android/local.properties` must point to `D:/Users/Dan/GoogleDrivePersonal/code/ringdown/android/.android-sdk` and `.jdk`. Before invoking Gradle, run `$env:JAVA_HOME = 'D:/Users/Dan/GoogleDrivePersonal/code/ringdown/android/.jdk'; Set-Location android; ./gradlew.bat <task>`. If `aapt.exe` is missing, reinstall build tools with `cmd /c "echo y | $((Join-Path $env:ANDROID_SDK_ROOT 'cmdline-tools/latest.win/bin/sdkmanager.bat')) --sdk_root=$env:ANDROID_SDK_ROOT build-tools;34.0.0"`.
 
 ### Deployment (Cloud Run)
 - From the repo root, activate the matching virtual environment (`.venv` on PowerShell/CMD, `.venv-wsl` on bash).
