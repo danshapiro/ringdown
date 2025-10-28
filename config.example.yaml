@@ -165,6 +165,7 @@ mobile_devices: {}
 mobile_managed_av:
   provider: daily
   api_base_url: https://api.daily.co/v1
+  agent_name: phone-danbot-agent
   pipeline_handle: ringdown-pipecat
   room_domain: ringdown.daily.co
   session_ttl_seconds: 600
