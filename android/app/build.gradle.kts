@@ -286,10 +286,9 @@ tasks.register("connectedVoiceMvpAndroidTest") {
 
         val debugApkPath = debugApk.get().asFile.toAdbPath()
         val androidTestApkPath = androidTestApk.get().asFile.toAdbPath()
-
         execAdb("install", "-r", debugApkPath)
         execAdb("install", "-r", "-t", androidTestApkPath)
-        execAdb("shell", "am", "force-stop", "com.ringdown.mobile")
+        execAdb("shell", "am", "force-stop", "${android.defaultConfig.applicationId}.debug")
 
         val instrumentationArgPrefix = "android.testInstrumentationRunnerArguments."
         val instrumentationArgs = project.properties

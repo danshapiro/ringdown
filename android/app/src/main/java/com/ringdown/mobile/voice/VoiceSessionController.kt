@@ -6,6 +6,7 @@ import co.daily.model.CallState
 import com.ringdown.mobile.data.VoiceSessionDataSource
 import com.ringdown.mobile.domain.ManagedVoiceSession
 import com.ringdown.mobile.di.IoDispatcher
+import com.ringdown.mobile.di.MainDispatcher
 import com.squareup.moshi.Json
 import com.squareup.moshi.Moshi
 import java.time.Duration
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val TAG = "VoiceSession"
 
@@ -49,6 +51,7 @@ class VoiceSessionController @Inject constructor(
     private val callClientFactory: VoiceCallClientFactory,
     private val moshi: Moshi,
     @IoDispatcher dispatcher: CoroutineDispatcher,
+    @MainDispatcher private val mainDispatcher: CoroutineDispatcher,
     @javax.inject.Named("voiceCallMinRefreshLead") private val minRefreshLead: Duration,
     private val nowProvider: InstantProvider,
 ) : VoiceSessionGateway {
@@ -110,8 +113,10 @@ class VoiceSessionController @Inject constructor(
 
         val listener = buildListener()
         callListener = listener
-        val client = callClientFactory.create().also {
-            it.attachListener(listener)
+        val client = withContext(mainDispatcher) {
+            callClientFactory.create().also {
+                it.attachListener(listener)
+            }
         }
         callClient = client
 
@@ -120,7 +125,9 @@ class VoiceSessionController @Inject constructor(
             "Joining Daily session ${session.sessionId} for agent=${session.agent} pipeline=${session.pipelineSessionId ?: "unknown"}",
         )
 
-        joinSession(client, session)
+        withContext(mainDispatcher) {
+            joinSession(client, session)
+        }
         scheduleRefresh(session)
     }
 
@@ -218,7 +225,9 @@ class VoiceSessionController @Inject constructor(
                 establishCall(newSession)
             } else {
                 Log.i(TAG, "Attempting token refresh re-join")
-                joinSession(client, newSession)
+                withContext(mainDispatcher) {
+                    joinSession(client, newSession)
+                }
                 scheduleRefresh(newSession)
             }
         } catch (error: Exception) {
@@ -232,32 +241,34 @@ class VoiceSessionController @Inject constructor(
     }
 
     private suspend fun teardownClient() {
-        val listener = callListener
-        if (listener != null) {
+        withContext(mainDispatcher) {
+            val listener = callListener
+            if (listener != null) {
+                try {
+                    callClient?.detachListener(listener)
+                } catch (error: Exception) {
+                    Log.w(TAG, "Error removing Daily listener", error)
+                }
+            }
+
             try {
-                callClient?.detachListener(listener)
+                callClient?.leave {
+                    // ignore
+                }
             } catch (error: Exception) {
-                Log.w(TAG, "Error removing Daily listener", error)
+                Log.w(TAG, "Error leaving Daily call", error)
             }
-        }
 
-        try {
-            callClient?.leave {
-                // ignore
+            try {
+                callClient?.release()
+            } catch (error: Exception) {
+                Log.w(TAG, "Error releasing Daily resources", error)
             }
-        } catch (error: Exception) {
-            Log.w(TAG, "Error leaving Daily call", error)
-        }
 
-        try {
-            callClient?.release()
-        } catch (error: Exception) {
-            Log.w(TAG, "Error releasing Daily resources", error)
+            callClient = null
+            callListener = null
+            currentSession = null
         }
-
-        callClient = null
-        callListener = null
-        currentSession = null
     }
 
     private fun handleTranscriptPayload(raw: String) {
