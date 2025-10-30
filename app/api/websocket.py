@@ -27,7 +27,6 @@ from app.metrics import METRIC_MESSAGES
 from app.pricing import calculate_llm_cost, estimate_twilio_cost
 from app.settings import get_agent_config
 from app.validators import is_from_twilio
-from app.mobile.realtime import mirror_assistant_turn
 
 router = APIRouter()
 
@@ -814,17 +813,6 @@ async def websocket_endpoint(ws: WebSocket):
                     assistant_text = "".join(assistant_full)
 
                     if assistant_text:
-                        realtime_ctx = ws.scope.get("realtime_bridge") or {}
-                        call_id = ws.scope.get("call_sid")
-                        if realtime_ctx.get("realtime_session_id") and call_id:
-                            try:
-                                await mirror_assistant_turn(call_id, assistant_text, voice_name)
-                            except Exception as exc:  # noqa: BLE001
-                                logger.exception(
-                                    "Failed to mirror assistant turn to realtime session for call %s: %s",
-                                    call_id,
-                                    exc,
-                                )
                         await run_in_threadpool(log_turn, "bot", assistant_text)
 
                     # Persist state if enabled

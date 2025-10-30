@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import pytest
 import yaml
@@ -62,8 +62,15 @@ class StubManagedClient:
         agent_name: str,
         greeting: str | None,
         device_metadata: dict | None,
+        session_metadata: dict | None = None,
     ) -> ManagedAVSession:
         self.calls.append((device_id, agent_name))
+        combined_metadata: dict[str, Any] = {}
+        if device_metadata:
+            combined_metadata.update(device_metadata)
+        if session_metadata:
+            combined_metadata.update(session_metadata)
+
         return ManagedAVSession(
             session_id="session-abc",
             agent=agent_name,
@@ -72,7 +79,7 @@ class StubManagedClient:
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
             pipeline_session_id="pipeline-session",
             greeting=greeting,
-            metadata=device_metadata or {},
+            metadata=combined_metadata,
         )
 
     async def close_session(self, session_id: str) -> None:

@@ -1,0 +1,35 @@
+version: 1
+defaults:
+  agent_name: phone-danbot-agent
+  image: py-pipecat-base:0.1.0
+  autoscaling:
+    min_instances: 1
+    max_instances: 3
+  lite_llm:
+    master_key_secret: RINGDOWN_LITELLM_MASTER_KEY
+    default_model: claude-3-5-sonnet
+    provider_allowlist:
+      - anthropic
+      - openai
+      - google
+      - deepgram
+pipelines:
+  - environment: staging
+    handle_secret: RINGDOWN_PIPELINE_HANDLE_STAGING
+    metadata:
+      environment: staging
+      product: ringdown
+      session_ttl_seconds: 600
+    autoscaling:
+      min_instances: 1
+      max_instances: 2
+
+  - environment: production
+    handle_secret: RINGDOWN_PIPELINE_HANDLE_PRODUCTION
+    metadata:
+      environment: production
+      product: ringdown
+      session_ttl_seconds: 900
+    autoscaling:
+      min_instances: 2
+      max_instances: 6

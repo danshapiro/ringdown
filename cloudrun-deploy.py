@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import datetime as _dt
 import logging
 import os
@@ -635,8 +636,8 @@ def deploy(
     extra_args: Optional[List[str]] = None,
     labels: Optional[List[str]] = None,
     secret_config: Optional[Path] = None,
-) -> None:
-    """Build, push and deploy the service to Cloud Run."""
+) -> str:
+    """Build, push and deploy the service to Cloud Run. Returns the service URL."""
 
     env_overrides = env_overrides or set()
 
@@ -809,6 +810,7 @@ def deploy(
     url = _run_cmd(
         f"gcloud run services describe {service} --region {region} --format \"value(status.url)\""
     )
+    url = url.strip()
     log.info("Deployed to: %s", url)
 
     # ------------------------------------------------------------------
@@ -870,6 +872,8 @@ def deploy(
     # 6. Switch back ----------------------------------------------------------
     if original_branch != deploy_branch:
         _git_checkout(original_branch)
+
+    return url
 
 
 ###############################################################################
@@ -992,7 +996,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     print("[cloudrun-deploy] starting deploy...")
     secret_config_path = Path(args.secret_config).expanduser() if args.secret_config else None
 
-    deploy(
+    service_url = deploy(
         project_id=project_id,
         region=args.region,
         service=args.service,
@@ -1011,6 +1015,34 @@ def main(argv: Optional[List[str]] = None) -> None:
     # Print completion time in Pacific Time
     pt_time = _dt.datetime.now(ZoneInfo("America/Los_Angeles"))
     print(f"Deployment completed at {pt_time:%Y-%m-%d %H:%M:%S %Z}")
+
+    mobile_device_id = os.environ.get("LIVE_TEST_MOBILE_DEVICE_ID")
+    if mobile_device_id:
+        base_url = service_url.rstrip("/")
+        print("[cloudrun-deploy] running managed A/V smoke test...")
+        try:
+            from app.mobile.smoke import SmokeTestError, run_remote_smoke
+
+            result = asyncio.run(
+                run_remote_smoke(
+                    base_url=base_url,
+                    device_id=mobile_device_id,
+                    prompt_text="Deployment validation ping.",
+                    timeout=30.0,
+                )
+            )
+        except (SmokeTestError, Exception) as exc:  # noqa: BLE001
+            raise SystemExit(f"Managed A/V smoke test failed: {exc}") from exc
+        else:
+            print(
+                f"[cloudrun-deploy] managed A/V smoke test succeeded "
+                f"(session {result.session_id}, response='{result.response_text[:60]}...')."
+            )
+    else:
+        print(
+            "[cloudrun-deploy] skipping managed A/V smoke test "
+            "(LIVE_TEST_MOBILE_DEVICE_ID not set)."
+        )
 
 
 ###############################################################################

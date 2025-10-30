@@ -32,6 +32,7 @@ import os
 from pathlib import Path
 from typing import List
 
+import asyncio
 import click
 
 # Ensure project root is on PYTHONPATH regardless of invocation location
@@ -48,7 +49,9 @@ from live_test_call import (
     DEFAULT_SERVICE_REGION,
     DEFAULT_PROJECT_ID,
     DEFAULT_TO_NUMBER,
+    _run_cmd,
 )
+from app.mobile.smoke import run_remote_smoke, SmokeTestError
 PROMPTS: List[str] = [
     # Change model (must be first)
     "Switch your model to gpt five mini.",
@@ -73,6 +76,11 @@ PROMPTS: List[str] = [
 @click.option("--log-model", default="gpt-5", help="Model to use for log evaluation (default: gpt-5)")
 @click.option("--debug", is_flag=True, help="Enable verbose debug output")
 @click.option("--no-logs", is_flag=True, help="Disable Cloud Run log retrieval")
+@click.option(
+    "--mobile-device-id",
+    default=None,
+    help="Managed A/V device id for the Pipecat smoke test (defaults to LIVE_TEST_MOBILE_DEVICE_ID).",
+)
 def main(
     to_number: str,
     silence_timeout: int,
@@ -82,6 +90,7 @@ def main(
     log_model: str,
     debug: bool,
     no_logs: bool,
+    mobile_device_id: str | None,
 ):
     """Run the full-stack integration call.
 
@@ -142,6 +151,46 @@ def main(
         click.echo(analysis)
     elif evaluate_logs:
         click.echo("⚠️  Log evaluation requested but no logs were captured.")
+
+    resolved_device_id = mobile_device_id or os.environ.get("LIVE_TEST_MOBILE_DEVICE_ID")
+    if resolved_device_id:
+        try:
+            base_url = os.environ.get("LIVE_TEST_BASE_URL")
+            if not base_url:
+                if not (DEFAULT_SERVICE_NAME and DEFAULT_SERVICE_REGION and DEFAULT_PROJECT_ID):
+                    raise click.ClickException(
+                        "Unable to resolve Cloud Run service for managed A/V smoke test."
+                    )
+                cmd = (
+                    "gcloud run services describe "
+                    f"{DEFAULT_SERVICE_NAME} "
+                    f"--region {DEFAULT_SERVICE_REGION} "
+                    f"--project {DEFAULT_PROJECT_ID} "
+                    '--format="value(status.url)"'
+                )
+                base_url = _run_cmd(cmd)
+
+            base_url = (base_url or "").strip().rstrip("/")
+            if not base_url:
+                click.echo("!! Skipping managed A/V smoke test: service URL unavailable.")
+            else:
+                click.echo(">> Running managed A/V mobile smoke test ...")
+                result = asyncio.run(
+                    run_remote_smoke(
+                        base_url=base_url,
+                        device_id=resolved_device_id,
+                        prompt_text="Managed A/V live smoke verification.",
+                        timeout=30.0,
+                    )
+                )
+                preview = (result.response_text or "")[:60]
+                click.echo(
+                    f">> Managed A/V smoke test succeeded (session {result.session_id}, response '{preview}...')."
+                )
+        except (SmokeTestError, Exception) as exc:  # noqa: BLE001
+            raise click.ClickException(f"Managed A/V smoke test failed: {exc}") from exc
+    else:
+        click.echo("!! Skipping managed A/V smoke test: LIVE_TEST_MOBILE_DEVICE_ID not provided.")
 
 
 if __name__ == "__main__":

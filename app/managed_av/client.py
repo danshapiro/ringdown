@@ -57,6 +57,7 @@ class ManagedAVClient:
         agent_name: str,
         greeting: Optional[str],
         device_metadata: Optional[Dict[str, Any]],
+        session_metadata: Optional[Dict[str, Any]] = None,
     ) -> ManagedAVSession:
         """Request a new managed session for the given device/agent."""
 
@@ -69,8 +70,14 @@ class ManagedAVClient:
         }
         if greeting:
             body_payload["greeting"] = greeting
-        if self._metadata:
-            body_payload["metadata"] = self._metadata
+
+        merged_metadata: Dict[str, Any] = {}
+        if isinstance(self._metadata, dict) and self._metadata:
+            merged_metadata.update(self._metadata)
+        if session_metadata:
+            merged_metadata.update(session_metadata)
+        if merged_metadata:
+            body_payload["metadata"] = merged_metadata
 
         request_payload: Dict[str, Any] = {
             "createDailyRoom": True,
@@ -92,9 +99,23 @@ class ManagedAVClient:
         room_url = _coerce_room_url(data.get("dailyRoom"))
         access_token = _coerce_meeting_token(data.get("dailyMeetingToken") or data.get("dailyToken"))
 
-        metadata = data.get("metadata") or {}
+        response_metadata = data.get("metadata")
+        combined_metadata: Dict[str, Any] = {}
+        if merged_metadata:
+            combined_metadata.update(merged_metadata)
+        if isinstance(response_metadata, dict):
+            combined_metadata.update(response_metadata)
 
         expires_at = _parse_expiry(data.get("expiresAt"), self._session_ttl_seconds)
+
+        pipeline_session_id = data.get("pipelineSessionId") or data.get("pipeline_session_id")
+        if isinstance(pipeline_session_id, str) and pipeline_session_id.strip():
+            pipeline_session_id = pipeline_session_id.strip()
+        else:
+            pipeline_session_id = session_id
+        if pipeline_session_id and "pipeline_session_id" not in combined_metadata:
+            combined_metadata = dict(combined_metadata)
+            combined_metadata["pipeline_session_id"] = pipeline_session_id
 
         return ManagedAVSession(
             session_id=session_id,
@@ -102,9 +123,9 @@ class ManagedAVClient:
             room_url=room_url,
             access_token=access_token,
             expires_at=expires_at,
-            pipeline_session_id=session_id,
+            pipeline_session_id=pipeline_session_id,
             greeting=greeting,
-            metadata=metadata if isinstance(metadata, dict) else {},
+            metadata=combined_metadata,
         )
 
     async def close_session(self, session_id: str) -> None:
