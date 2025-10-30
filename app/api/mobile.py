@@ -9,7 +9,11 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Response, status
+import base64
+import binascii
+import secrets
+
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import settings
@@ -23,6 +27,10 @@ from app.settings import get_agent_config
 
 DEFAULT_POLL_AFTER_SECONDS = 5
 PIPECAT_API_KEY_ENV = "PIPECAT_API_KEY"
+CONTROL_TOKEN_ENV = "MANAGED_AV_CONTROL_TOKEN"
+CONTROL_AUTH_HEADER = "X-Ringdown-Control-Token"
+CONTROL_KEY_HEADER = "X-Ringdown-Control-Key"
+MAX_CONTROL_AUDIO_BYTES = 2_097_152  # 2 MiB
 ANDROID_MANAGED_SOURCE = "android-managed-av"
 
 router = APIRouter(prefix="/v1/mobile", tags=["mobile"])
@@ -100,6 +108,60 @@ class ManagedAVCompletionResponse(BaseModel):
     reset: bool = False
 
 
+class ManagedAVControlPayload(BaseModel):
+    """Audio payload delivered to the handset for deterministic playback."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    prompt_id: str = Field(..., alias="promptId", min_length=1, max_length=128)
+    audio_base64: str = Field(..., alias="audioBase64", min_length=8)
+    sample_rate_hz: int = Field(..., alias="sampleRateHz", ge=8000, le=48000)
+    channels: int = Field(default=1, ge=1, le=2)
+    format: str = Field(default="pcm16", pattern="^[A-Za-z0-9_-]{3,16}$")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ManagedAVControlEnvelope(ManagedAVControlPayload):
+    """Control payload plus bookkeeping fields returned to the handset."""
+
+    message_id: str = Field(..., alias="messageId", min_length=6, max_length=64)
+    enqueued_at: datetime = Field(..., alias="enqueuedAt")
+
+
+class ManagedAVControlEnqueueRequest(BaseModel):
+    """Harness request for queueing an audio prompt."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId")
+    message: ManagedAVControlPayload
+
+
+class ManagedAVControlEnqueueResponse(BaseModel):
+    """Acknowledgement that the control payload was queued."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    queued: bool = Field(default=True)
+    message_id: str = Field(..., alias="messageId")
+
+
+class ManagedAVControlFetchRequest(BaseModel):
+    """Handset poll request for the next control payload."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId")
+
+
+class ManagedAVControlFetchResponse(BaseModel):
+    """Handset response containing the next control payload, if any."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    message: Optional[ManagedAVControlEnvelope] = None
+
+
 def _get_managed_client() -> ManagedAVClient:
     """Return a cached client for the managed A/V provider."""
 
@@ -121,6 +183,72 @@ def _get_managed_client() -> ManagedAVClient:
         metadata=metadata if isinstance(metadata, dict) else {},
     )
     return _managed_client
+
+
+def _require_control_auth(request: Request) -> None:
+    """Ensure the caller is authorised to enqueue control messages."""
+
+    shared_token = os.getenv(CONTROL_TOKEN_ENV)
+    if not shared_token:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Managed control channel not configured",
+        )
+
+    expected = shared_token.strip()
+    provided = (request.headers.get(CONTROL_AUTH_HEADER) or "").strip()
+    if not provided or not secrets.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid control token",
+        )
+
+
+def _extract_control_key(session: ManagedSessionState) -> Optional[str]:
+    """Return the per-session control key if configured."""
+
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    control = metadata.get("control")
+    if isinstance(control, dict):
+        key = control.get("key")
+        if isinstance(key, str) and key.strip():
+            return key.strip()
+    return None
+
+
+def _validate_control_key(request: Request, session: ManagedSessionState) -> None:
+    """Verify the handset control key supplied by the caller matches the session."""
+
+    expected = _extract_control_key(session)
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Control channel not enabled for this session",
+        )
+
+    provided = (request.headers.get(CONTROL_KEY_HEADER) or "").strip()
+    if not provided or not secrets.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid control key",
+        )
+
+
+def _validate_control_payload(payload: ManagedAVControlPayload) -> None:
+    """Validate the audio payload bounds and encoding."""
+
+    try:
+        audio_bytes = base64.b64decode(payload.audio_base64, validate=True)
+    except (ValueError, binascii.Error):  # type: ignore[name-defined]
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="audioBase64 is not valid base64") from None
+
+    if not audio_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="audioBase64 payload empty")
+    if len(audio_bytes) > MAX_CONTROL_AUDIO_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="audioBase64 exceeds maximum supported size",
+        )
 
 
 def _resolve_greeting(agent_cfg: Dict[str, Any]) -> Optional[str]:
@@ -261,6 +389,13 @@ async def voice_session(payload: MobileVoiceSessionRequest) -> MobileVoiceSessio
             "server_vad": server_vad if isinstance(server_vad, dict) else {},
         },
     }
+    control_key: Optional[str] = None
+    if os.getenv(CONTROL_TOKEN_ENV):
+        control_key = secrets.token_urlsafe(24)
+        session_context["testing"] = {
+            **session_context.get("testing", {}),
+            "control_enabled": True,
+        }
 
     try:
         managed_session = await client.start_session(
@@ -281,6 +416,16 @@ async def voice_session(payload: MobileVoiceSessionRequest) -> MobileVoiceSessio
     if managed_session.pipeline_session_id and "pipeline_session_id" not in session_metadata:
         session_metadata = dict(session_metadata)
         session_metadata["pipeline_session_id"] = managed_session.pipeline_session_id
+    if control_key:
+        session_metadata = dict(session_metadata)
+        control_entry = dict(session_metadata.get("control") or {})
+        control_entry.update(
+            {
+                "key": control_key,
+                "pollPath": "/v1/mobile/managed-av/control/next",
+            }
+        )
+        session_metadata["control"] = control_entry
 
     await _session_store.create_session(
         session_id=managed_session.session_id,
@@ -389,6 +534,56 @@ async def managed_av_completions(payload: ManagedAVCompletionRequest) -> Managed
         hold_text=hold_text,
         reset=reset_requested,
     )
+
+
+@router.post("/managed-av/control", response_model=ManagedAVControlEnqueueResponse, status_code=status.HTTP_202_ACCEPTED)
+async def enqueue_control_message(
+    request: Request,
+    payload: ManagedAVControlEnqueueRequest,
+) -> ManagedAVControlEnqueueResponse:
+    """Queue an audio payload for the handset control channel."""
+
+    _require_control_auth(request)
+    session = await _session_store.get_session(payload.session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    _validate_control_key(request, session)
+    _validate_control_payload(payload.message)
+
+    envelope = payload.message.model_dump(by_alias=True)
+    message_id = secrets.token_urlsafe(16)
+    envelope["messageId"] = message_id
+    envelope["enqueuedAt"] = datetime.now(timezone.utc).isoformat()
+
+    await _session_store.enqueue_control_message(payload.session_id, envelope)
+    return ManagedAVControlEnqueueResponse(message_id=message_id)
+
+
+@router.post("/managed-av/control/next", response_model=ManagedAVControlFetchResponse)
+async def fetch_control_message(
+    request: Request,
+    payload: ManagedAVControlFetchRequest,
+) -> ManagedAVControlFetchResponse:
+    """Return the next queued control payload (if any) for the handset."""
+
+    session = await _session_store.get_session(payload.session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    _validate_control_key(request, session)
+
+    message = await _session_store.dequeue_control_message(payload.session_id)
+    if message is None:
+        return ManagedAVControlFetchResponse(message=None)
+
+    try:
+        envelope = ManagedAVControlEnvelope.model_validate(message)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Invalid control message payload for session %s: %s", payload.session_id, exc)
+        return ManagedAVControlFetchResponse(message=None)
+
+    return ManagedAVControlFetchResponse(message=envelope)
 
 
 @router.delete("/managed-av/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -21,6 +21,7 @@ class ManagedSessionState:
     expires_at: datetime
     metadata: Dict[str, Any] = field(default_factory=dict)
     messages: list[Dict[str, Any]] = field(default_factory=list)
+    control_queue: list[Dict[str, Any]] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def extend(self, ttl_seconds: int) -> None:
@@ -96,6 +97,28 @@ class ManagedAVSessionStore:
         async with self._lock:
             self._sessions.pop(session_id, None)
 
+    async def enqueue_control_message(self, session_id: str, payload: Dict[str, Any]) -> None:
+        """Queue a control payload for delivery to the handset."""
+
+        state = await self.get_session(session_id)
+        if state is None:
+            raise KeyError(f"Managed session '{session_id}' is not active")
+
+        async with state.lock:
+            state.control_queue.append(payload)
+
+    async def dequeue_control_message(self, session_id: str) -> Dict[str, Any] | None:
+        """Return the next queued control payload for *session_id*."""
+
+        state = await self.get_session(session_id)
+        if state is None:
+            return None
+
+        async with state.lock:
+            if not state.control_queue:
+                return None
+            return state.control_queue.pop(0)
+
     async def clear(self) -> None:
         """Remove all sessions (primarily for testing)."""
 
@@ -135,4 +158,3 @@ def _coerce_expiry(
     ttl = ttl_seconds or 0
     ttl = max(ttl, 60)
     return now + timedelta(seconds=ttl)
-

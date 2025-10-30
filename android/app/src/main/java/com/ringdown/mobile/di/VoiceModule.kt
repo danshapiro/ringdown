@@ -6,6 +6,8 @@ import com.ringdown.mobile.voice.DefaultVoiceCallClientFactory
 import com.ringdown.mobile.voice.VoiceSessionController
 import com.ringdown.mobile.voice.VoiceSessionGateway
 import com.ringdown.mobile.voice.VoiceCallClientFactory
+import com.ringdown.mobile.voice.ControlHarness
+import com.ringdown.mobile.voice.DefaultControlHarness
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -33,4 +35,10 @@ abstract class VoiceModule {
     abstract fun bindVoiceSessionDataSource(
         repository: VoiceSessionRepository,
     ): VoiceSessionDataSource
+
+    @Binds
+    @Singleton
+    abstract fun bindControlHarness(
+        harness: DefaultControlHarness,
+    ): ControlHarness
 }

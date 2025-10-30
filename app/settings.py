@@ -63,6 +63,11 @@ class EnvSettings(BaseSettings):
     )
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     live_test_to_number: str | None = Field(default=None, alias="LIVE_TEST_TO_NUMBER")
+    managed_av_control_token: str | None = Field(
+        default=None,
+        alias="MANAGED_AV_CONTROL_TOKEN",
+        description="Shared secret used by handset test harness to enqueue control messages.",
+    )
     sqlite_path: str = "/data/memory.db"
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
 

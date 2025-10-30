@@ -1,12 +1,15 @@
 package com.ringdown.mobile.voice
 
+import android.util.Base64
 import android.util.Log
 import co.daily.CallClientListener
 import co.daily.model.CallState
 import com.ringdown.mobile.data.VoiceSessionDataSource
 import com.ringdown.mobile.domain.ManagedVoiceSession
+import com.ringdown.mobile.domain.ControlMessage
 import com.ringdown.mobile.di.IoDispatcher
 import com.ringdown.mobile.di.MainDispatcher
+import com.ringdown.mobile.BuildConfig
 import com.squareup.moshi.Json
 import com.squareup.moshi.Moshi
 import java.time.Duration
@@ -14,17 +17,20 @@ import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.isActive
 
 private const val TAG = "VoiceSession"
 
@@ -50,6 +56,7 @@ class VoiceSessionController @Inject constructor(
     private val repository: VoiceSessionDataSource,
     private val callClientFactory: VoiceCallClientFactory,
     private val moshi: Moshi,
+    private val controlHarness: ControlHarness,
     @IoDispatcher dispatcher: CoroutineDispatcher,
     @MainDispatcher private val mainDispatcher: CoroutineDispatcher,
     @javax.inject.Named("voiceCallMinRefreshLead") private val minRefreshLead: Duration,
@@ -70,6 +77,7 @@ class VoiceSessionController @Inject constructor(
     private var callClient: VoiceCallClient? = null
     private var callListener: CallClientListener? = null
     private var refreshJob: Job? = null
+    private var controlJob: Job? = null
 
     override fun start(deviceId: String, agent: String?) {
         if (!sessionActive.compareAndSet(false, true)) {
@@ -87,6 +95,7 @@ class VoiceSessionController @Inject constructor(
                 val session = repository.createSession(deviceId, agent)
                 currentSession = session
                 establishCall(session)
+                maybeStartControlLoop(session)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 Log.e(TAG, "Unable to start Daily session", error)
@@ -103,6 +112,7 @@ class VoiceSessionController @Inject constructor(
         }
         scope.launch {
             cancelRefresh()
+            cancelControlLoop()
             teardownClient()
             _state.value = VoiceConnectionState.Idle
         }
@@ -209,6 +219,11 @@ class VoiceSessionController @Inject constructor(
         refreshJob = null
     }
 
+    private fun cancelControlLoop() {
+        controlJob?.cancel()
+        controlJob = null
+    }
+
     private suspend fun attemptTokenRefresh() {
         if (!sessionActive.get()) {
             return
@@ -271,6 +286,51 @@ class VoiceSessionController @Inject constructor(
         }
     }
 
+    private fun maybeStartControlLoop(session: ManagedVoiceSession) {
+        if (!BuildConfig.ENABLE_TEST_CONTROL_HARNESS) {
+            return
+        }
+        val controlKey = resolveControlKey(session.metadata) ?: return
+        cancelControlLoop()
+        controlJob = scope.launch {
+            pollControlLoop(session.sessionId, controlKey)
+        }
+    }
+
+    private suspend fun pollControlLoop(sessionId: String, controlKey: String) {
+        while (coroutineContext.isActive && sessionActive.get()) {
+            try {
+                val message = repository.fetchControlMessage(sessionId, controlKey)
+                if (message == null) {
+                    delay(CONTROL_IDLE_DELAY_MS)
+                    continue
+                }
+                handleControlMessage(message)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.w(TAG, "Control loop error", error)
+                delay(CONTROL_ERROR_DELAY_MS)
+            }
+        }
+    }
+
+    private suspend fun handleControlMessage(message: ControlMessage) {
+        val audioBytes = try {
+            Base64.decode(message.audioBase64, Base64.NO_WRAP)
+        } catch (error: IllegalArgumentException) {
+            Log.w(TAG, "Invalid control audio payload for ${message.promptId}", error)
+            return
+        }
+        controlHarness.handle(message, audioBytes)
+    }
+
+    private fun resolveControlKey(metadata: Map<String, Any?>): String? {
+        val control = metadata["control"] as? Map<*, *> ?: return null
+        val key = control["key"] as? String
+        return key?.takeIf { it.isNotBlank() }?.trim()
+    }
+
     private fun handleTranscriptPayload(raw: String) {
         val payload = try {
             transcriptAdapter.fromJson(raw)
@@ -298,4 +358,9 @@ class VoiceSessionController @Inject constructor(
         @Json(name = "text") val text: String?,
         @Json(name = "timestamp") val timestamp: String?,
     )
+
+    companion object {
+        private const val CONTROL_IDLE_DELAY_MS = 1_000L
+        private const val CONTROL_ERROR_DELAY_MS = 2_000L
+    }
 }

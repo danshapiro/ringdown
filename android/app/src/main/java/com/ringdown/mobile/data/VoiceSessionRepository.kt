@@ -3,6 +3,8 @@ package com.ringdown.mobile.data
 import android.util.Log
 import com.ringdown.mobile.data.remote.VoiceApi
 import com.ringdown.mobile.data.remote.VoiceSessionRequest
+import com.ringdown.mobile.data.remote.ControlFetchRequest
+import com.ringdown.mobile.domain.ControlMessage
 import com.ringdown.mobile.domain.ManagedVoiceSession
 import com.ringdown.mobile.di.IoDispatcher
 import java.time.Instant
@@ -14,6 +16,7 @@ import kotlinx.coroutines.withContext
 
 interface VoiceSessionDataSource {
     suspend fun createSession(deviceId: String, agent: String?): ManagedVoiceSession
+    suspend fun fetchControlMessage(sessionId: String, controlKey: String): ControlMessage?
 }
 
 private const val TAG = "VoiceSessionRepo"
@@ -43,6 +46,29 @@ class VoiceSessionRepository @Inject constructor(
                 pipelineSessionId = response.pipelineSessionId?.takeIf { it.isNotBlank() },
                 metadata = normaliseMetadata(response.metadata),
                 greeting = response.greeting?.takeIf { it.isNotBlank() },
+            )
+        }
+
+    override suspend fun fetchControlMessage(sessionId: String, controlKey: String): ControlMessage? =
+        withContext(dispatcher) {
+            val response = api.fetchControlMessage(
+                controlKey = controlKey,
+                payload = ControlFetchRequest(sessionId = sessionId),
+            )
+            val payload = response.message ?: return@withContext null
+            val audioBase64 = payload.audioBase64?.takeIf { it.isNotBlank() } ?: return@withContext null
+            val promptId = payload.promptId?.takeIf { it.isNotBlank() } ?: return@withContext null
+            val messageId = payload.messageId?.takeIf { it.isNotBlank() } ?: "control-${System.currentTimeMillis()}"
+
+            ControlMessage(
+                messageId = messageId,
+                promptId = promptId,
+                audioBase64 = audioBase64,
+                sampleRateHz = payload.sampleRateHz ?: 16_000,
+                channels = payload.channels ?: 1,
+                format = payload.format?.takeIf { it.isNotBlank() } ?: "pcm16",
+                metadata = payload.metadata ?: emptyMap(),
+                enqueuedAtIso = payload.enqueuedAt,
             )
         }
 

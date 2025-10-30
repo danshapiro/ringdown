@@ -1,6 +1,8 @@
 package com.ringdown.mobile.data
 
 import com.google.common.truth.Truth.assertThat
+import com.ringdown.mobile.data.remote.ControlFetchRequest
+import com.ringdown.mobile.data.remote.ControlFetchResponse
 import com.ringdown.mobile.data.remote.VoiceApi
 import com.ringdown.mobile.data.remote.VoiceSessionRequest
 import com.ringdown.mobile.data.remote.VoiceSessionResponse
@@ -38,6 +40,13 @@ class VoiceSessionRepositoryTest {
                         "notes" to "demo",
                     ),
                 )
+            }
+
+            override suspend fun fetchControlMessage(
+                controlKey: String,
+                payload: ControlFetchRequest,
+            ): ControlFetchResponse {
+                return ControlFetchResponse(message = null)
             }
         }
 

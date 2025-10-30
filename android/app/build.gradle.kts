@@ -81,12 +81,14 @@ android {
         buildConfigField("String", "PRODUCTION_BACKEND_BASE_URL", "\"$productionBackend\"")
         buildConfigField("Boolean", "DEBUG_USE_REGISTRATION_STUB", "${debugStubEnabled}")
         buildConfigField("int", "DEBUG_STUB_APPROVAL_THRESHOLD", "2")
+        buildConfigField("Boolean", "ENABLE_TEST_CONTROL_HARNESS", "false")
     }
 
     buildTypes {
         getByName("debug") {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            buildConfigField("Boolean", "ENABLE_TEST_CONTROL_HARNESS", "true")
         }
         getByName("release") {
             isMinifyEnabled = false

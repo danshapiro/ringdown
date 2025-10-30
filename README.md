@@ -113,7 +113,8 @@ The Android client now depends on Daily's managed A/V pipeline fronted by LiteLL
 3. Generate a Pipecat Cloud token from **Developers -> Tokens** and store it as `PIPECAT_API_KEY`.
 4. Record the Daily pipeline handles for staging and production, then save them as `RINGDOWN_PIPELINE_HANDLE_STAGING` / `RINGDOWN_PIPELINE_HANDLE_PRODUCTION`. The deploy helper uploads them as `ringdown-pipeline-handle-staging` / `ringdown-pipeline-handle-production` secrets so automation can target the right pipeline per environment.
 5. Create a LiteLLM master key and add it as `RINGDOWN_LITELLM_MASTER_KEY`; the declarative spec in `pipelines/daily/ringdown-managed-av.yaml` references this secret.
-6. Run `cloudrun-deploy.py` and the helper will upload everything listed in `secret-manager.yaml`, wiring the environment variables into Cloud Run. After the first deploy, Android devices provision managed sessions without hitting the approval dialog.
+6. For handset audio-loop automation (ringdown-32), generate a shared secret and store it as `MANAGED_AV_CONTROL_TOKEN`. The backend only enables the control channel test harness when this token is present, and the live test harness must supply it via the `X-Ringdown-Control-Token` header.
+7. Run `cloudrun-deploy.py` and the helper will upload everything listed in `secret-manager.yaml`, wiring the environment variables into Cloud Run. After the first deploy, Android devices provision managed sessions without hitting the approval dialog.
 
 ## Android Managed A/V pipeline
 - Configure realtime model, voice, and VAD defaults through the `defaults.realtime` block in `config.yaml`. Agent-specific overrides still live under `agents.<name>.realtime` and are merged automatically when provisioning sessions.
@@ -121,6 +122,7 @@ The Android client now depends on Daily's managed A/V pipeline fronted by LiteLL
 - The Pipecat pipeline posts transcripts to `POST /v1/mobile/managed-av/completions`. The backend streams the agent response via LiteLLM, logs a `mobile_managed_completion` entry (character counts and reset state included), and returns the assistant text plus optional hold/reset hints.
 - When a session ends, Pipecat calls `DELETE /v1/mobile/managed-av/sessions/{session_id}`. The backend performs cleanup, closes the upstream session, and emits `mobile_managed_session_closed` with the pipeline handle for traceability.
 - Smoke automation lives at `android/scripts/run-voice-smoke.sh`. The wrapper exports the correct `UV_PROJECT_ENVIRONMENT` and runs `uv run python -m app.mobile.smoke --device-id <device> --base-url <backend>`, validating session bootstrap, managed completions, and teardown end to end.
+- The handset audio loop harness (`tests/live/handset_audio_loop.py`) enqueues deterministic PCM via the control channel, then uses `adb` to retrieve the handset-captured audio artifact for offline analysis.
 
 ### Pipecat pipeline runbook
 The declarative spec in `pipelines/daily/ringdown-managed-av.yaml` is the source of truth for staging and production. To recreate or roll back a pipeline without the Daily UI:

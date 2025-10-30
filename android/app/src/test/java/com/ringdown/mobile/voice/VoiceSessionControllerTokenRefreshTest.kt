@@ -3,6 +3,7 @@ package com.ringdown.mobile.voice
 import com.google.common.truth.Truth.assertThat
 import com.ringdown.mobile.data.VoiceSessionDataSource
 import com.ringdown.mobile.domain.ManagedVoiceSession
+import com.ringdown.mobile.domain.ControlMessage
 import com.squareup.moshi.Moshi
 import java.time.Duration
 import java.time.Instant
@@ -39,7 +40,11 @@ class VoiceSessionControllerTokenRefreshTest {
             repository = repository,
             callClientFactory = factory,
             moshi = Moshi.Builder().build(),
+            controlHarness = object : ControlHarness {
+                override suspend fun handle(message: ControlMessage, audioBytes: ByteArray) = Unit
+            },
             dispatcher = dispatcher,
+            mainDispatcher = dispatcher,
             minRefreshLead = Duration.ofMillis(10),
             nowProvider = InstantProvider { fakeClock.now() },
         )
@@ -69,6 +74,8 @@ class VoiceSessionControllerTokenRefreshTest {
                 clock.newSession("session-$counter", ttls.removeFirst())
             }
         }
+
+        override suspend fun fetchControlMessage(sessionId: String, controlKey: String): ControlMessage? = null
     }
 
     private class RecordingVoiceCallClient : VoiceCallClient {
@@ -118,5 +125,6 @@ class VoiceSessionControllerTokenRefreshTest {
                 greeting = null,
             )
         }
+
     }
 }
