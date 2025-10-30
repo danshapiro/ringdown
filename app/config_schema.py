@@ -24,6 +24,24 @@ class ToolRunnerConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class ServerVADConfig(BaseModel):
+    """Configuration for server-side voice activity detection."""
+
+    activation_threshold: float = Field(0.6, ge=0.0, le=1.0)
+    silence_duration_ms: int = Field(400, ge=0)
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
+class RealtimeAgentConfig(BaseModel):
+    """Realtime transport configuration for an agent."""
+
+    model: Optional[str] = None
+    voice: Optional[str] = None
+    server_vad: Optional[ServerVADConfig | Dict[str, Any]] = Field(default=None, alias="serverVad")
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
 class DefaultsConfig(BaseModel):
     """Top-level defaults inherited by every agent."""
 
@@ -60,6 +78,7 @@ class DefaultsConfig(BaseModel):
     speech_model: str = Field(..., min_length=1)
 
     tool_prompts: Dict[str, str] = Field(default_factory=dict)
+    realtime: Optional[RealtimeAgentConfig] = None
 
     model_config = ConfigDict(extra="allow")
 
@@ -81,6 +100,7 @@ class AgentConfig(BaseModel):
     docs_folder_greenlist: Optional[List[str]] = None
     tool_header: Optional[str] = None
     tool_prompts: Dict[str, str] = Field(default_factory=dict)
+    realtime: Optional[RealtimeAgentConfig] = None
 
     model_config = ConfigDict(extra="allow")
 

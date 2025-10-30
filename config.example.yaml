@@ -73,8 +73,14 @@ defaults:
 
   transcription_provider: Google    # Speech-to-text provider used by Twilio relay.
   speech_model: telephony           # Recognition model; telephony works for PSTN.
+  realtime:                         # Default OpenAI Realtime session configuration.
+    model: gpt-4o-mini-realtime-preview-2024-12-17
+    voice: alloy
+    server_vad:
+      activation_threshold: 0.55
+      silence_duration_ms: 420
 
-# Debugging aids – keep empty in production.
+# Debugging aids - keep empty in production.
 debug: ""                           # Example: "dtmf speaker-events" to trace digits.
 
 # Terms passed to STT provider to bias recognition for organisation-specific words.

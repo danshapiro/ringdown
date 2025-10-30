@@ -114,11 +114,17 @@ The Android client now depends on Daily's managed A/V pipeline. To generate the 
 4. Copy the token and store it in 1Password or your preferred secrets manager – it will not be shown again.
 5. On your development machine either add `PIPECAT_API_KEY=<token>` to your local `.env` file (preferred) or export it in the shell (`setx PIPECAT_API_KEY "<token>"` in PowerShell, `export PIPECAT_API_KEY=<token>` in bash/zsh) so the deploy script can read it.
 6. When you run `cloudrun-deploy.py`, the helper reads `.env` automatically (via `python-dotenv`) and will upload the key into Google Secret Manager (`ringdown-managed-av-key`), wiring it into Cloud Run as the `PIPECAT_API_KEY` env var.
-7. After the first successful deploy, the mobile client should move past the “approval required” dialog and reach the new managed transport.
+7. After the first successful deploy, the mobile client should move past the "approval required" dialog and reach the new managed transport.
+
+## Android Realtime Bridge
+- Configure the on-device realtime pipeline through the new `defaults.realtime` block in `config.yaml`. Set a default `model`, `voice`, and `server_vad` thresholds that apply to every agent unless overridden.
+- Individual agents can override those defaults with an `agents.<name>.realtime` mapping. The backend honours these overrides when provisioning sessions so you can swap models or voices with a config-only change.
+- The mobile session endpoints now emit structured JSON logs (`mobile_realtime_session_created` / `mobile_realtime_session_refreshed`) capturing session IDs, models, voices, and `server_vad` values to simplify telemetry.
+- Clients call `/v1/mobile/realtime/session/refresh` before the 30 minute expiry to rotate credentials. The backend preserves device metadata and replaces the active session atomically so websocket handoffs keep working without duplicating turns.
 
 ## Technical Details
 - Architecture: Twilio ConversationRelay streams audio to FastAPI over `/ws`, and the app routes messages through LiteLLM, SQLite conversation memory, and any tools you enabled.
-- Configuration: Override `RINGDOWN_CONFIG_PATH` to swap between “workday” and “weekend” personalities without editing files.
+- Configuration: Override `RINGDOWN_CONFIG_PATH` to swap between "workday" and "weekend" personalities without editing files.
 - Integrations: Add `TAVILY_API_KEY`, `GMAIL_IMPERSONATE_EMAIL`, and `GMAIL_SA_KEY_PATH` when you’re ready for search or email follow-ups. Without them, Ringdown politely skips those actions.
 - Testing: `pytest`, `pytest -m integration`, and the WebSocket smoke helper keep regressions away before you push changes.
 - Release workflow: bump `app.__version__`, update `pyproject.toml`, log changes in `CHANGELOG.md`, and tag (`v0.x.y`) when you publish a new build.

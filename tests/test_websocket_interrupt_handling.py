@@ -45,7 +45,7 @@ async def test_interrupt_message_handling():
             with patch.object(websocket_api, 'pop_call', return_value=None):
                 with patch.object(websocket_api, 'stream_response') as mock_stream:
                     with patch.object(websocket_api, 'log_turn') as mock_log_turn:
-                        with patch.object(websocket_api, 'run_in_threadpool', side_effect=lambda f, *args: None):
+                        with patch.object(websocket_api, 'run_in_threadpool', side_effect=lambda f, *args, **kwargs: None):
                             mock_get_agent.return_value = {
                                 "prompt": "Test prompt",
                                 "model": "test-model", 
@@ -104,7 +104,7 @@ async def test_malformed_json_handling():
             with patch.object(websocket_api, 'pop_call', return_value=None):
                 with patch.object(websocket_api, 'stream_response') as mock_stream:
                     with patch.object(websocket_api, 'log_turn') as mock_log_turn:
-                        with patch.object(websocket_api, 'run_in_threadpool', side_effect=lambda f, *args: None):
+                        with patch.object(websocket_api, 'run_in_threadpool', side_effect=lambda f, *args, **kwargs: None):
                             mock_get_agent.return_value = {
                                 "prompt": "Test prompt",
                                 "model": "test-model", 
@@ -215,7 +215,7 @@ async def test_interrupt_does_not_break_conversation_flow():
             with patch.object(websocket_api, 'pop_call', return_value=None):
                 with patch.object(websocket_api, 'stream_response') as mock_stream:
                     with patch.object(websocket_api, 'log_turn') as mock_log_turn:
-                        with patch.object(websocket_api, 'run_in_threadpool', side_effect=lambda f, *args: None):
+                        with patch.object(websocket_api, 'run_in_threadpool', side_effect=lambda f, *args, **kwargs: None):
                             mock_get_agent.return_value = {
                                 "prompt": "Test prompt",
                                 "model": "test-model", 

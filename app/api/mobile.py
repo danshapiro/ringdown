@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import settings
@@ -16,8 +19,15 @@ from app.chat import stream_response
 from app.logging_utils import logger
 from app.managed_av.client import ManagedAVClient, ManagedAVSession
 from app.managed_av.session_store import ManagedAVSessionStore, ManagedSessionState, get_session_store
+from app.call_state import store_call
 from app.mobile.config_store import ensure_device_entry
 from app.memory import log_turn
+from app.settings import get_agent_config
+from app.mobile.realtime import (
+    RealtimeSession,
+    create_realtime_session,
+    get_realtime_store,
+)
 
 DEFAULT_POLL_AFTER_SECONDS = 5
 PIPECAT_API_KEY_ENV = "PIPECAT_API_KEY"
@@ -96,6 +106,261 @@ class ManagedAVCompletionResponse(BaseModel):
     response_text: str = Field(..., alias="responseText")
     hold_text: Optional[str] = Field(default=None, alias="holdText")
     reset: bool = False
+
+
+class MobileRealtimeSessionRequest(BaseModel):
+    """Request payload for initiating realtime conversation bridging."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    device_id: str = Field(..., alias="deviceId", min_length=4, max_length=128)
+    agent: Optional[str] = None
+
+
+class MobileRealtimeRefreshRequest(BaseModel):
+    """Request payload to refresh a realtime session secret."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    call_sid: str = Field(..., alias="callSid")
+
+
+class MobileRealtimeSessionResponse(BaseModel):
+    """Response containing realtime session bootstrap details for devices."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    call_sid: str = Field(..., alias="callSid")
+    session_id: str = Field(..., alias="sessionId")
+    client_secret: str = Field(..., alias="clientSecret")
+    websocket_url: str = Field(..., alias="websocketUrl")
+    expires_at: datetime = Field(..., alias="expiresAt")
+    model: str
+    voice: str
+    websocket_token: str = Field(..., alias="websocketToken")
+    server_vad: Dict[str, Any] = Field(default_factory=dict, alias="serverVad")
+
+
+@router.post("/realtime/session", response_model=MobileRealtimeSessionResponse)
+async def start_realtime_session(payload: MobileRealtimeSessionRequest) -> MobileRealtimeSessionResponse:
+    """Create a realtime session and seed conversation state for Android devices."""
+
+    device_id = payload.device_id.strip()
+    device_entry = settings.get_mobile_device(device_id)
+    if device_entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not registered")
+
+    if not device_entry.get("enabled", False):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device not approved")
+
+    agent_name = (payload.agent or device_entry.get("agent") or "unknown-caller").strip()
+    agent_cfg = get_agent_config(agent_name)
+    realtime_cfg = settings.get_agent_realtime_config(agent_name)
+
+    voice = str(realtime_cfg.get("voice") or "").strip()
+    if not voice:
+        voice = str(agent_cfg.get("voice") or "").strip()
+    if not voice:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Realtime voice missing")
+
+    model = str(realtime_cfg.get("model") or "").strip()
+    if not model:
+        model = str(agent_cfg.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Realtime model missing")
+
+    server_vad = realtime_cfg.get("server_vad")
+    if not isinstance(server_vad, dict):
+        server_vad = {}
+
+    instructions = agent_cfg.get("realtime_instructions")
+    if isinstance(instructions, str):
+        instructions = instructions.strip() or None
+    else:
+        instructions = None
+
+    metadata = {}
+    context = device_entry.get("context")
+    if isinstance(context, dict):
+        metadata["device_context"] = context
+    metadata["server_vad"] = copy.deepcopy(server_vad)
+
+    call_sid = f"android-{uuid4().hex}"
+    agent_snapshot = copy.deepcopy(agent_cfg)
+    websocket_token = uuid4().hex
+
+    session = await create_realtime_session(
+        agent_name=agent_name,
+        model=model,
+        voice=voice,
+        device_id=device_id,
+        instructions=instructions,
+        metadata=metadata if metadata else None,
+    )
+    session.call_id = call_sid
+    session.mobile_token = websocket_token
+    session.metadata.update(metadata)
+
+    store = get_realtime_store()
+    store.upsert(session)
+
+    extras: Dict[str, Any] = {
+        "realtime_session_id": session.session_id,
+        "realtime_model": session.model,
+        "realtime_voice": session.voice,
+        "device_id": device_id,
+        "mobile_token": websocket_token,
+        "transport": "android-realtime",
+        "server_vad": copy.deepcopy(server_vad),
+    }
+
+    caller_label = device_entry.get("label") or device_id
+    metadata["device_label"] = caller_label
+    store_call(call_sid, (agent_name, agent_snapshot, None, False, caller_label, extras))
+
+    logger.info(
+        json.dumps(
+            {
+                "severity": "INFO",
+                "event": "mobile_realtime_session_created",
+                "session_id": session.session_id,
+                "call_sid": call_sid,
+                "device_id": device_id,
+                "agent": agent_name,
+                "model": session.model,
+                "voice": session.voice,
+                "server_vad": server_vad,
+            }
+        )
+    )
+
+    payload = MobileRealtimeSessionResponse(
+        call_sid=call_sid,
+        session_id=session.session_id,
+        client_secret=session.client_secret,
+        websocket_url=session.websocket_url,
+        expires_at=session.expires_at,
+        model=session.model,
+        voice=session.voice,
+        websocket_token=websocket_token,
+        server_vad=copy.deepcopy(server_vad),
+    )
+    return JSONResponse(
+        content=payload.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=False,
+            exclude_unset=False,
+        )
+    )
+
+@router.post("/realtime/session/refresh", response_model=MobileRealtimeSessionResponse)
+async def refresh_realtime_session(payload: MobileRealtimeRefreshRequest) -> MobileRealtimeSessionResponse:
+    """Refresh an existing realtime session secret for continued playback."""
+
+    call_sid = payload.call_sid.strip()
+    if not call_sid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="callSid required")
+
+    store = get_realtime_store()
+    existing = store.get_by_call(call_sid)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    agent_name = existing.agent_name or "unknown-caller"
+    device_id = existing.device_id or "unknown-device"
+    realtime_cfg = settings.get_agent_realtime_config(agent_name)
+    agent_cfg = get_agent_config(agent_name)
+
+    model = str(realtime_cfg.get("model") or existing.model or "").strip()
+    voice = str(realtime_cfg.get("voice") or existing.voice or "").strip()
+    if not model or not voice:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Realtime configuration incomplete")
+
+    server_vad = realtime_cfg.get("server_vad")
+    if not isinstance(server_vad, dict):
+        server_vad = existing.metadata.get("server_vad") if isinstance(existing.metadata, dict) else {}
+        if not isinstance(server_vad, dict):
+            server_vad = {}
+
+    metadata = dict(existing.metadata) if isinstance(existing.metadata, dict) else {}
+    metadata["server_vad"] = copy.deepcopy(server_vad)
+
+    instructions = agent_cfg.get("realtime_instructions")
+    if isinstance(instructions, str):
+        instructions = instructions.strip() or None
+    else:
+        instructions = None
+
+    websocket_token = uuid4().hex
+
+    new_session = await create_realtime_session(
+        agent_name=agent_name,
+        model=model,
+        voice=voice,
+        device_id=device_id,
+        instructions=instructions,
+        metadata=metadata,
+    )
+    new_session.call_id = call_sid
+    new_session.mobile_token = websocket_token
+    new_session.agent_name = agent_name
+    new_session.device_id = device_id
+
+    store.replace_session(call_sid, new_session)
+
+    agent_cfg = get_agent_config(agent_name)
+    agent_snapshot = copy.deepcopy(agent_cfg)
+    agent_snapshot = copy.deepcopy(agent_cfg)
+    extras: Dict[str, Any] = {
+        "realtime_session_id": new_session.session_id,
+        "realtime_model": new_session.model,
+        "realtime_voice": new_session.voice,
+        "device_id": device_id,
+        "mobile_token": websocket_token,
+        "transport": "android-realtime",
+        "server_vad": copy.deepcopy(server_vad),
+    }
+
+    caller_label = metadata.get("device_label") or device_id
+    store_call(call_sid, (agent_name, agent_snapshot, None, False, caller_label, extras))
+
+    logger.info(
+        json.dumps(
+            {
+                "severity": "INFO",
+                "event": "mobile_realtime_session_refreshed",
+                "session_id": new_session.session_id,
+                "call_sid": call_sid,
+                "device_id": device_id,
+                "agent": agent_name,
+                "model": new_session.model,
+                "voice": new_session.voice,
+                "server_vad": server_vad,
+            }
+        )
+    )
+
+    payload = MobileRealtimeSessionResponse(
+        call_sid=call_sid,
+        session_id=new_session.session_id,
+        client_secret=new_session.client_secret,
+        websocket_url=new_session.websocket_url,
+        expires_at=new_session.expires_at,
+        model=new_session.model,
+        voice=new_session.voice,
+        websocket_token=websocket_token,
+        server_vad=copy.deepcopy(server_vad),
+    )
+    return JSONResponse(
+        content=payload.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=False,
+            exclude_unset=False,
+        )
+    )
+
 
 
 def _get_managed_client() -> ManagedAVClient:

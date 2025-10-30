@@ -27,6 +27,7 @@ from app.metrics import METRIC_MESSAGES
 from app.pricing import calculate_llm_cost, estimate_twilio_cost
 from app.settings import get_agent_config
 from app.validators import is_from_twilio
+from app.mobile.realtime import mirror_assistant_turn
 
 router = APIRouter()
 
@@ -53,10 +54,18 @@ async def websocket_endpoint(ws: WebSocket):
         logger.error("Failed to accept WebSocket connection: %s", e)
         raise
 
-    if not is_from_twilio(ws):
+    mobile_token = ws.headers.get("x-ringdown-mobile-token")
+    ws.scope["mobile_token"] = mobile_token
+
+    if not mobile_token and not is_from_twilio(ws):
         logger.warning("WS connection rejected - invalid Twilio signature")
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
+
+    if mobile_token:
+        logger.debug("WS connection validated via mobile realtime token")
+    else:
+        logger.debug("WS connection validated via Twilio signature")
 
     logger.debug("WS connection validated - waiting for messages...")
     logger.info("WebSocket connection established from %s", ws.client)
@@ -206,7 +215,29 @@ async def websocket_endpoint(ws: WebSocket):
                         None,
                     )
 
-                agent_name, agent, saved_messages, _resumed, caller_number = tpl
+                extras: dict[str, Any] | None
+                if len(tpl) >= 6:
+                    agent_name, agent, saved_messages, _resumed, caller_number, extras = tpl
+                else:
+                    agent_name, agent, saved_messages, _resumed, caller_number = tpl
+                    extras = None
+
+                bridge_info = extras or {}
+                ws.scope["realtime_bridge"] = bridge_info
+                ws.scope["realtime_transport"] = bridge_info.get("transport")
+                ws.scope["realtime_session_id"] = bridge_info.get("realtime_session_id")
+
+                expected_token = bridge_info.get("mobile_token")
+                provided_token = ws.scope.get("mobile_token")
+                if expected_token:
+                    if provided_token != expected_token:
+                        logger.warning("Mobile token mismatch for CallSid=%s", call_sid)
+                        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+                        return
+                elif provided_token:
+                    logger.warning("Unexpected mobile token presented for CallSid=%s", call_sid)
+                    await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+                    return
 
                 # Log visually distinct header for new call
                 caller_display = caller_number or "unknown"
@@ -266,7 +297,9 @@ async def websocket_endpoint(ws: WebSocket):
                     agent_cfg = get_agent_config("unknown-caller")
 
                 # Persist user turn without blocking the event loop
-                await run_in_threadpool(log_turn, "user", user_text)
+                bridge_info = ws.scope.get("realtime_bridge") or {}
+                source_tag = bridge_info.get("transport")
+                await run_in_threadpool(log_turn, "user", user_text, source=source_tag)
 
                 # Track prompt tokens using litellm
                 try:
@@ -781,6 +814,17 @@ async def websocket_endpoint(ws: WebSocket):
                     assistant_text = "".join(assistant_full)
 
                     if assistant_text:
+                        realtime_ctx = ws.scope.get("realtime_bridge") or {}
+                        call_id = ws.scope.get("call_sid")
+                        if realtime_ctx.get("realtime_session_id") and call_id:
+                            try:
+                                await mirror_assistant_turn(call_id, assistant_text, voice_name)
+                            except Exception as exc:  # noqa: BLE001
+                                logger.exception(
+                                    "Failed to mirror assistant turn to realtime session for call %s: %s",
+                                    call_id,
+                                    exc,
+                                )
                         await run_in_threadpool(log_turn, "bot", assistant_text)
 
                     # Persist state if enabled

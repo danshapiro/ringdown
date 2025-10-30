@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from log_love import setup_logging
 
-from .config_schema import ConfigModel, resolve_config_path
+from .config_schema import ConfigModel, ServerVADConfig, resolve_config_path
 
 
 def get_programmatic_tool_prompts() -> Dict[str, str]:
@@ -360,6 +360,39 @@ def get_agent_config(agent_name: str) -> Dict[str, Any]:
 
     merged = _merge_with_defaults(agents[agent_name], defaults)
     logger.debug("Agent '%s' config resolved: %s", agent_name, {k: (v[:20] + '...' if isinstance(v, str) and len(v) > 20 else v) for k, v in merged.items()})
+    return merged
+
+
+def get_agent_realtime_config(agent_name: str) -> Dict[str, Any]:
+    """Return realtime configuration for the given agent (merged with defaults)."""
+
+    cfg = _load_config()
+    defaults_rt = cfg.get("defaults", {}).get("realtime") or {}
+    agent_entry = cfg.get("agents", {}).get(agent_name, {})
+    agent_rt = agent_entry.get("realtime") or {}
+
+    merged: Dict[str, Any] = {}
+    if isinstance(defaults_rt, dict):
+        merged.update(defaults_rt)
+    if isinstance(agent_rt, dict):
+        merged.update({k: v for k, v in agent_rt.items() if v is not None})
+
+    agent_cfg = get_agent_config(agent_name)
+    model_value = merged.get("model") or agent_cfg.get("realtime_model") or agent_cfg.get("model")
+    voice_value = merged.get("voice") or agent_cfg.get("realtime_voice") or agent_cfg.get("voice")
+    merged["model"] = str(model_value) if model_value else ""
+    merged["voice"] = str(voice_value) if voice_value else ""
+
+    server_vad = merged.get("server_vad") or merged.get("serverVad") or {}
+    if isinstance(server_vad, ServerVADConfig):
+        merged["server_vad"] = server_vad.model_dump(mode="python")
+    elif hasattr(server_vad, "model_dump"):
+        merged["server_vad"] = server_vad.model_dump(mode="python")  # type: ignore[assignment]
+    elif isinstance(server_vad, dict):
+        merged["server_vad"] = server_vad
+    else:
+        merged["server_vad"] = {}
+
     return merged
 
 
