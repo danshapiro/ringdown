@@ -51,6 +51,19 @@ class VoiceSessionControllerControlHarnessTest {
                     }
                     override fun leave(onComplete: () -> Unit) = onComplete()
                     override fun release() {}
+                    override fun addCustomAudioTrack(
+                        name: co.daily.model.customtrack.CustomTrackName,
+                        source: co.daily.model.customtrack.CustomAudioSource,
+                        onResult: (co.daily.model.RequestResult?) -> Unit,
+                    ) {
+                        onResult(null)
+                    }
+                    override fun removeCustomAudioTrack(
+                        name: co.daily.model.customtrack.CustomTrackName,
+                        onResult: (co.daily.model.RequestResult?) -> Unit,
+                    ) {
+                        onResult(null)
+                    }
                 }
             },
             moshi = Moshi.Builder().build(),
@@ -123,6 +136,12 @@ class VoiceSessionControllerControlHarnessTest {
             )
             onHandled?.invoke()
         }
+
+        override fun onCallClientAttached(callClient: VoiceCallClient) {}
+
+        override fun onCallClientDetached() {}
+
+        override fun updateMediaProjection(token: android.media.projection.MediaProjection?) {}
     }
 
     companion object {

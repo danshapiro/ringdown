@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import subprocess
 import time
+from array import array
 from pathlib import Path
 from typing import Optional
 
@@ -57,6 +59,50 @@ def read_control_file(serial: str, package: str, filename: str) -> bytes:
         f"files/control-harness/{filename}",
     )
     return proc.stdout.encode("latin1")  # exec-out returns bytes via stdout
+
+
+def _compute_match_metrics(prompt_segment, captured_segment) -> dict[str, float]:
+    """Compare prompt/captured audio and return normalized metrics."""
+
+    if captured_segment.channels != prompt_segment.channels:
+        captured_segment = captured_segment.set_channels(prompt_segment.channels)
+    captured_segment = captured_segment.set_frame_rate(prompt_segment.frame_rate)
+
+    duration_ms = int(min(len(prompt_segment), len(captured_segment)))
+    if duration_ms <= 0:
+        raise RuntimeError("Captured audio duration is empty; cannot compare")
+
+    prompt_trimmed = prompt_segment[:duration_ms]
+    captured_trimmed = captured_segment[:duration_ms]
+
+    prompt_samples = array("h", prompt_trimmed.get_array_of_samples())
+    captured_samples = array("h", captured_trimmed.get_array_of_samples())
+
+    sample_count = min(len(prompt_samples), len(captured_samples))
+    if sample_count == 0:
+        raise RuntimeError("Audio comparison sample count is zero")
+
+    diff_energy = 0.0
+    prompt_energy = 0.0
+    captured_energy = 0.0
+    for idx in range(sample_count):
+        prompt_val = prompt_samples[idx]
+        captured_val = captured_samples[idx]
+        delta = prompt_val - captured_val
+        diff_energy += float(delta * delta)
+        prompt_energy += float(prompt_val * prompt_val)
+        captured_energy += float(captured_val * captured_val)
+
+    mse = diff_energy / float(sample_count)
+    prompt_rms = math.sqrt(prompt_energy / float(sample_count))
+    captured_rms = math.sqrt(max(1.0, captured_energy / float(sample_count)))
+    normalized = math.sqrt(mse) / max(1.0, prompt_rms)
+    return {
+        "normalizedError": normalized,
+        "promptRms": prompt_rms,
+        "capturedRms": captured_rms,
+        "sampleCount": float(sample_count),
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -146,6 +192,11 @@ def main() -> int:
     print(f"Saved WAV to {wav_path}")
 
     captured_segment = base64_wav_to_audiosegment(base64.b64encode(wav_bytes).decode("ascii"))
+    metrics = _compute_match_metrics(tone_segment, captured_segment)
+    if metrics["normalizedError"] > 0.35:
+        raise RuntimeError(
+            f"Captured audio diverges from prompt: normalized error {metrics['normalizedError']:.3f}",
+        )
 
     summary = {
         "sessionId": session_id,
@@ -155,6 +206,9 @@ def main() -> int:
         "frequencyHz": args.frequency,
         "durationSeconds": args.duration,
         "capturedDurationSeconds": captured_segment.duration_seconds,
+        "normalizedError": metrics["normalizedError"],
+        "promptRms": metrics["promptRms"],
+        "capturedRms": metrics["capturedRms"],
     }
     print(json.dumps(summary, indent=2))
     return 0

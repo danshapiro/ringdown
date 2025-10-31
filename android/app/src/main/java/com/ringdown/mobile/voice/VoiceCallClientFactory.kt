@@ -11,6 +11,8 @@ import co.daily.model.RequestListener
 import co.daily.model.RequestListenerWithData
 import co.daily.model.RequestResult
 import co.daily.model.RequestResultWithData
+import co.daily.model.customtrack.CustomAudioSource
+import co.daily.model.customtrack.CustomTrackName
 import com.ringdown.mobile.domain.ManagedVoiceSession
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -22,6 +24,15 @@ interface VoiceCallClient {
     fun join(session: ManagedVoiceSession, onError: (String?) -> Unit)
     fun leave(onComplete: () -> Unit)
     fun release()
+    fun addCustomAudioTrack(
+        name: CustomTrackName,
+        source: CustomAudioSource,
+        onResult: (RequestResult?) -> Unit = {},
+    )
+    fun removeCustomAudioTrack(
+        name: CustomTrackName,
+        onResult: (RequestResult?) -> Unit = {},
+    )
 }
 
 interface VoiceCallClientFactory {
@@ -87,5 +98,35 @@ private class RealVoiceCallClient(
 
     override fun release() {
         delegate.release()
+    }
+
+    override fun addCustomAudioTrack(
+        name: CustomTrackName,
+        source: CustomAudioSource,
+        onResult: (RequestResult?) -> Unit,
+    ) {
+        delegate.addCustomAudioTrack(
+            name,
+            source,
+            object : RequestListener {
+                override fun onRequestResult(result: RequestResult) {
+                    onResult(result)
+                }
+            },
+        )
+    }
+
+    override fun removeCustomAudioTrack(
+        name: CustomTrackName,
+        onResult: (RequestResult?) -> Unit,
+    ) {
+        delegate.removeCustomAudioTrack(
+            name,
+            object : RequestListener {
+                override fun onRequestResult(result: RequestResult) {
+                    onResult(result)
+                }
+            },
+        )
     }
 }

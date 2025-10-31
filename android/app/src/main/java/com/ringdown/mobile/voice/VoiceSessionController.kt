@@ -129,6 +129,7 @@ class VoiceSessionController @Inject constructor(
             }
         }
         callClient = client
+        controlHarness.onCallClientAttached(client)
 
         Log.i(
             TAG,
@@ -283,6 +284,7 @@ class VoiceSessionController @Inject constructor(
             callClient = null
             callListener = null
             currentSession = null
+            controlHarness.onCallClientDetached()
         }
     }
 

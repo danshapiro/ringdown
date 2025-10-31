@@ -42,6 +42,9 @@ class VoiceSessionControllerTokenRefreshTest {
             moshi = Moshi.Builder().build(),
             controlHarness = object : ControlHarness {
                 override suspend fun handle(message: ControlMessage, audioBytes: ByteArray) = Unit
+                override fun onCallClientAttached(callClient: VoiceCallClient) {}
+                override fun onCallClientDetached() {}
+                override fun updateMediaProjection(token: android.media.projection.MediaProjection?) {}
             },
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
@@ -102,6 +105,21 @@ class VoiceSessionControllerTokenRefreshTest {
         }
 
         override fun release() {}
+
+        override fun addCustomAudioTrack(
+            name: co.daily.model.customtrack.CustomTrackName,
+            source: co.daily.model.customtrack.CustomAudioSource,
+            onResult: (co.daily.model.RequestResult?) -> Unit,
+        ) {
+            onResult(null)
+        }
+
+        override fun removeCustomAudioTrack(
+            name: co.daily.model.customtrack.CustomTrackName,
+            onResult: (co.daily.model.RequestResult?) -> Unit,
+        ) {
+            onResult(null)
+        }
     }
 
     private class FakeClock(start: Instant) {
