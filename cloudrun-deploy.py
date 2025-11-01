@@ -1,21 +1,27 @@
 import argparse
 import asyncio
 import datetime as _dt
+import json
 import logging
 import os
+import platform
 import shlex
 import subprocess
 import sys
-import json
-import platform
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import yaml
 from log_love import setup_logging
-import time
 from tenacity import retry, stop_after_attempt, wait_fixed
+from pipecat_agent_deploy import (
+    DEFAULT_CONFIG_PATH as DEFAULT_PIPECAT_CONFIG_PATH,
+    PipecatAgentConfig,
+    deploy_if_needed as deploy_pipecat_agent_if_needed,
+    load_config as load_pipecat_agent_config,
+)
 # DEFER HEAVY GOOGLE CLOUD IMPORTS UNTIL NEEDED
 # Importing google.cloud.run_v2 at module import time pulls in a large dependency
 # tree (aiohttp, attrs, etc.) which can appear to "hang" on Windows / networked
@@ -151,7 +157,6 @@ def _load_secret_plans(config_path: Path | None) -> list[SecretPlan]:
         )
 
     return plans
-
 ###############################################################################
 # Logging setup                                                               #
 ###############################################################################
@@ -188,6 +193,39 @@ def _run_cmd(cmd: str, *, check: bool = True, capture: bool = True) -> str:
         err = proc.stderr or ""
         log.error("Command failed (%s)\nstdout: %s\nstderr: %s", proc.returncode, out, err)
         raise RuntimeError(f"Command failed: {cmd}\n{err}")
+    return (proc.stdout or "").strip()
+
+
+def _run_command(
+    args: Sequence[str],
+    *,
+    check: bool = True,
+    capture: bool = True,
+    cwd: Path | str | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
+    """Run a subprocess with argument list to avoid shell quoting issues."""
+    cmd_str = " ".join(shlex.quote(part) for part in args)
+    log.info("$ %s", cmd_str)
+    stdout_mode = subprocess.PIPE if capture else None
+    stderr_mode = subprocess.PIPE if capture else None
+    proc = subprocess.run(  # noqa: S603
+        list(args),
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=stdout_mode,
+        stderr=stderr_mode,
+    )
+    if check and proc.returncode != 0:
+        out = proc.stdout or ""
+        err = proc.stderr or ""
+        log.error("Command failed (%s)\nstdout: %s\nstderr: %s", proc.returncode, out, err)
+        raise RuntimeError(f"Command failed: {cmd_str}\n{err}")
+    if not capture:
+        return ""
     return (proc.stdout or "").strip()
 
 
@@ -498,18 +536,28 @@ def _docker_is_running() -> bool:
         return False
 
 
-def _docker_build(image: str, *, build_args: Optional[List[str]] = None, labels: Optional[List[str]] = None, extra_args: Optional[List[str]] = None, no_cache: bool = False) -> None:
-    args_parts: List[str] = []
+def _docker_build(
+    image: str,
+    *,
+    build_args: Optional[List[str]] = None,
+    labels: Optional[List[str]] = None,
+    extra_args: Optional[List[str]] = None,
+    no_cache: bool = False,
+    context_dir: Path | str | None = None,
+) -> None:
+    args: List[str] = ["docker", "build"]
     if no_cache:
-        args_parts.append("--no-cache")
+        args.append("--no-cache")
     if build_args:
-        args_parts.extend([f"--build-arg {a}" for a in build_args])
+        for value in build_args:
+            args.extend(["--build-arg", value])
     if labels:
-        args_parts.extend([f"--label {l}" for l in labels])
+        for value in labels:
+            args.extend(["--label", value])
     if extra_args:
-        args_parts.extend(extra_args)
-    args = " " + " ".join(args_parts) if args_parts else ""
-    _run_cmd(f"docker build{args} -t {image} .")
+        args.extend(extra_args)
+    args.extend(["-t", image, "."])
+    _run_command(args, capture=False, cwd=context_dir)
 
 
 def _docker_push(image: str) -> None:
@@ -636,6 +684,8 @@ def deploy(
     extra_args: Optional[List[str]] = None,
     labels: Optional[List[str]] = None,
     secret_config: Optional[Path] = None,
+    pipecat_config: Optional[Path] = None,
+    skip_pipecat: bool = False,
 ) -> str:
     """Build, push and deploy the service to Cloud Run. Returns the service URL."""
 
@@ -666,6 +716,16 @@ def deploy(
     _verify_gcloud_auth()
 
     secret_plans = _load_secret_plans(secret_config)
+    pipecat_agent_config: PipecatAgentConfig | None = None
+    if not skip_pipecat:
+        try:
+            pipecat_agent_config = load_pipecat_agent_config(pipecat_config)
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.error("Unable to load Pipecat agent config: %s", exc)
+            raise
+
     gmail_required = any(key.startswith("GMAIL_") for key in env_vars)
     if not gmail_required:
         gmail_required = any(
@@ -713,6 +773,18 @@ def deploy(
     _run_cmd(f"gcloud config set project {project_id}")
 
     timestamp = _dt.datetime.utcnow().strftime("%Y%m%d%H%M")
+
+    if pipecat_agent_config:
+        try:
+            deploy_pipecat_agent_if_needed(
+                pipecat_agent_config,
+                timestamp=timestamp,
+                no_cache=no_cache,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("Pipecat agent deploy failed: %s", exc)
+            raise
+
     repo = f"{region}-docker.pkg.dev/{project_id}/{service}/{service}"
 
     # Ensure repository exists (idempotent)
@@ -946,6 +1018,16 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--docker-arg", nargs="*", default=[], metavar="ARG", help="Extra raw arg to pass to docker build (e.g. --platform linux/amd64)")
     parser.add_argument("--label", nargs="*", default=[], metavar="KEY=VAL", help="Additional image label key=value pairs")
     parser.add_argument("--timeout", type=int, default=DEFAULT_CLOUDRUN_TIMEOUT, help=f"Request timeout in seconds (default: {DEFAULT_CLOUDRUN_TIMEOUT}s/60min)")
+    parser.add_argument(
+        "--pipecat-agent-config",
+        default=str(DEFAULT_PIPECAT_CONFIG_PATH),
+        help="Path to Pipecat agent deploy config (default: %(default)s; pass 'none' to disable).",
+    )
+    parser.add_argument(
+        "--skip-pipecat",
+        action="store_true",
+        help="Skip rebuilding/redeploying the Pipecat managed A/V agent.",
+    )
 
     parser.add_argument("--yes", action="store_true", help="Skip interactive confirmations (assume yes)")
 
@@ -996,6 +1078,14 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     print("[cloudrun-deploy] starting deploy...")
     secret_config_path = Path(args.secret_config).expanduser() if args.secret_config else None
+    skip_pipecat = bool(args.skip_pipecat)
+    pipecat_config_path: Path | None = None
+    if not skip_pipecat:
+        cfg_arg = (args.pipecat_agent_config or "").strip()
+        if cfg_arg.lower() in {"", "none", "null"}:
+            skip_pipecat = True
+        else:
+            pipecat_config_path = Path(cfg_arg).expanduser()
 
     service_url = deploy(
         project_id=project_id,
@@ -1012,6 +1102,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         extra_args=args.docker_arg,
         labels=args.label,
         secret_config=secret_config_path,
+        pipecat_config=pipecat_config_path,
+        skip_pipecat=skip_pipecat,
     )
     # Print completion time in Pacific Time
     pt_time = _dt.datetime.now(ZoneInfo("America/Los_Angeles"))
