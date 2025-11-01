@@ -108,6 +108,74 @@ def test_voice_session_success(
     assert stub.calls == [("device-123", "unknown-caller")]
 
 
+def test_voice_session_disposes_stale_session(
+    isolated_mobile_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = StubManagedClient()
+    _patch_client(monkeypatch, stub)
+
+    store = get_session_store()
+    asyncio.run(
+        store.create_session(
+            session_id="stale-session",
+            device_id="device-123",
+            agent_name="unknown-caller",
+            agent_config={"prompt": "hello"},
+            greeting="Hi",
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=10),
+            ttl_seconds=10,
+            room_url="https://existing.example/room",
+            access_token="token-existing",
+            pipeline_session_id="pipeline-session",
+            metadata={"testing": {"control_enabled": True}},
+        )
+    )
+
+    client = TestClient(app)
+    response = client.post("/v1/mobile/voice/session", json={"deviceId": "device-123"})
+
+    assert response.status_code == 200
+    assert stub.calls[0] == ("close", "stale-session")
+    assert stub.calls[1] == ("device-123", "unknown-caller")
+
+
+def test_voice_session_reuses_active_session(
+    isolated_mobile_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = StubManagedClient()
+    _patch_client(monkeypatch, stub)
+
+    store = get_session_store()
+    metadata = {"testing": {"control_enabled": True}, "control": {"key": "existing-key"}}
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    asyncio.run(
+        store.create_session(
+            session_id="reuse-session",
+            device_id="device-123",
+            agent_name="unknown-caller",
+            agent_config={"prompt": "hello"},
+            greeting="Hi again",
+            expires_at=expires_at,
+            ttl_seconds=300,
+            room_url="https://existing.example/room",
+            access_token="token-existing",
+            pipeline_session_id="pipeline-existing",
+            metadata=metadata,
+        )
+    )
+
+    client = TestClient(app)
+    response = client.post("/v1/mobile/voice/session", json={"deviceId": "device-123"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sessionId"] == "reuse-session"
+    assert body["accessToken"] == "token-existing"
+    assert body["roomUrl"] == "https://existing.example/room"
+    assert body["metadata"]["control"]["key"] == "existing-key"
+    assert stub.calls == []
+
+
 def test_voice_session_requires_enabled_device(
     isolated_mobile_config: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

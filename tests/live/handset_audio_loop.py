@@ -41,6 +41,23 @@ def run_adb(serial: str, *args: str, check: bool = True) -> subprocess.Completed
     return subprocess.run(cmd, check=check, text=True, capture_output=True, encoding="utf-8", errors="replace")
 
 
+def ensure_project_media(serial: str, package: str) -> None:
+    result = run_adb(
+        serial,
+        "shell",
+        "appops",
+        "set",
+        package,
+        "PROJECT_MEDIA",
+        "allow",
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to grant PROJECT_MEDIA app-op for {package}: {result.stderr.strip() or result.stdout.strip()}",
+        )
+
+
 def list_control_files(serial: str, package: str) -> list[str]:
     proc = run_adb(serial, "shell", "run-as", package, "ls", "files/control-harness", check=False)
     if proc.returncode != 0:
@@ -50,15 +67,17 @@ def list_control_files(serial: str, package: str) -> list[str]:
 
 
 def read_control_file(serial: str, package: str, filename: str) -> bytes:
-    proc = run_adb(
-        serial,
+    cmd = [
+        "adb",
+        *(["-s", serial] if serial else []),
         "exec-out",
         "run-as",
         package,
         "cat",
         f"files/control-harness/{filename}",
-    )
-    return proc.stdout.encode("latin1")  # exec-out returns bytes via stdout
+    ]
+    proc = subprocess.run(cmd, check=True, stdout=subprocess.PIPE)
+    return proc.stdout
 
 
 def _compute_match_metrics(prompt_segment, captured_segment) -> dict[str, float]:
@@ -115,6 +134,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frequency", type=float, default=440.0, help="Sine frequency in Hz (default: 440)")
     parser.add_argument("--duration", type=float, default=1.5, help="Prompt duration seconds (default: 1.5)")
     parser.add_argument("--output-dir", default="artifacts", help="Directory to place captured WAV output")
+    parser.add_argument("--session-id", default="", help="Reuse existing managed session identifier")
+    parser.add_argument("--control-key", default="", help="Control key for the existing session")
     return parser.parse_args()
 
 
@@ -122,19 +143,33 @@ def main() -> int:
     args = parse_args()
     base_url = args.backend.rstrip("/")
 
-    print("Creating managed session...")
-    session_resp = requests.post(
-        f"{base_url}/v1/mobile/voice/session",
-        json={"deviceId": args.device_id},
-        timeout=30,
-    )
-    session_resp.raise_for_status()
-    session_payload = session_resp.json()
-    session_id = session_payload["sessionId"]
-    control_meta = session_payload.get("metadata", {}).get("control") or {}
-    control_key: Optional[str] = control_meta.get("key")
-    if not control_key:
-        raise RuntimeError("Control channel metadata missing from session response")
+    print(f"Granting PROJECT_MEDIA app-op for {args.package} ...")
+    ensure_project_media(args.device_serial, args.package)
+
+    session_id_arg = args.session_id.strip()
+    control_key_arg = args.control_key.strip()
+    if session_id_arg and control_key_arg:
+        session_id = session_id_arg
+        control_key: Optional[str] = control_key_arg
+        print(f"Reusing managed session {session_id} with provided control key.")
+    elif session_id_arg or control_key_arg:
+        raise RuntimeError("Both --session-id and --control-key must be provided together.")
+    else:
+        print("Creating managed session...")
+        session_resp = requests.post(
+            f"{base_url}/v1/mobile/voice/session",
+            json={"deviceId": args.device_id},
+            timeout=30,
+        )
+        session_resp.raise_for_status()
+        session_payload = session_resp.json()
+        session_id = session_payload["sessionId"]
+        control_meta = session_payload.get("metadata", {}).get("control") or {}
+        control_key = control_meta.get("key")
+        if not control_key:
+            raise RuntimeError("Control channel metadata missing from session response")
+
+    existing_files = set(list_control_files(args.device_serial, args.package))
 
     print(f"Session {session_id} established; queuing control prompt...")
     tone_segment = generate_test_tone(duration_seconds=args.duration, frequency_hz=args.frequency)
@@ -169,9 +204,7 @@ def main() -> int:
 
     print("Waiting for handset to process control prompt...")
     time.sleep(3.0)
-
-    existing_files = set(list_control_files(args.device_serial, args.package))
-    deadline = time.time() + 30.0
+    deadline = time.time() + 60.0
     discovered: Optional[str] = None
     while time.time() < deadline:
         time.sleep(1.0)

@@ -19,6 +19,9 @@ class ManagedSessionState:
     greeting: Optional[str]
     created_at: datetime
     expires_at: datetime
+    room_url: str
+    access_token: str
+    pipeline_session_id: Optional[str]
     metadata: Dict[str, Any] = field(default_factory=dict)
     messages: list[Dict[str, Any]] = field(default_factory=list)
     control_queue: list[Dict[str, Any]] = field(default_factory=list)
@@ -52,6 +55,9 @@ class ManagedAVSessionStore:
         greeting: Optional[str],
         expires_at: Optional[datetime],
         ttl_seconds: Optional[int],
+        room_url: str,
+        access_token: str,
+        pipeline_session_id: Optional[str],
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ManagedSessionState:
         """Create and store a new session, returning the managed state."""
@@ -70,6 +76,9 @@ class ManagedAVSessionStore:
             greeting=greeting,
             created_at=now,
             expires_at=expiry,
+            room_url=room_url,
+            access_token=access_token,
+            pipeline_session_id=pipeline_session_id,
             metadata=metadata or {},
         )
 
@@ -118,6 +127,22 @@ class ManagedAVSessionStore:
             if not state.control_queue:
                 return None
             return state.control_queue.pop(0)
+
+    async def list_sessions_for_device(self, device_id: str) -> list[ManagedSessionState]:
+        """Return active sessions associated with *device_id*."""
+
+        now = datetime.now(timezone.utc)
+        async with self._lock:
+            self._prune_expired_locked(now)
+            return [state for state in self._sessions.values() if state.device_id == device_id]
+
+    async def get_latest_session_for_device(self, device_id: str) -> Optional[ManagedSessionState]:
+        """Return the most recently created active session for *device_id*."""
+
+        sessions = await self.list_sessions_for_device(device_id)
+        if not sessions:
+            return None
+        return max(sessions, key=lambda state: state.created_at)
 
     async def clear(self) -> None:
         """Remove all sessions (primarily for testing)."""

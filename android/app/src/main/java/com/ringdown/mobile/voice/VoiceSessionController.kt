@@ -1,5 +1,6 @@
 package com.ringdown.mobile.voice
 
+import android.media.projection.MediaProjection
 import android.util.Base64
 import android.util.Log
 import co.daily.CallClientListener
@@ -116,6 +117,10 @@ class VoiceSessionController @Inject constructor(
             teardownClient()
             _state.value = VoiceConnectionState.Idle
         }
+    }
+
+    override fun updateMediaProjection(token: MediaProjection?) {
+        controlHarness.updateMediaProjection(token)
     }
 
     private suspend fun establishCall(session: ManagedVoiceSession) {

@@ -1,7 +1,10 @@
 package com.ringdown.mobile
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -21,6 +24,7 @@ import com.ringdown.mobile.ui.MainUiState
 import com.ringdown.mobile.ui.MainViewModel
 import com.ringdown.mobile.ui.RingdownApp
 import com.ringdown.mobile.ui.theme.RingdownTheme
+import com.ringdown.mobile.voice.ControlCaptureService
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -32,12 +36,38 @@ class MainActivity : ComponentActivity() {
             val uiState by viewModel.state.collectAsStateWithLifecycle()
             val context = LocalContext.current
 
+            val projectionManager = remember {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+                } else {
+                    null
+                }
+            }
+
             val permissions = remember { requiredVoicePermissions() }
             val permissionLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestMultiplePermissions(),
             ) { result ->
                 val granted = permissions.all { permission -> result[permission] == true }
                 viewModel.onPermissionResult(granted)
+            }
+
+            val projectionLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.StartActivityForResult(),
+            ) { result ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val manager = projectionManager
+                    if (result.resultCode == Activity.RESULT_OK && result.data != null && manager != null) {
+                        ControlCaptureService.start(context.applicationContext, result.resultCode, result.data!!)
+                        viewModel.onProjectionPermissionResult(true)
+                    } else {
+                        ControlCaptureService.stop(context.applicationContext)
+                        viewModel.onProjectionPermissionResult(false)
+                    }
+                } else {
+                    ControlCaptureService.stop(context.applicationContext)
+                    viewModel.onProjectionPermissionResult(false)
+                }
             }
 
             LaunchedEffect(Unit) {
@@ -55,6 +85,22 @@ class MainActivity : ComponentActivity() {
                 if (!granted) {
                     permissionLauncher.launch(permissions)
                 }
+            }
+
+            LaunchedEffect(uiState.captureRequestVersion) {
+                if (uiState.captureRequestVersion <= 0) return@LaunchedEffect
+                if (!uiState.captureSupported || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    ControlCaptureService.stop(context.applicationContext)
+                    viewModel.onProjectionPermissionResult(false)
+                    return@LaunchedEffect
+                }
+                val manager = projectionManager
+                if (manager == null) {
+                    ControlCaptureService.stop(context.applicationContext)
+                    viewModel.onProjectionPermissionResult(false)
+                    return@LaunchedEffect
+                }
+                projectionLauncher.launch(manager.createScreenCaptureIntent())
             }
 
             RingdownTheme(useDarkTheme = isSystemInDarkTheme()) {
@@ -76,6 +122,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        ControlCaptureService.stop(applicationContext)
     }
 }
 

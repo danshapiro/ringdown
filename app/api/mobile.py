@@ -6,7 +6,7 @@ import asyncio
 import copy
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import base64
@@ -32,6 +32,7 @@ CONTROL_AUTH_HEADER = "X-Ringdown-Control-Token"
 CONTROL_KEY_HEADER = "X-Ringdown-Control-Key"
 MAX_CONTROL_AUDIO_BYTES = 2_097_152  # 2 MiB
 ANDROID_MANAGED_SOURCE = "android-managed-av"
+SESSION_REUSE_MIN_TTL_SECONDS = 90
 
 router = APIRouter(prefix="/v1/mobile", tags=["mobile"])
 
@@ -372,6 +373,33 @@ async def voice_session(payload: MobileVoiceSessionRequest) -> MobileVoiceSessio
             detail="Managed audio/video provider not configured",
         ) from exc
 
+    reusable_session, stale_sessions = await _prepare_existing_sessions(device_id)
+    if reusable_session is not None:
+        log_payload = {
+            "severity": "INFO",
+            "event": "mobile_managed_session_reused",
+            "session_id": reusable_session.session_id,
+            "device_id": device_id,
+            "agent": reusable_session.agent_name,
+            "expires_at": reusable_session.expires_at.isoformat(),
+        }
+        if reusable_session.metadata:
+            log_payload["metadata"] = reusable_session.metadata
+        logger.info(json.dumps(log_payload))
+        greeting_value = reusable_session.greeting or greeting
+        return MobileVoiceSessionResponse(
+            session_id=reusable_session.session_id,
+            agent=reusable_session.agent_name,
+            room_url=reusable_session.room_url,
+            access_token=reusable_session.access_token,
+            expires_at=reusable_session.expires_at,
+            pipeline_session_id=reusable_session.pipeline_session_id,
+            greeting=greeting_value,
+            metadata=reusable_session.metadata,
+        )
+
+    await _dispose_sessions(client, stale_sessions, device_id)
+
     realtime_cfg = settings.get_agent_realtime_config(agent_name)
     server_vad = realtime_cfg.get("server_vad") if isinstance(realtime_cfg, dict) else {}
 
@@ -435,6 +463,9 @@ async def voice_session(payload: MobileVoiceSessionRequest) -> MobileVoiceSessio
         greeting=managed_session.greeting or greeting,
         expires_at=managed_session.expires_at,
         ttl_seconds=settings.get_mobile_managed_av_config().get("session_ttl_seconds"),
+        room_url=managed_session.room_url,
+        access_token=managed_session.access_token,
+        pipeline_session_id=managed_session.pipeline_session_id,
         metadata=session_metadata,
     )
 
@@ -464,6 +495,67 @@ async def voice_session(payload: MobileVoiceSessionRequest) -> MobileVoiceSessio
         greeting=managed_session.greeting or greeting,
         metadata=managed_session.metadata,
     )
+
+
+async def _prepare_existing_sessions(
+    device_id: str,
+) -> tuple[Optional[ManagedSessionState], list[ManagedSessionState]]:
+    """Return a reusable session (if any) and sessions that should be disposed."""
+
+    sessions = await _session_store.list_sessions_for_device(device_id)
+    if not sessions:
+        return None, []
+
+    now = datetime.now(timezone.utc)
+    reusable: Optional[ManagedSessionState] = None
+    stale: list[ManagedSessionState] = []
+
+    for session in sessions:
+        ttl_remaining = (session.expires_at - now).total_seconds()
+        if ttl_remaining <= SESSION_REUSE_MIN_TTL_SECONDS:
+            stale.append(session)
+            continue
+
+        if reusable is None or session.created_at > reusable.created_at:
+            if reusable is not None and reusable not in stale:
+                stale.append(reusable)
+            reusable = session
+        else:
+            stale.append(session)
+
+    return reusable, stale
+
+
+async def _dispose_sessions(
+    client: ManagedAVClient,
+    sessions: list[ManagedSessionState],
+    device_id: str,
+) -> None:
+    """Close and remove sessions that should no longer be active."""
+
+    for session in sessions:
+        log_payload = {
+            "severity": "INFO",
+            "event": "mobile_managed_session_disposed",
+            "session_id": session.session_id,
+            "device_id": device_id,
+            "agent": session.agent_name,
+            "reason": "preemptive_close_before_new_session",
+        }
+        logger.info(json.dumps(log_payload))
+        try:
+            await client.close_session(session.session_id)
+        except Exception as close_exc:  # noqa: BLE001
+            warn_payload = {
+                "severity": "WARNING",
+                "event": "mobile_managed_session_dispose_failed",
+                "session_id": session.session_id,
+                "device_id": device_id,
+                "agent": session.agent_name,
+                "error": str(close_exc),
+            }
+            logger.warning(json.dumps(warn_payload))
+        await _session_store.delete_session(session.session_id)
 
 
 @router.post("/managed-av/completions", response_model=ManagedAVCompletionResponse)

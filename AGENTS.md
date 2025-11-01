@@ -36,6 +36,7 @@ Instead of performing these actions, only recommend them, and have the user conf
 
 ### Android Client & Voice Tests
 - **Python test suite:** Windows: call `.venv\Scripts\python.exe -m pytest tests` so uv does not fall back to the system Python. On WSL/macOS export `UV_PROJECT_ENVIRONMENT=.venv-wsl` and run `uv run pytest tests`. Running from the repo root is fine now that `.gradle-cache` stays out of site-packages.
+- **ADB is guaranteed:** Every handset QA workflow runs with a USB-tethered device. Automation assumes `adb` access, so test setup may pre-grant permissions or push app-ops without manual consent dialogs.
 - **API registration tests** (`tests/test_mobile_registration.py`) require `OPENAI_API_KEY` in the environment; the suite fails fast if it’s missing.
 - **Voice smoke test:** once a device/emulator shows up in `adb devices`, run `bash android/scripts/run-voice-smoke.sh --backend $BACKEND_URL`. The script wraps `connectedDebugAndroidTest` and expects the same `ANDROID_SERIAL` that `mobile-mcp` uses.
 - **Instrumentation toggles:** to force the fake transport during tests set `DebugFeatureFlags.overrideVoiceTransportStub(true)`—handled automatically by the existing `VoiceMvpSuite`; no manual changes needed when running the suite.

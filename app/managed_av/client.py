@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import httpx
 
+from app.logging_utils import logger, redact_sensitive_data
+
 HTTP_TIMEOUT_SECONDS = 15.0
+MAX_START_SESSION_ATTEMPTS = 3
+RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+INITIAL_RETRY_BACKOFF_SECONDS = 0.5
+MAX_RETRY_BACKOFF_SECONDS = 4.0
 
 
 @dataclass
@@ -84,13 +92,60 @@ class ManagedAVClient:
             "body": body_payload,
         }
 
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                f"{self._base_url}/{self._agent_name}/start",
-                json=request_payload,
-                headers=self._headers(),
-            )
-        response.raise_for_status()
+        backoff = INITIAL_RETRY_BACKOFF_SECONDS
+        attempt = 0
+        response: httpx.Response | None = None
+        while attempt < MAX_START_SESSION_ATTEMPTS:
+            attempt += 1
+            try:
+                async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as http_client:
+                    response = await http_client.post(
+                        f"{self._base_url}/{self._agent_name}/start",
+                        json=request_payload,
+                        headers=self._headers(),
+                    )
+                response.raise_for_status()
+                break
+            except httpx.HTTPStatusError as exc:
+                response = exc.response
+                detail = _summarise_error_response(response)
+                logger.warning(
+                    json.dumps(
+                        {
+                            "severity": "WARNING",
+                            "event": "managed_av_start_http_status",
+                            "status": response.status_code,
+                            "attempt": attempt,
+                            "attempts": MAX_START_SESSION_ATTEMPTS,
+                            "detail": redact_sensitive_data(detail),
+                        }
+                    )
+                )
+                if response.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_START_SESSION_ATTEMPTS:
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, MAX_RETRY_BACKOFF_SECONDS)
+                    continue
+                raise
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                logger.warning(
+                    json.dumps(
+                        {
+                            "severity": "WARNING",
+                            "event": "managed_av_start_transport_error",
+                            "attempt": attempt,
+                            "attempts": MAX_START_SESSION_ATTEMPTS,
+                            "error": str(exc),
+                        }
+                    )
+                )
+                if attempt < MAX_START_SESSION_ATTEMPTS:
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, MAX_RETRY_BACKOFF_SECONDS)
+                    continue
+                raise
+
+        if response is None:
+            raise RuntimeError("Managed A/V start_session did not return a response")
         data = response.json()
 
         session_id = _require_str(data, "sessionId")
@@ -194,3 +249,27 @@ def _parse_expiry(expires_at: Any, ttl_seconds: int) -> datetime:
 
     ttl = max(ttl_seconds, 60)
     return datetime.now(timezone.utc) + timedelta(seconds=ttl)
+
+
+def _summarise_error_response(response: httpx.Response) -> Any:
+    """Return a compact, non-sensitive summary of an error response."""
+
+    try:
+        payload = response.json()
+    except ValueError:
+        text = response.text.strip()
+        if len(text) > 256:
+            return text[:256] + "…"
+        return text or response.reason_phrase
+
+    if isinstance(payload, dict):
+        snapshot: Dict[str, Any] = {}
+        for key in ("error", "message", "status", "code", "detail", "retryAfter"):
+            if key in payload:
+                snapshot[key] = payload[key]
+        if not snapshot:
+            snapshot = {k: payload[k] for k in list(payload.keys())[:5]}
+        return snapshot
+    if isinstance(payload, list):
+        return payload[:5]
+    return payload

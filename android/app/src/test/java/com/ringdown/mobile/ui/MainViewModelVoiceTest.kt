@@ -1,5 +1,6 @@
 package com.ringdown.mobile.ui
 
+import android.media.projection.MediaProjection
 import com.google.common.truth.Truth.assertThat
 import com.ringdown.mobile.util.MainDispatcherRule
 import com.ringdown.mobile.data.DeviceDescriptor
@@ -70,5 +71,7 @@ class MainViewModelVoiceTest {
         fun emit(value: VoiceConnectionState) {
             _state.value = value
         }
+
+        override fun updateMediaProjection(token: MediaProjection?) {}
     }
 }

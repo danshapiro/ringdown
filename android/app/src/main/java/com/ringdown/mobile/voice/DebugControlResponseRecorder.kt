@@ -65,7 +65,10 @@ internal class DebugControlResponseRecorder(
     }
 
     override fun updateMediaProjection(token: MediaProjection?) {
-        projectionRef.set(token)
+        val previous = projectionRef.getAndSet(token)
+        if (previous != null && previous !== token) {
+            previous.stop()
+        }
     }
 
     override fun cancelOngoingCapture() {
