@@ -78,3 +78,33 @@ def test_approve_missing_device_raises(tmp_path: Path) -> None:
 
     with pytest.raises(KeyError):
         approve_device(config_path, "missing-device")
+
+
+def test_sync_env_device_updates_env(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text("LIVE_TEST_MOBILE_DEVICE_ID=\n", encoding="utf-8")
+
+    from approve_new_phone import sync_env_device
+
+    device_id = sync_env_device(env_path, config_path=config_path)
+    assert device_id == "gamma-device"
+    contents = env_path.read_text(encoding="utf-8").strip()
+    assert contents == "LIVE_TEST_MOBILE_DEVICE_ID=gamma-device"
+
+
+def test_sync_env_device_honours_prefer_label(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text("LIVE_TEST_MOBILE_DEVICE_ID=previous\n", encoding="utf-8")
+
+    from approve_new_phone import sync_env_device
+
+    device_id = sync_env_device(
+        env_path,
+        config_path=config_path,
+        allow_disabled=True,
+        prefer_label="beta",
+    )
+    assert device_id == "beta-device"
+    assert env_path.read_text(encoding="utf-8").strip() == "LIVE_TEST_MOBILE_DEVICE_ID=beta-device"

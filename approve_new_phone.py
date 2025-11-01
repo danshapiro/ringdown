@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from ruamel.yaml import YAML
 
@@ -28,6 +29,8 @@ class DeviceRequest:
     agent: str
     created_at: datetime
     notes: Optional[str]
+
+DEVICE_KEY_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 
 def _default_config_path() -> Path:
@@ -198,9 +201,115 @@ def _handle_approve(args: argparse.Namespace) -> int:
     config_path = Path(args.config) if args.config else None
     result = approve_device(config_path, args.device_id, agent=args.agent)
     print(f"Approved {result.device_id} for agent {result.agent}.")
+    if args.sync_env:
+        env_path = Path(args.env_file).resolve()
+        synced = sync_env_device(env_path, config_path=config_path, allow_disabled=True, prefer_label=args.prefer_label)
+        print(f"Updated {env_path} with LIVE_TEST_MOBILE_DEVICE_ID={synced}.")
     if args.deploy:
         script_path = _resolve_deploy_script(args.deploy_script)
         _run_deploy(script_path)
+    return 0
+
+
+def _load_devices(config_path: Path | None = None) -> Dict[str, Dict[str, object]]:
+    resolved = config_path or _default_config_path()
+    data = _load_config(resolved)
+    devices = data.get("mobile_devices")
+    if not isinstance(devices, dict) or not devices:
+        raise ValueError("config.yaml missing mobile_devices section")
+    # ensure dictionary of dicts
+    result: Dict[str, Dict[str, object]] = {}
+    for key, value in devices.items():
+        if isinstance(value, dict):
+            result[str(key)] = value
+    if not result:
+        raise ValueError("No valid mobile device entries found")
+    return result
+
+
+def _select_device(
+    devices: Dict[str, Dict[str, object]],
+    *,
+    allow_disabled: bool,
+    prefer_label: str,
+) -> Tuple[str, Dict[str, object]]:
+    prefer_lower = prefer_label.lower()
+    candidates: List[Tuple[int, float, str, Dict[str, object]]] = []
+    for device_id, entry in devices.items():
+        enabled = _is_enabled(entry.get("enabled"))
+        if not allow_disabled and not enabled:
+            continue
+
+        created = _parse_created_at(entry.get("created_at") or entry.get("createdAt"))
+        created_ts = created.astimezone(timezone.utc).timestamp()
+        label = str(entry.get("label") or device_id)
+        priority = 1
+        if prefer_lower:
+            haystack = f"{device_id}|{label}".lower()
+            if prefer_lower in haystack:
+                priority = 0
+        elif DEVICE_KEY_PATTERN.match(device_id):
+            priority = 0
+
+        candidates.append((priority, -created_ts, device_id, entry))
+
+    if not candidates:
+        raise ValueError("No matching mobile devices found")
+
+    candidates.sort()
+    _, _, device_id, entry = candidates[0]
+    return device_id, entry
+
+
+def _rewrite_env_file(env_path: Path, device_id: str) -> None:
+    if not env_path.exists():
+        raise FileNotFoundError(f".env file not found: {env_path}")
+
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    updated = False
+    for idx, line in enumerate(lines):
+        if line.startswith("LIVE_TEST_MOBILE_DEVICE_ID="):
+            lines[idx] = f"LIVE_TEST_MOBILE_DEVICE_ID={device_id}"
+            updated = True
+            break
+
+    if not updated:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"LIVE_TEST_MOBILE_DEVICE_ID={device_id}")
+
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def sync_env_device(
+    env_path: Path,
+    *,
+    config_path: Path | None = None,
+    allow_disabled: bool = False,
+    prefer_label: str = "",
+) -> str:
+    """Update LIVE_TEST_MOBILE_DEVICE_ID in env file and return the chosen device id."""
+
+    devices = _load_devices(config_path)
+    device_id, _ = _select_device(
+        devices,
+        allow_disabled=allow_disabled,
+        prefer_label=prefer_label,
+    )
+    _rewrite_env_file(env_path, device_id)
+    return device_id
+
+
+def _handle_sync_env(args: argparse.Namespace) -> int:
+    config_path = Path(args.config) if args.config else None
+    env_path = Path(args.env_file)
+    device_id = sync_env_device(
+        env_path,
+        config_path=config_path,
+        allow_disabled=args.allow_disabled,
+        prefer_label=args.prefer_label,
+    )
+    print(f"Updated {env_path} with LIVE_TEST_MOBILE_DEVICE_ID={device_id}.")
     return 0
 
 
@@ -217,6 +326,28 @@ def build_parser() -> argparse.ArgumentParser:
     approve_parser.add_argument("device_id", help="Device identifier to approve")
     approve_parser.add_argument("--agent", help="Override agent mapping during approval")
     approve_parser.add_argument(
+        "--sync-env",
+        dest="sync_env",
+        action="store_true",
+        help="Update LIVE_TEST_MOBILE_DEVICE_ID in .env after approval.",
+    )
+    approve_parser.add_argument(
+        "--no-sync-env",
+        dest="sync_env",
+        action="store_false",
+        help="Do not update LIVE_TEST_MOBILE_DEVICE_ID (default).",
+    )
+    approve_parser.add_argument(
+        "--env-file",
+        default=".env",
+        help="Path to .env file used when --sync-env is set (default: %(default)s).",
+    )
+    approve_parser.add_argument(
+        "--prefer-label",
+        default="",
+        help="When syncing env, prefer device IDs/labels containing this substring.",
+    )
+    approve_parser.add_argument(
         "--deploy",
         dest="deploy",
         action="store_true",
@@ -232,8 +363,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--deploy-script",
         help="Path to cloudrun-deploy.py (defaults to repo root).",
     )
-    approve_parser.set_defaults(deploy=True, deploy_script=None)
+    approve_parser.set_defaults(deploy=True, deploy_script=None, sync_env=False)
     approve_parser.set_defaults(func=_handle_approve)
+
+    sync_parser = subparsers.add_parser("sync-env", help="Update LIVE_TEST_MOBILE_DEVICE_ID using config.yaml")
+    sync_parser.add_argument(
+        "--env-file",
+        default=".env",
+        help="Path to .env file to update (default: %(default)s).",
+    )
+    sync_parser.add_argument(
+        "--allow-disabled",
+        action="store_true",
+        help="Consider devices that are not yet enabled.",
+    )
+    sync_parser.add_argument(
+        "--prefer-label",
+        default="",
+        help="Prefer devices whose label or ID contains this substring (case-insensitive).",
+    )
+    sync_parser.set_defaults(func=_handle_sync_env)
 
     return parser
 
