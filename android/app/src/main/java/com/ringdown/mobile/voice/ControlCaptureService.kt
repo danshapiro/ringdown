@@ -1,6 +1,7 @@
 package com.ringdown.mobile.voice
 
 import android.app.Activity
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -64,10 +65,30 @@ class ControlCaptureService : Service() {
 
     private fun handleStart(startIntent: Intent) {
         val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        val enteredForeground = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (error: ForegroundServiceStartNotAllowedException) {
+            Log.e(TAG, "Foreground service start not allowed for capture service", error)
+            false
+        } catch (error: SecurityException) {
+            Log.e(TAG, "Unable to start foreground capture service due to security error", error)
+            false
+        } catch (error: IllegalStateException) {
+            Log.e(TAG, "Unable to start foreground capture service; state violation", error)
+            false
+        } catch (error: Exception) {
+            Log.e(TAG, "Unexpected failure entering foreground state", error)
+            false
+        }
+        if (!enteredForeground) {
+            notifyListeners(null)
+            stopSelf()
+            return
         }
 
         val storedExtras = startIntentExtras.getAndSet(null)
@@ -118,7 +139,11 @@ class ControlCaptureService : Service() {
     }
 
     private fun handleStop() {
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Exception) {
+            Log.w(TAG, "Failed to stop foreground state; service may not have been started")
+        }
         stopSelf()
     }
 
