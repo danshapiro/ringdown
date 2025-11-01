@@ -69,6 +69,66 @@ def ensure_project_media(serial: str, package: str) -> None:
         )
 
 
+def wake_and_foreground_app(serial: str, package: str) -> None:
+    """Wake the device, dismiss the keyguard, and foreground the Ringdown activity."""
+
+    # Wake screen
+    run_adb(serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP", check=False)
+    # Dismiss keyguard if present
+    run_adb(serial, "shell", "wm", "dismiss-keyguard", check=False)
+    # Launch the main activity to ensure the app is in the foreground
+    run_adb(
+        serial,
+        "shell",
+        "am",
+        "start",
+        "-n",
+        f"{package}/com.ringdown.mobile.MainActivity",
+        check=False,
+    )
+    # Small delay to allow activity to settle
+    time.sleep(1.5)
+
+
+def tap_reconnect(serial: str) -> None:
+    """Attempt to tap the 'Reconnect' button if it is visible."""
+
+    dump_path = "/sdcard/uidump-harness.xml"
+    run_adb(serial, "shell", "uiautomator", "dump", "--compressed", dump_path, check=False)
+    result = run_adb(serial, "exec-out", "cat", dump_path, check=False)
+    xml = result.stdout or ""
+    if not xml:
+        return
+    bounds_str = None
+    for line in xml.splitlines():
+        if 'text="Reconnect"' in line and "bounds=" in line:
+            start = line.find('bounds="')
+            if start != -1:
+                start += len('bounds="')
+                end = line.find('"', start)
+                if end != -1:
+                    bounds_str = line[start:end]
+                    break
+    if not bounds_str:
+        return
+    try:
+        first, second = bounds_str.split("][")
+        x1, y1 = map(int, first.strip("[]").split(","))
+        x2, y2 = map(int, second.strip("[]").split(","))
+    except Exception:
+        return
+    center_x = (x1 + x2) // 2
+    center_y = (y1 + y2) // 2
+    run_adb(serial, "shell", "input", "tap", str(center_x), str(center_y), check=False)
+    log_event(
+        "INFO",
+        "handset_harness_tapped_reconnect",
+        deviceSerial=serial,
+        x=center_x,
+        y=center_y,
+    )
+    time.sleep(1.0)
+
 def list_control_files(serial: str, package: str) -> list[str]:
     proc = run_adb(serial, "shell", "run-as", package, "ls", "files/control-harness", check=False)
     if proc.returncode != 0:
@@ -160,6 +220,12 @@ def run_handset_audio_loop(
         deviceId=device_id,
         reuseExisting=reuse_existing,
     )
+
+    if device_serial:
+        log_event("INFO", "handset_harness_prepare_device", deviceSerial=device_serial, package=package)
+        wake_and_foreground_app(device_serial, package)
+        log_event("INFO", "handset_harness_attempt_reconnect", deviceSerial=device_serial)
+        tap_reconnect(device_serial)
 
     log_event("INFO", "handset_harness_grant_project_media", package=package, deviceSerial=device_serial or "")
     ensure_project_media(device_serial, package)
@@ -288,7 +354,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--package", default="com.ringdown.mobile.debug", help="Android package name")
     parser.add_argument("--frequency", type=float, default=440.0, help="Sine frequency in Hz (default: 440)")
     parser.add_argument("--duration", type=float, default=1.5, help="Prompt duration seconds (default: 1.5)")
-    parser.add_argument("--output-dir", default="artifacts", help="Directory to place captured WAV output")
+    parser.add_argument("--output-dir", default="artifacts/handset", help="Directory to place captured WAV output")
     parser.add_argument("--session-id", default="", help="Reuse existing managed session identifier")
     parser.add_argument("--control-key", default="", help="Control key for the existing session")
     parser.add_argument(

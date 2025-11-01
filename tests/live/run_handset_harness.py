@@ -20,7 +20,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--package", default="com.ringdown.mobile.debug", help="Android package name")
     parser.add_argument("--frequency", type=float, default=440.0, help="Sine wave frequency in Hz")
     parser.add_argument("--duration", type=float, default=1.5, help="Prompt duration in seconds")
-    parser.add_argument("--output-dir", default="artifacts", help="Directory for captured WAV output")
+    parser.add_argument("--output-dir", default="artifacts/handset", help="Directory for captured WAV output")
     parser.add_argument(
         "--timeout",
         type=float,

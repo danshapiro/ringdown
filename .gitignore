@@ -61,3 +61,6 @@ android/app/tmp-apk/
 android/app/tmp_apk/
 android/.gradle/
 *.zip
+
+# Handset harness captures
+artifacts/handset/
