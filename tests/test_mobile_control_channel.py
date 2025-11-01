@@ -195,3 +195,92 @@ def test_fetch_requires_valid_control_key(
         json={"sessionId": session_payload["sessionId"]},
     )
     assert response.status_code == 401
+
+
+def test_active_session_helper_returns_metadata(
+    isolated_mobile_config: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = StubManagedClient()
+    _patch_client(monkeypatch, stub)
+
+    client = TestClient(app)
+    session_response = client.post("/v1/mobile/voice/session", json={"deviceId": isolated_mobile_config})
+    assert session_response.status_code == 200
+    session_payload = session_response.json()
+
+    fetch = client.get(
+        "/v1/mobile/managed-av/sessions/active",
+        params={"deviceId": isolated_mobile_config},
+        headers={"X-Ringdown-Control-Token": "test-control-token"},
+    )
+    assert fetch.status_code == 200
+    payload = fetch.json()
+    assert payload["sessionId"] == session_payload["sessionId"]
+    assert payload["metadata"]["control"]["key"] == session_payload["metadata"]["control"]["key"]
+
+
+def test_active_session_helper_requires_token(
+    isolated_mobile_config: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = StubManagedClient()
+    _patch_client(monkeypatch, stub)
+
+    client = TestClient(app)
+    client.post("/v1/mobile/voice/session", json={"deviceId": isolated_mobile_config})
+
+    fetch = client.get(
+        "/v1/mobile/managed-av/sessions/active",
+        params={"deviceId": isolated_mobile_config},
+    )
+    assert fetch.status_code == 401
+
+
+def test_active_session_helper_returns_404_when_missing(
+    isolated_mobile_config: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = StubManagedClient()
+    _patch_client(monkeypatch, stub)
+
+    client = TestClient(app)
+    fetch = client.get(
+        "/v1/mobile/managed-av/sessions/active",
+        params={"deviceId": isolated_mobile_config},
+        headers={"X-Ringdown-Control-Token": "test-control-token"},
+    )
+    assert fetch.status_code == 404
+
+
+def test_active_session_helper_returns_409_without_control_metadata(
+    isolated_mobile_config: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = StubManagedClient()
+    _patch_client(monkeypatch, stub)
+
+    store = get_session_store()
+    asyncio.run(
+        store.create_session(
+            session_id="no-control",
+            device_id=isolated_mobile_config,
+            agent_name="unknown-caller",
+            agent_config={"prompt": "hello"},
+            greeting="Hi",
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            ttl_seconds=300,
+            room_url="https://example.invalid/room",
+            access_token="token-123",
+            pipeline_session_id="pipeline-no-control",
+            metadata={"testing": True},
+        )
+    )
+
+    client = TestClient(app)
+    fetch = client.get(
+        "/v1/mobile/managed-av/sessions/active",
+        params={"deviceId": isolated_mobile_config},
+        headers={"X-Ringdown-Control-Token": "test-control-token"},
+    )
+    assert fetch.status_code == 409

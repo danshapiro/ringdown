@@ -123,6 +123,7 @@ The Android client now depends on Daily's managed A/V pipeline fronted by LiteLL
 - When a session ends, Pipecat calls `DELETE /v1/mobile/managed-av/sessions/{session_id}`. The backend performs cleanup, closes the upstream session, and emits `mobile_managed_session_closed` with the pipeline handle for traceability.
 - Smoke automation lives at `android/scripts/run-voice-smoke.sh`. The wrapper exports the correct `UV_PROJECT_ENVIRONMENT` and runs `uv run python -m app.mobile.smoke --device-id <device> --base-url <backend>`, validating session bootstrap, managed completions, and teardown end to end.
 - The handset audio loop harness (`tests/live/handset_audio_loop.py`) enqueues deterministic PCM via the control channel, then uses `adb` to retrieve the handset-captured audio artifact for offline analysis.
+- Automation helpers live in `tests/live/managed_session_helper.py` (fetch/create managed sessions via `GET /v1/mobile/managed-av/sessions/active`) and `tests/live/run_handset_harness.py` (ensures a session and runs the audio loop end to end for CI pipelines).
 
 ### Pipecat pipeline runbook
 The declarative spec in `pipelines/daily/ringdown-managed-av.yaml` is the source of truth for staging and production. To recreate or roll back a pipeline without the Daily UI:

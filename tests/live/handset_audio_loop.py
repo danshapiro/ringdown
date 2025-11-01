@@ -13,10 +13,11 @@ import base64
 import json
 import math
 import subprocess
+import sys
 import time
 from array import array
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import requests
 from pydub.generators import Sine
@@ -24,6 +25,16 @@ from tests.live.control_audio_utils import (
     audiosegment_to_base64_wav,
     base64_wav_to_audiosegment,
 )
+from tests.live.managed_session_helper import create_session, ensure_active_session
+
+DEFAULT_TIMEOUT_SECONDS = 30.0
+
+
+def log_event(severity: str, event: str, **payload: Any) -> None:
+    message: Dict[str, Any] = {"severity": severity, "event": event}
+    message.update(payload)
+    sys.stdout.write(json.dumps(message) + "\n")
+    sys.stdout.flush()
 
 
 def generate_test_tone(duration_seconds: float, frequency_hz: float, sample_rate: int = 16_000):
@@ -124,6 +135,150 @@ def _compute_match_metrics(prompt_segment, captured_segment) -> dict[str, float]
     }
 
 
+def run_handset_audio_loop(
+    *,
+    backend: str,
+    device_id: str,
+    control_token: str,
+    device_serial: str = "",
+    package: str = "com.ringdown.mobile.debug",
+    frequency: float = 440.0,
+    duration: float = 1.5,
+    output_dir: str = "artifacts",
+    session_id: Optional[str] = None,
+    control_key: Optional[str] = None,
+    reuse_existing: bool = True,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> Dict[str, Any]:
+    """Execute the handset audio loop using deterministic playback."""
+
+    base_url = backend.rstrip("/")
+    log_event(
+        "INFO",
+        "handset_harness_begin",
+        backend=base_url,
+        deviceId=device_id,
+        reuseExisting=reuse_existing,
+    )
+
+    log_event("INFO", "handset_harness_grant_project_media", package=package, deviceSerial=device_serial or "")
+    ensure_project_media(device_serial, package)
+    log_event("INFO", "handset_harness_project_media_granted", package=package)
+
+    resolved_session_id = session_id.strip() if session_id else ""
+    resolved_control_key = control_key.strip() if control_key else ""
+    session_payload: Dict[str, Any] = {}
+    if resolved_session_id and resolved_control_key:
+        log_event(
+            "INFO",
+            "handset_harness_using_provided_session",
+            sessionId=resolved_session_id,
+        )
+    else:
+        if reuse_existing:
+            session_payload = ensure_active_session(
+                base_url,
+                device_id,
+                control_token,
+                timeout=timeout,
+            )
+        else:
+            log_event("INFO", "handset_harness_creating_session", deviceId=device_id)
+            session_payload = create_session(base_url, device_id, timeout=timeout)
+        resolved_session_id = session_payload["sessionId"]
+        metadata = session_payload.get("metadata") or {}
+        control_meta = metadata.get("control") or {}
+        resolved_control_key = control_meta.get("key") or ""
+        if not resolved_control_key:
+            raise RuntimeError("Control channel metadata missing from session response")
+        log_event(
+            "INFO",
+            "handset_harness_session_ready",
+            sessionId=resolved_session_id,
+            expiresAt=session_payload.get("expiresAt"),
+            reused=reuse_existing,
+        )
+
+    existing_files = set(list_control_files(device_serial, package))
+    log_event("INFO", "handset_harness_initial_files", count=len(existing_files))
+
+    tone_segment = generate_test_tone(duration_seconds=duration, frequency_hz=frequency)
+    audio_b64 = audiosegment_to_base64_wav(tone_segment)
+    control_payload = {
+        "sessionId": resolved_session_id,
+        "message": {
+            "promptId": "harness-sine",
+            "audioBase64": audio_b64,
+            "sampleRateHz": 16_000,
+            "channels": 1,
+            "format": "wav",
+            "metadata": {
+                "frequencyHz": frequency,
+                "durationSeconds": duration,
+                "sampleWidthBytes": 2,
+            },
+        },
+    }
+
+    log_event("INFO", "handset_harness_enqueue", sessionId=resolved_session_id)
+    enqueue_resp = requests.post(
+        f"{base_url}/v1/mobile/managed-av/control",
+        headers={
+            "X-Ringdown-Control-Token": control_token,
+            "X-Ringdown-Control-Key": resolved_control_key,
+        },
+        json=control_payload,
+        timeout=timeout,
+    )
+    enqueue_resp.raise_for_status()
+    message_id = enqueue_resp.json().get("messageId")
+    log_event("INFO", "handset_harness_enqueued", messageId=message_id)
+
+    log_event("INFO", "handset_harness_wait_for_capture", sessionId=resolved_session_id)
+    time.sleep(3.0)
+    deadline = time.time() + 60.0
+    discovered: Optional[str] = None
+    while time.time() < deadline:
+        time.sleep(1.0)
+        current = set(list_control_files(device_serial, package))
+        new_files = current - existing_files
+        if new_files:
+            discovered = sorted(new_files)[-1]
+            break
+    if not discovered:
+        raise RuntimeError("No handset control harness artifact found within timeout")
+
+    log_event("INFO", "handset_harness_fetch_artifact", filename=discovered)
+    wav_bytes = read_control_file(device_serial, package, discovered)
+    output_dir_path = Path(output_dir)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
+    wav_path = output_dir_path / discovered
+    wav_path.write_bytes(wav_bytes)
+    log_event("INFO", "handset_harness_artifact_saved", path=str(wav_path))
+
+    captured_segment = base64_wav_to_audiosegment(base64.b64encode(wav_bytes).decode("ascii"))
+    metrics = _compute_match_metrics(tone_segment, captured_segment)
+    if metrics["normalizedError"] > 0.35:
+        raise RuntimeError(
+            f"Captured audio diverges from prompt: normalized error {metrics['normalizedError']:.3f}",
+        )
+
+    summary = {
+        "sessionId": resolved_session_id,
+        "messageId": message_id,
+        "wavFile": str(wav_path),
+        "bytesCaptured": len(wav_bytes),
+        "frequencyHz": frequency,
+        "durationSeconds": duration,
+        "capturedDurationSeconds": captured_segment.duration_seconds,
+        "normalizedError": metrics["normalizedError"],
+        "promptRms": metrics["promptRms"],
+        "capturedRms": metrics["capturedRms"],
+    }
+    log_event("INFO", "handset_harness_complete", **summary)
+    return summary
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", required=True, help="Backend base URL, e.g. https://example.a.run.app")
@@ -136,114 +291,51 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="artifacts", help="Directory to place captured WAV output")
     parser.add_argument("--session-id", default="", help="Reuse existing managed session identifier")
     parser.add_argument("--control-key", default="", help="Control key for the existing session")
+    parser.add_argument(
+        "--reuse-existing",
+        dest="reuse_existing",
+        action="store_true",
+        default=True,
+        help="Reuse an existing managed session via the automation helper (default).",
+    )
+    parser.add_argument(
+        "--no-reuse-existing",
+        dest="reuse_existing",
+        action="store_false",
+        help="Always create a fresh managed session before enqueuing audio.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help="HTTP timeout in seconds for backend requests (default: 30).",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    base_url = args.backend.rstrip("/")
-
-    print(f"Granting PROJECT_MEDIA app-op for {args.package} ...")
-    ensure_project_media(args.device_serial, args.package)
-
-    session_id_arg = args.session_id.strip()
-    control_key_arg = args.control_key.strip()
-    if session_id_arg and control_key_arg:
-        session_id = session_id_arg
-        control_key: Optional[str] = control_key_arg
-        print(f"Reusing managed session {session_id} with provided control key.")
-    elif session_id_arg or control_key_arg:
+    if args.session_id and not args.control_key:
         raise RuntimeError("Both --session-id and --control-key must be provided together.")
-    else:
-        print("Creating managed session...")
-        session_resp = requests.post(
-            f"{base_url}/v1/mobile/voice/session",
-            json={"deviceId": args.device_id},
-            timeout=30,
-        )
-        session_resp.raise_for_status()
-        session_payload = session_resp.json()
-        session_id = session_payload["sessionId"]
-        control_meta = session_payload.get("metadata", {}).get("control") or {}
-        control_key = control_meta.get("key")
-        if not control_key:
-            raise RuntimeError("Control channel metadata missing from session response")
+    if args.control_key and not args.session_id:
+        raise RuntimeError("Both --session-id and --control-key must be provided together.")
 
-    existing_files = set(list_control_files(args.device_serial, args.package))
-
-    print(f"Session {session_id} established; queuing control prompt...")
-    tone_segment = generate_test_tone(duration_seconds=args.duration, frequency_hz=args.frequency)
-    audio_b64 = audiosegment_to_base64_wav(tone_segment)
-    control_payload = {
-        "sessionId": session_id,
-        "message": {
-            "promptId": "harness-sine",
-            "audioBase64": audio_b64,
-            "sampleRateHz": 16_000,
-            "channels": 1,
-            "format": "wav",
-            "metadata": {
-                "frequencyHz": args.frequency,
-                "durationSeconds": args.duration,
-                "sampleWidthBytes": 2,
-            },
-        },
-    }
-    enqueue_resp = requests.post(
-        f"{base_url}/v1/mobile/managed-av/control",
-        headers={
-            "X-Ringdown-Control-Token": args.control_token,
-            "X-Ringdown-Control-Key": control_key,
-        },
-        json=control_payload,
-        timeout=30,
+    summary = run_handset_audio_loop(
+        backend=args.backend,
+        device_id=args.device_id,
+        control_token=args.control_token,
+        device_serial=args.device_serial,
+        package=args.package,
+        frequency=args.frequency,
+        duration=args.duration,
+        output_dir=args.output_dir,
+        session_id=args.session_id or None,
+        control_key=args.control_key or None,
+        reuse_existing=args.reuse_existing,
+        timeout=args.timeout,
     )
-    enqueue_resp.raise_for_status()
-    message_id = enqueue_resp.json().get("messageId")
-    print(f"Enqueued control message {message_id}")
-
-    print("Waiting for handset to process control prompt...")
-    time.sleep(3.0)
-    deadline = time.time() + 60.0
-    discovered: Optional[str] = None
-    while time.time() < deadline:
-        time.sleep(1.0)
-        current = set(list_control_files(args.device_serial, args.package))
-        new_files = current - existing_files
-        if new_files:
-            discovered = sorted(new_files)[-1]
-            break
-    if not discovered:
-        raise RuntimeError("No handset control harness artifact found within timeout")
-
-    print(f"Retrieving handset artifact {discovered} ...")
-    wav_bytes = read_control_file(args.device_serial, args.package, discovered)
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    wav_path = output_dir / discovered
-    wav_path.write_bytes(wav_bytes)
-    print(f"Saved WAV to {wav_path}")
-
-    captured_segment = base64_wav_to_audiosegment(base64.b64encode(wav_bytes).decode("ascii"))
-    metrics = _compute_match_metrics(tone_segment, captured_segment)
-    if metrics["normalizedError"] > 0.35:
-        raise RuntimeError(
-            f"Captured audio diverges from prompt: normalized error {metrics['normalizedError']:.3f}",
-        )
-
-    summary = {
-        "sessionId": session_id,
-        "messageId": message_id,
-        "wavFile": str(wav_path),
-        "bytesCaptured": len(wav_bytes),
-        "frequencyHz": args.frequency,
-        "durationSeconds": args.duration,
-        "capturedDurationSeconds": captured_segment.duration_seconds,
-        "normalizedError": metrics["normalizedError"],
-        "promptRms": metrics["promptRms"],
-        "capturedRms": metrics["capturedRms"],
-    }
-    print(json.dumps(summary, indent=2))
+    sys.stdout.write(json.dumps(summary, indent=2) + "\n")
+    sys.stdout.flush()
     return 0
 
 

@@ -13,7 +13,7 @@ import base64
 import binascii
 import secrets
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import settings
@@ -556,6 +556,67 @@ async def _dispose_sessions(
             }
             logger.warning(json.dumps(warn_payload))
         await _session_store.delete_session(session.session_id)
+
+
+@router.get(
+    "/managed-av/sessions/active",
+    response_model=MobileVoiceSessionResponse,
+)
+async def get_active_managed_session(
+    request: Request,
+    device_id: str = Query(..., alias="deviceId", min_length=4, max_length=128),
+) -> MobileVoiceSessionResponse:
+    """Return the latest reusable managed session metadata for *device_id*."""
+
+    _require_control_auth(request)
+    reusable_session, stale_sessions = await _prepare_existing_sessions(device_id)
+
+    if stale_sessions:
+        managed_client: ManagedAVClient | None = None
+        try:
+            managed_client = _get_managed_client()
+        except Exception:  # noqa: BLE001
+            managed_client = None
+
+        if managed_client is not None:
+            await _dispose_sessions(managed_client, stale_sessions, device_id)
+        else:
+            for stale in stale_sessions:
+                await _session_store.delete_session(stale.session_id)
+
+    if reusable_session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active managed session")
+
+    control_key = _extract_control_key(reusable_session)
+    if control_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Control channel not enabled for active session",
+        )
+
+    log_payload = {
+        "severity": "INFO",
+        "event": "mobile_managed_session_active_fetch",
+        "session_id": reusable_session.session_id,
+        "device_id": reusable_session.device_id,
+        "agent": reusable_session.agent_name,
+        "expires_at": reusable_session.expires_at.isoformat(),
+    }
+    metadata = reusable_session.metadata if isinstance(reusable_session.metadata, dict) else {}
+    if metadata:
+        log_payload["metadata"] = metadata
+    logger.info(json.dumps(log_payload))
+
+    return MobileVoiceSessionResponse(
+        session_id=reusable_session.session_id,
+        agent=reusable_session.agent_name,
+        room_url=reusable_session.room_url,
+        access_token=reusable_session.access_token,
+        expires_at=reusable_session.expires_at,
+        pipeline_session_id=reusable_session.pipeline_session_id,
+        greeting=reusable_session.greeting,
+        metadata=reusable_session.metadata,
+    )
 
 
 @router.post("/managed-av/completions", response_model=ManagedAVCompletionResponse)
