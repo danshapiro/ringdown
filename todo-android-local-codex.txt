@@ -10,7 +10,7 @@ Context
 
 High-Level Architecture Changes
 -------------------------------
-1. Replace Daily session bootstrap with a lightweight text-stream protocol (WebSocket? HTTP/2 SSE?) between handset and backend for litellm token streaming.
+1. Replace Daily session bootstrap with a lightweight WebSocket text-stream protocol between handset and backend for litellm token streaming.
 2. Remove managed A/V dependency paths (`ManagedAVClient`, `VoiceSessionRepository`, Daily CallClient) and introduce new session API that:
    - Authenticates devices.
    - Provides conversation metadata, agent config, and stream endpoints for upstream (user text) and downstream (assistant tokens).
@@ -35,7 +35,6 @@ Android Workstreams
   - Package models via Android dynamic feature or on-demand download.
   - Abstract behind an interface so Piper/Kokoro swap in later.
 - Implement local VAD (sherpa-onnx includes VAD; evaluate alternatives) to trigger end-of-turn detection.
-- Provide fallback to server transcription if device lacks horsepower (feature flag?).
 
 *Audio Output Pipeline*
 - Integrate sherpa-onnx TTS; design engine facade with pluggable backends (SherpaTtsEngine, PiperTtsEngine, KokoroTtsEngine).
@@ -67,18 +66,14 @@ Backend Workstreams
 
 Testing Strategy
 ----------------
+High early priority: harnesses so we can run the app, inject and read all types of input/output (including sending sythesized audio and extracting synthesized audio leveraging [live_test_all_functions.py](tests/live_test_all_functions.py) as an example), reading all logs, etc. Stand up the harness alongside feature spikes and keep rerunning it as each step lands.
 - Unit tests:
   - Android: isolate TTS/STT engine wrappers, VAD gating, token streaming client.
   - Backend: websocket contract tests ensuring valid frame sequences for mobile mode.
-- Integration tests:
-  - Android instrumentation test simulating token stream with mocked backend; verify playback & VAD pipeline.
-  - Backend end-to-end with mock mobile client sending text and consuming tokens.
-- Performance benchmarks on target phones (latency, CPU, battery).
-- Fallback tests verifying switching back to cloud audio if local engine unavailable.
 
 Migration & Rollout Considerations
 ----------------------------------
-- Feature flag by device (config.yaml) to toggle between Daily and local pipeline.
+- Managed A/V removal: once the Android client is on the local audio path, delete the managed A/V integrations and scrub remaining Daily references (telephony via Twilio ConversationRelay is already independent).
 - Model distribution: evaluate APK size; consider first-run download with checksum verification.
 - Observability: structured logs from handset (JSONL) to diagnose on-device pipeline; telemetry for latency, synthesis duration, ASR accuracy.
 - Security: ensure token streams are encrypted; sanitize logs to avoid leaking transcripts.
@@ -87,7 +82,7 @@ Migration & Rollout Considerations
 
 Open Questions / Options
 ------------------------
-- Transport: WebSocket vs gRPC streaming vs MQTT? (Need spike; WS simplest with current infra.)
+- Transport: WebSocket is the baseline; keep an eye on whether gRPC streaming or MQTT warrants a follow-up spike for reliability or telemetry.
 - Model management: bundle baseline models vs dynamic download; compatibility with Play Store size limits.
 - Multi-agent support: does local engine need multi-language voices? plan for model switching per agent?
 - Tool audio cues: replicate “thinking” sound locally or rely on text prompts?

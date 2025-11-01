@@ -62,5 +62,8 @@ android/app/tmp_apk/
 android/.gradle/
 *.zip
 
+# Third-party bundles (downloaded vendor artifacts should stay out of git)
+android/third_party/
+
 # Handset harness captures
 artifacts/handset/
