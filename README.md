@@ -113,6 +113,7 @@ The Android client uses Daily's managed A/V pipeline. Capture these once and add
 3. Generate a Pipecat Cloud token from **Developers → Tokens** and store it as `PIPECAT_API_KEY`.
 4. (Optional) For handset audio-loop automation (ringdown-32), generate a shared secret and store it as `MANAGED_AV_CONTROL_TOKEN`. The backend only enables the control channel test harness when this token is present, and the live harness must supply it via the `X-Ringdown-Control-Token` header.
 5. Run `cloudrun-deploy.py` and the helper will upload everything listed in `secret-manager.yaml`, wiring the environment variables into Cloud Run. After the first deploy, Android devices provision managed sessions without hitting the approval dialog.
+6. The Pipecat agent source lives in `pipelines/pipecat-agent/`. Build the Docker image from that directory when you need to update the managed A/V runtime.
 
 ## Android Managed A/V pipeline
 - Configure realtime model, voice, and VAD defaults through the `defaults.realtime` block in `config.yaml`. Agent-specific overrides still live under `agents.<name>.realtime` and are merged automatically when provisioning sessions.
@@ -125,7 +126,7 @@ The Android client uses Daily's managed A/V pipeline. Capture these once and add
 - Refresh the `.env` device pointer with `uv run python approve_new_phone.py sync-env`; it locates the newest enabled entry in `mobile_devices` and updates `LIVE_TEST_MOBILE_DEVICE_ID` for the harness.
 
 ### Pipecat pipeline notes
-The Managed A/V pipeline is configured directly in the Pipecat Cloud console (or via the Pipecat CLI). When you tweak agent images, scaling limits, or credentials, update this README or your runbook with the new values—there is no local YAML source of truth. After any change, run `uv run python -m app.mobile.smoke --device-id <approved-device> --base-url <backend-url>` to verify managed sessions return useful responses.
+The Managed A/V pipeline is configured directly in the Pipecat Cloud console (or via the Pipecat CLI). The code and Dockerfile used to build the production agent are mirrored in `pipelines/pipecat-agent/`; keep that directory in sync with whatever you deploy. After any change, run `uv run python -m app.mobile.smoke --device-id <approved-device> --base-url <backend-url>` to verify managed sessions return useful responses.
 
 ## Technical Details
 - Architecture: Twilio ConversationRelay streams audio to FastAPI over `/ws`, and the app routes messages through the `stream_response` pipeline (backed by your configured LLM provider), SQLite conversation memory, and any tools you enabled.
