@@ -49,10 +49,8 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.serializers.twilio import TwilioFrameSerializer
-from pipecat.services.gemini_multimodal_live.gemini import (
-    GeminiMultimodalLiveLLMService,
-)
-from pipecat.transports.network.fastapi_websocket import (
+from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
+from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
@@ -254,7 +252,7 @@ async def main(ws: WebSocket):
         ),
     )
 
-    llm = GeminiMultimodalLiveLLMService(
+    llm = GeminiLiveLLMService(
         api_key=os.getenv("GOOGLE_API_KEY"),
         model=GEMINI_MODEL,
         voice_id=VOICE_ID,

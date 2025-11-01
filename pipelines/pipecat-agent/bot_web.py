@@ -16,8 +16,8 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.services.gemini_multimodal_live.gemini import GeminiMultimodalLiveLLMService
-from pipecat.transports.services.daily import DailyParams, DailyTransport
+from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
+from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
 from config_loader import load_config
 
@@ -41,7 +41,7 @@ gemini_input_params = loaded_config["gemini_input_params"]
 async def main(transport: DailyTransport, config: Dict[str, Any]):
     logger.debug("Initializing assistant bot with loaded config")
 
-    llm = GeminiMultimodalLiveLLMService(
+    llm = GeminiLiveLLMService(
         api_key=os.getenv("GOOGLE_API_KEY"),
         model=GEMINI_MODEL,
         voice_id=VOICE_ID,

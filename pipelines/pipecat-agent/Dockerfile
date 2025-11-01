@@ -3,6 +3,12 @@ FROM dailyco/pipecat-base:latest
 
 WORKDIR /app
 
+# Build dependencies for optional audio filters (e.g., Krisp)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+  && rm -rf /var/lib/apt/lists/*
+
 # Copy agent configuration alongside the source code.
 COPY config.yaml /config.yaml
 COPY requirements.txt /app/requirements.txt

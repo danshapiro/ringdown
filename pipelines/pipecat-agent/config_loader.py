@@ -2,14 +2,15 @@ import sys
 import yaml
 from loguru import logger
 
-from pipecat.services.gemini_multimodal_live.gemini import (
-    InputParams,
-    GeminiMultimodalModalities,
-    GeminiMediaResolution,
-    GeminiVADParams,
+from google.genai.types import EndSensitivity, StartSensitivity
+
+from pipecat.services.google.gemini_live.llm import (
     ContextWindowCompressionParams,
+    GeminiMediaResolution,
+    GeminiModalities,
+    GeminiVADParams,
+    InputParams,
 )
-from pipecat.services.gemini_multimodal_live import events as gemini_events
 from pipecat.transcriptions.language import Language
 
 CONFIG_FILE_PATH = "../config.yaml"
@@ -92,7 +93,7 @@ def load_config(config_path: str = CONFIG_FILE_PATH) -> dict:
 
     try:
         modalities_str = gen_params_conf.get("modalities", "AUDIO").upper()
-        gemini_modalities = GeminiMultimodalModalities[modalities_str]
+        gemini_modalities = GeminiModalities[modalities_str]
     except KeyError:
         logger.error(
             f"Invalid modalities value '{modalities_str}' in config. Must be AUDIO or TEXT."
@@ -132,7 +133,7 @@ def load_config(config_path: str = CONFIG_FILE_PATH) -> dict:
             vad_params_dict["disabled"] = bool(vad_conf["disabled"])
         if "start_sensitivity" in vad_conf:
             try:
-                vad_params_dict["start_sensitivity"] = gemini_events.StartSensitivity[
+                vad_params_dict["start_sensitivity"] = StartSensitivity[
                     vad_conf["start_sensitivity"].upper()
                 ]
             except KeyError:
@@ -142,7 +143,7 @@ def load_config(config_path: str = CONFIG_FILE_PATH) -> dict:
                 sys.exit(1)
         if "end_sensitivity" in vad_conf:
             try:
-                vad_params_dict["end_sensitivity"] = gemini_events.EndSensitivity[
+                vad_params_dict["end_sensitivity"] = EndSensitivity[
                     vad_conf["end_sensitivity"].upper()
                 ]
             except KeyError:

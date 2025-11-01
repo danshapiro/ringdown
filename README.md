@@ -113,7 +113,7 @@ The Android client uses Daily's managed A/V pipeline. Capture these once and add
 3. Generate a Pipecat Cloud token from **Developers → Tokens** and store it as `PIPECAT_API_KEY`.
 4. (Optional) For handset audio-loop automation (ringdown-32), generate a shared secret and store it as `MANAGED_AV_CONTROL_TOKEN`. The backend only enables the control channel test harness when this token is present, and the live harness must supply it via the `X-Ringdown-Control-Token` header.
 5. Run `cloudrun-deploy.py` and the helper will upload everything listed in `secret-manager.yaml`, wiring the environment variables into Cloud Run. After the first deploy, Android devices provision managed sessions without hitting the approval dialog.
-6. The Pipecat agent source lives in `pipelines/pipecat-agent/`. Build the Docker image from that directory when you need to update the managed A/V runtime.
+6. The Pipecat agent source lives in `pipelines/pipecat-agent/` (with Krisp dependencies baked in). Build the Docker image from that directory when you need to update the managed A/V runtime.
 
 ## Android Managed A/V pipeline
 - Configure realtime model, voice, and VAD defaults through the `defaults.realtime` block in `config.yaml`. Agent-specific overrides still live under `agents.<name>.realtime` and are merged automatically when provisioning sessions.
