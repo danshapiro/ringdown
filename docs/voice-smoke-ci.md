@@ -8,7 +8,7 @@ This note captures the tasks needed to run the Phase 3 voice smoke test (`VoiceM
 - Java 17, with `JAVA_HOME` exported so the Gradle wrapper can locate it.
 - A connected device or emulator that shows up under `adb devices`.
   - Set `ANDROID_SERIAL` when more than one device might be present.
-- `.env` populated with production/staging endpoints as documented in `android/app/app/build.gradle.kts`.
+- `.env` populated with the production backend endpoint as documented in `android/app/app/build.gradle.kts`.
 
 ## Command Reference
 

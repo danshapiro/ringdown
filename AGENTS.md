@@ -1,3 +1,8 @@
+# Ringdown
+Ringdown is a phone assistant. You can call it (via twilio) or use voice or text with it (via an android app).
+It generally only has one user at a time, although a few secondary users are permitted on the same number. You don't need to worry about staging servers, concurrency, scaling, etc.
+This monorepo has both the backend server and the optional Android app.
+
 ## Coding Standards
 
 ## DON'T DO THIS
