@@ -46,9 +46,41 @@ class DeviceIdStore @Inject constructor(
         return prefs[LAST_AGENT_KEY]
     }
 
+    suspend fun currentAuthToken(): String? {
+        val prefs = dataStore.data.first()
+        return prefs[AUTH_TOKEN_KEY]
+    }
+
+    suspend fun currentResumeToken(): String? {
+        val prefs = dataStore.data.first()
+        return prefs[RESUME_TOKEN_KEY]
+    }
+
+    suspend fun updateAuthToken(token: String?) {
+        dataStore.edit { prefs ->
+            if (token.isNullOrBlank()) {
+                prefs.remove(AUTH_TOKEN_KEY)
+            } else {
+                prefs[AUTH_TOKEN_KEY] = token
+            }
+        }
+    }
+
+    suspend fun updateResumeToken(token: String?) {
+        dataStore.edit { prefs ->
+            if (token.isNullOrBlank()) {
+                prefs.remove(RESUME_TOKEN_KEY)
+            } else {
+                prefs[RESUME_TOKEN_KEY] = token
+            }
+        }
+    }
+
     companion object {
         private val DEVICE_ID_KEY = stringPreferencesKey("device_id")
         private val LAST_AGENT_KEY = stringPreferencesKey("last_agent")
+        private val AUTH_TOKEN_KEY = stringPreferencesKey("auth_token")
+        private val RESUME_TOKEN_KEY = stringPreferencesKey("resume_token")
 
         fun createDataStore(context: Context): DataStore<Preferences> {
             return androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(

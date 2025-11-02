@@ -2,6 +2,7 @@ package com.ringdown.mobile.di
 
 import com.ringdown.mobile.data.BackendEnvironment
 import com.ringdown.mobile.data.remote.RegistrationApi
+import com.ringdown.mobile.data.remote.TextSessionApi
 import com.ringdown.mobile.data.remote.VoiceApi
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -66,5 +67,11 @@ object NetworkModule {
     @Singleton
     fun provideVoiceApi(retrofit: Retrofit): VoiceApi {
         return retrofit.create(VoiceApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideTextSessionApi(retrofit: Retrofit): TextSessionApi {
+        return retrofit.create(TextSessionApi::class.java)
     }
 }
