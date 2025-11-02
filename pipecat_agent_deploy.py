@@ -34,6 +34,21 @@ class PipecatAgentConfig:
     docker_extra_args: list[str] | None = None
 
 
+def _gcloud_executable() -> str:
+    """Return an invocable gcloud command, handling Windows .cmd wrappers."""
+
+    candidates = ["gcloud"]
+    if os.name == "nt":
+        candidates = ["gcloud.cmd", "gcloud.CMD"] + candidates
+
+    for candidate in candidates:
+        path = which(candidate)
+        if path:
+            return path
+
+    return "gcloud"
+
+
 def _run_command(
     args: Sequence[str],
     *,
@@ -142,7 +157,7 @@ def _artifact_registry_tag_exists(image_repo: str, project_id: str, tag: str) ->
     try:
         output = _run_command(
             [
-                "gcloud",
+                _gcloud_executable(),
                 "artifacts",
                 "docker",
                 "images",
@@ -202,7 +217,7 @@ def _docker_tag(source: str, target: str) -> None:
 
 
 def _docker_login(host: str) -> None:
-    token = _run_command(["gcloud", "auth", "print-access-token"])
+    token = _run_command([_gcloud_executable(), "auth", "print-access-token"])
     _run_command(
         ["docker", "login", "-u", "oauth2accesstoken", "--password-stdin", f"https://{host}"],
         capture=False,
@@ -215,7 +230,7 @@ def _ensure_repository(host: str, project_id: str, repository: str) -> None:
     try:
         _run_command(
             [
-                "gcloud",
+                _gcloud_executable(),
                 "artifacts",
                 "repositories",
                 "describe",
@@ -228,7 +243,7 @@ def _ensure_repository(host: str, project_id: str, repository: str) -> None:
         log.info("Creating Artifact Registry repository %s in %s", repository, location)
         _run_command(
             [
-                "gcloud",
+                _gcloud_executable(),
                 "artifacts",
                 "repositories",
                 "create",
@@ -373,7 +388,7 @@ def deploy_if_needed(
         _docker_tag(image_with_timestamp, tree_image)
 
     _ensure_repository(host, project_id, repository)
-    _run_command(["gcloud", "auth", "configure-docker", host], capture=False)
+    _run_command([_gcloud_executable(), "auth", "configure-docker", host], capture=False)
     _docker_login(host)
 
     _docker_push(image_with_timestamp)

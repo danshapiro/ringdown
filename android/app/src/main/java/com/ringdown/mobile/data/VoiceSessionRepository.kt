@@ -1,9 +1,10 @@
 package com.ringdown.mobile.data
 
 import android.util.Log
+import com.ringdown.mobile.BuildConfig
 import com.ringdown.mobile.data.remote.VoiceApi
-import com.ringdown.mobile.data.remote.VoiceSessionRequest
 import com.ringdown.mobile.data.remote.ControlFetchRequest
+import com.ringdown.mobile.data.remote.VoiceSessionRequest
 import com.ringdown.mobile.domain.ControlMessage
 import com.ringdown.mobile.domain.ManagedVoiceSession
 import com.ringdown.mobile.di.IoDispatcher
@@ -29,6 +30,19 @@ class VoiceSessionRepository @Inject constructor(
 
     override suspend fun createSession(deviceId: String, agent: String?): ManagedVoiceSession =
         withContext(dispatcher) {
+            if (BuildConfig.DEBUG_USE_REGISTRATION_STUB) {
+                Log.i(TAG, "Returning stub managed session for device=$deviceId agent=$agent")
+                return@withContext ManagedVoiceSession(
+                    sessionId = "stub-session-$deviceId",
+                    agent = agent ?: "stub-agent",
+                    roomUrl = "https://example.invalid/room/${deviceId.takeLast(4)}",
+                    accessToken = "stub-access-token",
+                    expiresAt = Instant.now().plusSeconds(600),
+                    pipelineSessionId = "stub-pipeline-${deviceId.takeLast(6)}",
+                    metadata = emptyMap(),
+                    greeting = "Stub greeting ready.",
+                )
+            }
             Log.i(TAG, "Requesting managed session for device=$deviceId agent=$agent")
             val response = api.createVoiceSession(
                 VoiceSessionRequest(

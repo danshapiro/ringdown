@@ -7,6 +7,7 @@ import com.ringdown.mobile.data.models.LocalModelInstaller
 import com.ringdown.mobile.data.models.LocalModelInstaller.LocalModelId
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assume
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -18,6 +19,9 @@ class LocalModelInstallerInstrumentedTest {
 
     @Before
     fun setUp() {
+        if (!BuildConfig.ENABLE_LOCAL_AUDIO_ALPHA) {
+            return
+        }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         installer = LocalModelInstaller(context)
         installer.clearAllInstalledModels()
@@ -25,11 +29,15 @@ class LocalModelInstallerInstrumentedTest {
 
     @After
     fun tearDown() {
+        if (!BuildConfig.ENABLE_LOCAL_AUDIO_ALPHA || !::installer.isInitialized) {
+            return
+        }
         installer.clearAllInstalledModels()
     }
 
     @Test
     fun ensurePiperModelCopiesAssets() = runBlocking {
+        Assume.assumeTrue("Local audio alpha disabled", BuildConfig.ENABLE_LOCAL_AUDIO_ALPHA)
         val modelDir = installer.ensurePiperModel()
         val sentinel = modelDir.resolve("en_US-amy-low.onnx")
         assertThat(sentinel.exists()).isTrue()
@@ -42,6 +50,7 @@ class LocalModelInstallerInstrumentedTest {
 
     @Test
     fun ensureSherpaStreamingModelCopiesAssets() = runBlocking {
+        Assume.assumeTrue("Local audio alpha disabled", BuildConfig.ENABLE_LOCAL_AUDIO_ALPHA)
         val modelDir = installer.ensureSherpaStreamingAsrModel()
         val sentinel = modelDir.resolve("encoder-epoch-99-avg-1.int8.onnx")
         assertThat(sentinel.exists()).isTrue()
@@ -59,6 +68,7 @@ class LocalModelInstallerInstrumentedTest {
 
     @Test
     fun reinstallWhenPayloadMissing() = runBlocking {
+        Assume.assumeTrue("Local audio alpha disabled", BuildConfig.ENABLE_LOCAL_AUDIO_ALPHA)
         val modelDir = installer.ensurePiperModel()
         val sentinel = modelDir.resolve("en_US-amy-low.onnx")
         assertThat(sentinel.delete()).isTrue()

@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Assume
 import org.junit.rules.TestRule
 import org.junit.runner.Description
 import org.junit.runners.model.Statement
@@ -28,6 +29,7 @@ class RuntimePermissionRule private constructor(
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val targetContext = instrumentation.targetContext
         val packageName = targetContext.packageName
+        val uiAutomation = instrumentation.uiAutomation
 
         return object : Statement() {
             override fun evaluate() {
@@ -42,12 +44,12 @@ class RuntimePermissionRule private constructor(
                 )
 
                 try {
-                    configureInitialState(instrumentation.uiAutomation, packageName, targetContext)
+                    configureInitialState(uiAutomation, packageName, targetContext)
                     base.evaluate()
                 } finally {
                     if (restoreOriginalState) {
                         restoreStateIfNeeded(
-                            instrumentation.uiAutomation,
+                            uiAutomation,
                             packageName,
                             targetContext,
                             wasGrantedBefore
@@ -71,14 +73,30 @@ class RuntimePermissionRule private constructor(
         packageName: String,
         context: Context
     ) {
+        val currentlyGranted = isGranted(context)
         when (desiredState) {
             DesiredState.REVOKED -> {
-                attemptRevoke(uiAutomation, packageName)
-                waitForState(context, expectedGranted = false)
+                if (currentlyGranted) {
+                    logWarn(
+                        event = "permission_skip_revoke",
+                        details = mapOf(
+                            "permission" to permission,
+                            "reason" to "alreadyGranted"
+                        )
+                    )
+                    Assume.assumeTrue(
+                        "Microphone permission must be revoked before running this test.",
+                        false
+                    )
+                } else {
+                    waitForState(context, expectedGranted = false)
+                }
             }
             DesiredState.GRANTED -> {
-                attemptGrant(uiAutomation, packageName)
-                waitForState(context, expectedGranted = true)
+                if (!currentlyGranted) {
+                    attemptGrant(uiAutomation, packageName)
+                    waitForState(context, expectedGranted = true)
+                }
             }
         }
     }
@@ -93,12 +111,18 @@ class RuntimePermissionRule private constructor(
         if (current == originalGrant) {
             return
         }
+
         if (originalGrant) {
             attemptGrant(uiAutomation, packageName)
             waitForState(context, expectedGranted = true)
         } else {
-            attemptRevoke(uiAutomation, packageName)
-            waitForState(context, expectedGranted = false)
+            logInfo(
+                event = "permission_restore_skipped",
+                details = mapOf(
+                    "permission" to permission,
+                    "reason" to "originally_revoked"
+                )
+            )
         }
     }
 

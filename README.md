@@ -132,6 +132,7 @@ The Managed A/V pipeline is configured directly in the Pipecat Cloud console (or
 - `./gradlew :app:prepareLocalModels` (also wired into every `preBuild`) runs `android/scripts/prepare_local_models.py`, downloading the sherpa-onnx streaming ASR bundle (zipformer en 20M int8) and the Piper en_US Amy (low) voice if they are missing or stale, then regenerates `model_manifest.json`.
 - The combined asset footprint is ~120 MB (≈78 MB Piper, ≈42 MB sherpa-onnx). Track APK size while iterating; the manifest enforces checksums so upgrades replace the entire bundle atomically.
 - `LocalModelInstaller` reads the manifest at runtime, verifies recorded checksums, and only reinstalls when the manifest hash changes. We can migrate to a single multi-voice pack once a compact bilingual streaming model is ready; updating the manifest and script will automatically roll new assets out.
+- Set `ENABLE_LOCAL_AUDIO_ALPHA=true` in your Gradle or environment configuration before building if you want the handset to use the local ASR/TTS pipeline; otherwise it falls back to the Daily managed A/V path.
 
 ## Technical Details
 - Architecture: Twilio ConversationRelay streams audio to FastAPI over `/ws`, and the app routes messages through the `stream_response` pipeline (backed by your configured LLM provider), SQLite conversation memory, and any tools you enabled.

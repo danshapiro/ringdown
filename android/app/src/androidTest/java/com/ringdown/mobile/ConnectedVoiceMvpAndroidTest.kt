@@ -22,17 +22,8 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ConnectedVoiceMvpAndroidTest {
 
-    private val composeTestRule = createAndroidComposeRule<MainActivity>()
-
-    /**
-     * Voice sessions auto start with the last granted microphone permission.
-     * The rule clears RECORD_AUDIO before MainActivity launches and restores
-     * the original grant afterward so repeated runs stay isolated.
-     */
     @get:Rule
-    val ruleChain: TestRule = RuleChain
-        .outerRule(RuntimePermissionRule.microphone())
-        .around(composeTestRule)
+    val composeTestRule = createAndroidComposeRule<MainActivity>()
 
     @Test
     fun registersDeviceWithStubBackend() {

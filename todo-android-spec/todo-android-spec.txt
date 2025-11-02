@@ -36,7 +36,7 @@ Date: 2025-10-25
 
 - Whenever the app attempts to start or resume a voice session (including automatic launch connect, manual reconnect, or background auto-retry), it first verifies RECORD_AUDIO and any required Bluetooth permissions.
 - If permissions are missing, surface the system permission sheet immediately.
-- If the user denies, treat it exactly like a user-initiated hangup: stop trying to connect, display the idle main screen, and surface inline text under the Reconnect button noting Microphone permission required. The next attempt to connect re-triggers the sheet.
+- If the user denies, treat it exactly like a user-initiated hangup: stop trying to connect, display the idle main screen, and surface inline text under the Reconnect button noting Voice permissions required. The next attempt to connect re-triggers the sheet.
 
 6. Idle Main Screen
 → See mockup: mockup-2-idle-main.html
@@ -113,7 +113,7 @@ Date: 2025-10-25
 - No other status tones are introduced beyond whatever the backend streams today (thinking and completion chimes already originate server-side).
 
 14. Error Messaging Summary
-- Missing permissions: idle screen note Microphone permission required until the next connect attempt.
+- Missing permissions: idle screen note Voice permissions required until the next connect attempt.
 - Pending approval: blocking dialog with device ID, Check again button, and brief copy instructions.
 - Unexpected disconnect: transient reason banner plus reconnecting audio, followed by silent retries.
 - Registration failure after approval (e.g., backend down): treat as unexpected disconnect with reason from backend.

@@ -58,6 +58,7 @@ class ControlAudioInjectorTest {
         override fun join(session: com.ringdown.mobile.domain.ManagedVoiceSession, onError: (String?) -> Unit) {
             onError(null)
         }
+
         override fun leave(onComplete: () -> Unit) = onComplete()
         override fun release() {}
 
@@ -117,10 +118,10 @@ class ControlAudioInjectorTest {
                 "hVlE3G7eat+3n9Jff92GG32X/5Ppz1xKQIU/f0F6MXS4L7prGad2JCgh/iBCYDvgaCH35BnneOs4L7I0gbo/f0DFH" +
                 "AppD0FUPhfFG32dlR94n+nfq95HXEZZRlWjkT6MOkbBgb3717a6MUvs7yiCpWQipmDUIDNgB6FHI1/mPKmErhayy/" +
                 "g9vUKDMIhdzaTSX5arGjBc2t7an+Mf+l7nXTbaeFbMktJOLUjCg739yLiLM3AuWyosJn3jbOFE4E0gBuDx4n7k1+h" +
-                "kLEfxHfY+e0EBPMZGC/XQp5U4GMdcAl5YX72f6x9rHciblJhjVFhP1crABYAAAHqqdSWwHGuuJ7gkUeIT4IVgKKB7" +
+                "kLEfxHfY+u0EBPMZGC/XQp5U4GMdcAl5YX72f6x9rHciblJhjVFhP1crABYAAAHqqdSWwHGuuJ7gkUeIT4IVgKKB7" +
                 "IbejyicZKsiveXQDub7+wcSiyfcO2lOpF4MbDJ22nzRf/d+SHr9cVJmm1c9Rs4y3h0JCPbxT9y2x8W0HqQwlmSLCI" +
                 "RxgKOAl4QyjFCXiaVutoPJPN728wkK0h+oNOhHB1mHZ+ty23opf7V/cHxqde1qRl3WTBU6niUJEPj5F+QLz3G73Kn" +
-                "nmvCOUYZIgR2AuYIKieCSBaADsF3Ci9b86wIC+Bc8LSNBFlOTYihvZngHfu9/D35neCBvk2IaUyRBOC34FwIC++uP" +
+                "nmvCOUYZIgR2AuYIKieCSBaADsF3Ci9b86wIC+Fc8LSNBFlOTYihvZngHfu9/D35neCBvk2IaUyRBOC34FwIC++uP" +
                 "1l7CALD/n+mSDYm1ghKAVIFUhu2O3prkqXO7Cc8U5Pn5CBCeJRk600xCXe5qc3VtfK5/Kn/jeupygGcHWexHqDTQH" +
                 "wkK9fM73ofJcLaGpUuXPIyahJ2AaIAThGeLLJYWpMu0uMdO3PXxCAjdHc8yQ0aXV05m/nFRevJ+yn/bfDp2CmyfXm" +
                 "lO4DuLJwUS+/sN5uPQJ71lqyOc2o/1hqSBD4BIglGI4pG0nmuunMCq1ADq"

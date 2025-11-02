@@ -79,6 +79,7 @@ fun locatePythonExecutable(rootDir: File): String {
 val stagingBackend = stringConfig("STAGING_BACKEND_BASE_URL", "https://staging.api.ringdown.ai/", ensureSlash = true)
 val productionBackend = stringConfig("PRODUCTION_BACKEND_BASE_URL", "https://api.ringdown.ai/", ensureSlash = true)
 val debugStubEnabled = booleanConfig("DEBUG_USE_REGISTRATION_STUB", true)
+val localAudioAlpha = booleanConfig("ENABLE_LOCAL_AUDIO_ALPHA", false)
 
 android {
     namespace = "com.ringdown.mobile"
@@ -102,6 +103,7 @@ android {
         buildConfigField("Boolean", "DEBUG_USE_REGISTRATION_STUB", "${debugStubEnabled}")
         buildConfigField("int", "DEBUG_STUB_APPROVAL_THRESHOLD", "2")
         buildConfigField("Boolean", "ENABLE_TEST_CONTROL_HARNESS", "false")
+        buildConfigField("Boolean", "ENABLE_LOCAL_AUDIO_ALPHA", "${localAudioAlpha}")
     }
 
     buildTypes {
@@ -176,6 +178,7 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    implementation(files("../third_party/sherpa-onnx-1.12.15.aar"))
     implementation("co.daily:client:0.35.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

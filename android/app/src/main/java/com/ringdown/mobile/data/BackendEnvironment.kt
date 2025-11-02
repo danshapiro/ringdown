@@ -5,9 +5,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class BackendEnvironment @Inject constructor() {
+open class BackendEnvironment @Inject constructor() {
 
-    fun baseUrl(): String {
+    open fun baseUrl(): String {
         return if (BuildConfig.DEBUG) {
             BuildConfig.STAGING_BACKEND_BASE_URL
         } else {

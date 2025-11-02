@@ -40,7 +40,7 @@ class VoiceSessionControllerControlHarnessTest {
             ),
         )
         val harness = RecordingHarness()
-        val controller = VoiceSessionController(
+        val controller = ManagedVoiceSessionController(
             repository = repository,
             callClientFactory = object : VoiceCallClientFactory {
                 override fun create(): VoiceCallClient = object : VoiceCallClient {
@@ -49,8 +49,10 @@ class VoiceSessionControllerControlHarnessTest {
                     override fun join(session: ManagedVoiceSession, onError: (String?) -> Unit) {
                         onError(null)
                     }
+
                     override fun leave(onComplete: () -> Unit) = onComplete()
                     override fun release() {}
+
                     override fun addCustomAudioTrack(
                         name: co.daily.model.customtrack.CustomTrackName,
                         source: co.daily.model.customtrack.CustomAudioSource,
@@ -58,6 +60,7 @@ class VoiceSessionControllerControlHarnessTest {
                     ) {
                         onResult(null)
                     }
+
                     override fun removeCustomAudioTrack(
                         name: co.daily.model.customtrack.CustomTrackName,
                         onResult: (co.daily.model.RequestResult?) -> Unit,
@@ -168,10 +171,10 @@ class VoiceSessionControllerControlHarnessTest {
                     "kLEfxHfY+e0EBPMZGC/XQp5U4GMdcAl5YX72f6x9rHciblJhjVFhP1crABYAAAHqqdSWwHGuuJ7gkUeIT4IVgKKB7" +
                     "IbejyicZKsiveXQDub7+wcSiyfcO2lOpF4MbDJ22nzRf/d+SHr9cVJmm1c9Rs4y3h0JCPbxT9y2x8W0HqQwlmSLCI" +
                     "RxgKOAl4QyjFCXiaVutoPJPN728wkK0h+oNOhHB1mHZ+ty23opf7V/cHxqde1qRl3WTBU6niUJEPj5F+QLz3G73Kn" +
-                    "nmvCOUYZIgR2AuYIKieCSBaADsF3Ci9b86wIC+Bc8LSNBFlOTYihvZngHfu9/D35neCBvk2IaUyRBOC34FwIC++uP" +
+                    "nmvCOUYZIgR2AuYIKieCSBaADsF3Ci9b86wIC+Fc8LSNBFlOTYihvZngHfu9/D35neCBvk2IaUyRBOC34FwIC++uP" +
                     "1l7CALD/n+mSDYm1ghKAVIFUhu2O3prkqXO7Cc8U5Pn5CBCeJRk600xCXe5qc3VtfK5/Kn/jeupygGcHWexHqDTQH" +
                     "wkK9fM73ofJcLaGpUuXPIyahJ2AaIAThGeLLJYWpMu0uMdO3PXxCAjdHc8yQ0aXV05m/nFRevJ+yn/bfDp2CmyfXm" +
                     "lO4DuLJwUS+/sN5uPQJ71lqyOc2o/1hqSBD4BIglGI4pG0nmuunMCq1ADq"
-                )
+            )
     }
 }

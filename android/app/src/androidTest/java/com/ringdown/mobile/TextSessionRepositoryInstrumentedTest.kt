@@ -30,7 +30,7 @@ class TextSessionRepositoryInstrumentedTest {
     @Before
     fun setUp() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val arguments = instrumentation.arguments
+        val arguments = InstrumentationRegistry.getArguments()
         baseUrl = arguments.getString("textSessionBaseUrl", "")
 
         Assume.assumeTrue("textSessionBaseUrl not provided", baseUrl.isNotBlank())
