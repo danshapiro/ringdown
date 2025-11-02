@@ -154,6 +154,11 @@ class MobileDeviceConfig(BaseModel):
     notes: Optional[str] = None
     poll_after_seconds: Optional[int] = Field(default=None, ge=1, le=300, alias="pollAfterSeconds")
     blocked_reason: Optional[str] = Field(default=None, alias="blockedReason")
+    auth_token: Optional[str] = Field(default=None, alias="authToken", min_length=8)
+    tls_pins: List[str] = Field(default_factory=list, alias="tlsPins")
+    session_resume_ttl_seconds: int = Field(
+        default=300, ge=60, le=3600, alias="sessionResumeTtlSeconds"
+    )
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
@@ -171,6 +176,23 @@ class MobileManagedAVConfig(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
+class MobileTextConfig(BaseModel):
+    """Configuration describing text streaming behaviour for mobile clients."""
+
+    websocket_path: str = Field(default="/v1/mobile/text/session", alias="websocketPath", min_length=1)
+    session_ttl_seconds: int = Field(default=900, ge=60, le=7200, alias="sessionTtlSeconds")
+    resume_ttl_seconds: int = Field(default=300, ge=60, le=3600, alias="resumeTtlSeconds")
+    heartbeat_interval_seconds: int = Field(
+        default=15, ge=5, le=180, alias="heartbeatIntervalSeconds"
+    )
+    heartbeat_timeout_seconds: int = Field(
+        default=45, ge=10, le=600, alias="heartbeatTimeoutSeconds"
+    )
+    tls_pins: List[str] = Field(default_factory=list, alias="tlsPins")
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
 class ConfigModel(BaseModel):
     """Complete Ringdown configuration schema."""
 
@@ -183,6 +205,7 @@ class ConfigModel(BaseModel):
     docs_folder_greenlist_defaults: List[str] = Field(default_factory=list)
     mobile_devices: Dict[str, MobileDeviceConfig] = Field(default_factory=dict, alias="mobileDevices")
     mobile_managed_av: MobileManagedAVConfig = Field(alias="mobileManagedAv")
+    mobile_text: MobileTextConfig = Field(alias="mobileText")
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 

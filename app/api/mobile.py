@@ -21,7 +21,8 @@ from app.chat import stream_response
 from app.logging_utils import logger
 from app.managed_av.client import ManagedAVClient, ManagedAVSession
 from app.managed_av.session_store import ManagedAVSessionStore, ManagedSessionState, get_session_store
-from app.mobile.config_store import ensure_device_entry
+from app.mobile.config_store import ensure_device_entry, ensure_device_security_fields
+from app.mobile.text_session_store import get_text_session_store
 from app.memory import log_turn
 from app.settings import get_agent_config
 
@@ -85,6 +86,34 @@ class MobileVoiceSessionResponse(BaseModel):
     pipeline_session_id: Optional[str] = Field(default=None, alias="pipelineSessionId")
     greeting: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MobileTextSessionRequest(BaseModel):
+    """Payload to initiate or resume a text streaming session."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    device_id: str = Field(..., alias="deviceId", min_length=4, max_length=128)
+    auth_token: Optional[str] = Field(default=None, alias="authToken", min_length=1, max_length=256)
+    agent: Optional[str] = None
+    resume_token: Optional[str] = Field(default=None, alias="resumeToken")
+
+
+class MobileTextSessionResponse(BaseModel):
+    """Response describing the WebSocket bootstrap for text streaming."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId")
+    session_token: str = Field(..., alias="sessionToken")
+    resume_token: str = Field(..., alias="resumeToken")
+    websocket_path: str = Field(..., alias="websocketPath")
+    agent: str
+    expires_at: datetime = Field(..., alias="expiresAt")
+    heartbeat_interval_seconds: int = Field(..., alias="heartbeatIntervalSeconds")
+    heartbeat_timeout_seconds: int = Field(..., alias="heartbeatTimeoutSeconds")
+    tls_pins: list[str] = Field(default_factory=list, alias="tlsPins")
+    auth_token: Optional[str] = Field(default=None, alias="authToken")
 
 
 class ManagedAVCompletionRequest(BaseModel):
@@ -271,6 +300,12 @@ def _normalise_device_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
         result["approved_message"] = result["approvedMessage"]
     if "pendingMessage" in result and "pending_message" not in result:
         result["pending_message"] = result["pendingMessage"]
+    if "authToken" in result and "auth_token" not in result:
+        result["auth_token"] = result["authToken"]
+    if "tlsPins" in result and "tls_pins" not in result:
+        result["tls_pins"] = result["tlsPins"]
+    if "sessionResumeTtlSeconds" in result and "session_resume_ttl_seconds" not in result:
+        result["session_resume_ttl_seconds"] = result["sessionResumeTtlSeconds"]
     return result
 
 
@@ -494,6 +529,148 @@ async def voice_session(payload: MobileVoiceSessionRequest) -> MobileVoiceSessio
         pipeline_session_id=managed_session.pipeline_session_id,
         greeting=managed_session.greeting or greeting,
         metadata=managed_session.metadata,
+    )
+
+
+@router.post("/text/session", response_model=MobileTextSessionResponse)
+async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionResponse:
+    """Issue or resume a WebSocket text session for the mobile client."""
+
+    device_id = payload.device_id.strip()
+    if not device_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid deviceId")
+
+    raw_cfg = settings.get_mobile_device(device_id)
+    if not raw_cfg:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown device")
+
+    device_cfg = _normalise_device_entry(raw_cfg)
+    if not device_cfg.get("enabled"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device not approved")
+
+    provided_token = (payload.auth_token or "").strip()
+    configured_token = (device_cfg.get("auth_token") or "").strip()
+
+    if not configured_token:
+        try:
+            refreshed_entry = ensure_device_security_fields(device_id, metadata=device_cfg)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to backfill security fields for device %s: %s", device_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Unable to prepare device security configuration",
+            ) from exc
+        device_cfg = _normalise_device_entry(refreshed_entry)
+        configured_token = (device_cfg.get("auth_token") or "").strip()
+
+    if provided_token and configured_token:
+        if not secrets.compare_digest(provided_token, configured_token):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    elif configured_token:
+        logger.warning(
+            "Device %s initiated text session without auth token; allowing due to legacy client",
+            device_id,
+        )
+        provided_token = configured_token
+    else:
+        logger.warning("Device %s missing configured auth token; allowing unsecured handshake", device_id)
+
+    agent_name = payload.agent or device_cfg.get("agent")
+    if not agent_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Agent not specified")
+
+    try:
+        agent_cfg = settings.get_agent_config(agent_name)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Agent '{agent_name}' not found",
+        ) from exc
+
+    text_cfg = settings.get_mobile_text_config()
+    heartbeat_interval = int(text_cfg.get("heartbeat_interval_seconds") or 15)
+    heartbeat_timeout = int(text_cfg.get("heartbeat_timeout_seconds") or 45)
+    session_ttl = int(text_cfg.get("session_ttl_seconds") or 900)
+    resume_default = int(text_cfg.get("resume_ttl_seconds") or 300)
+    device_resume = int(device_cfg.get("session_resume_ttl_seconds") or resume_default)
+    resume_ttl = max(device_resume, 60)
+
+    tls_pins: list[str] = []
+    for pin in text_cfg.get("tls_pins", []):
+        if pin not in tls_pins:
+            tls_pins.append(pin)
+    for pin in device_cfg.get("tls_pins", []):
+        if pin not in tls_pins:
+            tls_pins.append(pin)
+
+    store = get_text_session_store()
+    resumed = bool(payload.resume_token)
+
+    if resumed:
+        resume_token = (payload.resume_token or "").strip()
+        try:
+            state, session_token = await store.resume_session(
+                resume_token=resume_token,
+                session_ttl_seconds=session_ttl,
+                resume_ttl_seconds=resume_ttl,
+                heartbeat_interval_seconds=heartbeat_interval,
+                heartbeat_timeout_seconds=heartbeat_timeout,
+                tls_pins=tls_pins,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Resume token not recognised",
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Session already active",
+            ) from exc
+
+        if state.agent_name != agent_name:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Session bound to a different agent",
+            )
+        state.agent_config = agent_cfg
+    else:
+        state, session_token = await store.create_session(
+            device_id=device_id,
+            agent_name=agent_name,
+            agent_config=agent_cfg,
+            heartbeat_interval_seconds=heartbeat_interval,
+            heartbeat_timeout_seconds=heartbeat_timeout,
+            tls_pins=tls_pins,
+            session_ttl_seconds=session_ttl,
+            resume_ttl_seconds=resume_ttl,
+        )
+
+    websocket_path = str(text_cfg.get("websocket_path") or "/v1/mobile/text/session")
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "mobile_text_session.issued",
+                "deviceId": device_id,
+                "sessionId": state.session_id,
+                "resumed": resumed,
+            },
+            ensure_ascii=True,
+        )
+    )
+
+    return MobileTextSessionResponse(
+        session_id=state.session_id,
+        session_token=session_token,
+        resume_token=state.resume_token,
+        websocket_path=websocket_path,
+        agent=state.agent_name,
+        expires_at=state.expires_at,
+        heartbeat_interval_seconds=heartbeat_interval,
+        heartbeat_timeout_seconds=heartbeat_timeout,
+        tls_pins=tls_pins,
+        auth_token=configured_token or None,
     )
 
 

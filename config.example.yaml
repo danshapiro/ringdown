@@ -177,3 +177,11 @@ mobile_managed_av:
   session_ttl_seconds: 600
   metadata:
     product: ringdown
+
+mobile_text:
+  websocket_path: /v1/mobile/text/session
+  session_ttl_seconds: 900
+  resume_ttl_seconds: 300
+  heartbeat_interval_seconds: 12
+  heartbeat_timeout_seconds: 30
+  tls_pins: []

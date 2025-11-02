@@ -251,6 +251,16 @@ def get_mobile_managed_av_config() -> Dict[str, Any]:
     return copy.deepcopy(managed)
 
 
+def get_mobile_text_config() -> Dict[str, Any]:
+    """Return configuration for mobile text streaming sessions."""
+
+    cfg = _load_config()
+    mobile = cfg.get("mobile_text")
+    if not mobile:
+        raise ValueError("mobile_text missing in config.yaml")
+    return copy.deepcopy(mobile)
+
+
 def get_calendar_user_name() -> str:
     """Return the friendly user name referenced in calendar prompts."""
     cfg = _load_config()
