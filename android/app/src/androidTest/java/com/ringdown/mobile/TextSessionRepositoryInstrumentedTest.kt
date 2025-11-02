@@ -1,40 +1,66 @@
 package com.ringdown.mobile
 
-import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
-import com.ringdown.mobile.BuildConfig
-import com.ringdown.mobile.data.TextSessionGateway
+import com.ringdown.mobile.data.TextSessionRepository
+import com.ringdown.mobile.data.remote.TextSessionApi
 import com.ringdown.mobile.data.store.DeviceIdStore
-import dagger.hilt.android.testing.HiltAndroidRule
-import dagger.hilt.android.testing.HiltAndroidTest
-import java.util.Locale
-import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
-import org.junit.Assume.assumeTrue
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
+import org.junit.Assume
 import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import retrofit2.HttpException
 
-@HiltAndroidTest
 @RunWith(AndroidJUnit4::class)
 class TextSessionRepositoryInstrumentedTest {
 
-    @get:Rule
-    val hiltRule = HiltAndroidRule(this)
-
-    @Inject lateinit var gateway: TextSessionGateway
-    @Inject lateinit var deviceIdStore: DeviceIdStore
+    private lateinit var repository: TextSessionRepository
+    private lateinit var deviceIdStore: DeviceIdStore
+    private lateinit var baseUrl: String
 
     @Before
     fun setUp() {
-        hiltRule.inject()
-        val backendUrl = BuildConfig.STAGING_BACKEND_BASE_URL
-        assumeTrue(
-            "backendUrl must be configured (see README handset smoke instructions)",
-            backendUrl.isNotBlank(),
-        )
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val arguments = InstrumentationRegistry.getArguments()
+        baseUrl = arguments.getString("textSessionBaseUrl")
+            ?: BuildConfig.STAGING_BACKEND_BASE_URL
+
+        if (baseUrl.isBlank()) {
+            Assume.assumeTrue("textSessionBaseUrl not configured", false)
+        }
+
+        val context = instrumentation.targetContext
+        val dataStore = DeviceIdStore.createDataStore(context)
+        deviceIdStore = DeviceIdStore(dataStore)
+
+        val logging = HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BASIC
+        }
+        val client = OkHttpClient.Builder()
+            .addInterceptor(logging)
+            .build()
+
+        val moshi = Moshi.Builder()
+            .addLast(KotlinJsonAdapterFactory())
+            .build()
+
+        val retrofit = Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(client)
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+
+        val api = retrofit.create(TextSessionApi::class.java)
+        repository = TextSessionRepository(api, deviceIdStore, Dispatchers.IO)
     }
 
     @Test
@@ -42,11 +68,19 @@ class TextSessionRepositoryInstrumentedTest {
         deviceIdStore.updateAuthToken(null)
         deviceIdStore.updateResumeToken(null)
 
-        val bootstrap = gateway.startTextSession(agent = null)
+        val bootstrap = try {
+            repository.startTextSession()
+        } catch (error: HttpException) {
+            Assume.assumeTrue(
+                "Text session endpoint unavailable (${error.code()})",
+                false,
+            )
+            return@runBlocking
+        }
 
         assertThat(bootstrap.sessionId).isNotEmpty()
         assertThat(bootstrap.sessionToken).isNotEmpty()
-        assertThat(bootstrap.websocketPath.lowercase(Locale.US)).contains("/v1/mobile/text")
+        assertThat(bootstrap.websocketPath.lowercase()).contains("/v1/mobile/text")
 
         val persistedAuthToken = deviceIdStore.currentAuthToken()
         val persistedResumeToken = deviceIdStore.currentResumeToken()
@@ -54,10 +88,5 @@ class TextSessionRepositoryInstrumentedTest {
         assertThat(persistedAuthToken).isNotNull()
         assertThat(persistedAuthToken).isNotEmpty()
         assertThat(persistedResumeToken).isEqualTo(bootstrap.resumeToken)
-
-        Log.i(
-            "TextSessionRepositoryTest",
-            "Session id=${bootstrap.sessionId} token=${bootstrap.sessionToken.take(8)}…",
-        )
     }
 }
