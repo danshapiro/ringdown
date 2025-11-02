@@ -8,6 +8,7 @@ plugins {
 import java.io.File
 import java.util.Properties
 import org.gradle.api.GradleException
+import org.gradle.api.tasks.Exec
 
 fun loadEnvFile(path: java.io.File): Map<String, String> {
     if (!path.exists()) return emptyMap()
@@ -54,6 +55,25 @@ fun booleanConfig(key: String, default: Boolean): Boolean {
             else -> default
         }
     } ?: default
+}
+
+val hostOsName = System.getProperty("os.name").lowercase()
+val isWindowsHost = hostOsName.contains("windows")
+val isWslHost = !isWindowsHost && System.getenv("WSL_DISTRO_NAME") != null
+val pythonEnvName = if (isWindowsHost) ".venv" else ".venv-wsl"
+
+fun locatePythonExecutable(rootDir: File): String {
+    val candidates = listOf(
+        File(rootDir, ".venv/Scripts/python.exe"),
+        File(rootDir, ".venv/Scripts/python"),
+        File(rootDir, ".venv/bin/python"),
+        File(rootDir, ".venv-wsl/bin/python"),
+    )
+    val match = candidates.firstOrNull { it.exists() && it.canExecute() }
+    if (match != null) {
+        return match.absolutePath
+    }
+    return if (isWindowsHost) "python.exe" else "python3"
 }
 
 val stagingBackend = stringConfig("STAGING_BACKEND_BASE_URL", "https://staging.api.ringdown.ai/", ensureSlash = true)
@@ -187,6 +207,32 @@ kapt {
     correctErrorTypes = true
 }
 
+val prepareLocalModels = tasks.register<Exec>("prepareLocalModels") {
+    group = "ringdown"
+    description = "Download and validate bundled ASR/TTS model assets."
+
+    val pythonExecutable = locatePythonExecutable(rootProject.rootDir)
+    val scriptFile = rootProject.file("scripts/prepare_local_models.py")
+    val modelsDir = rootProject.file("third_party/models")
+    val manifestFile = project.file("src/main/assets/model_manifest.json")
+
+    workingDir = rootProject.rootDir
+    commandLine(
+        pythonExecutable,
+        scriptFile.absolutePath,
+        "--models-dir",
+        modelsDir.absolutePath,
+        "--manifest",
+        manifestFile.absolutePath,
+    )
+    environment("UV_PROJECT_ENVIRONMENT", pythonEnvName)
+    environment("PYTHONUNBUFFERED", "1")
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(prepareLocalModels)
+}
+
 val adbExecutableProvider = providers.provider {
     val sdkDirCandidates = sequenceOf(
         localProperties.getProperty("sdk.dir"),
@@ -199,10 +245,7 @@ val adbExecutableProvider = providers.provider {
             "Android SDK not configured. Set sdk.dir in local.properties or export ANDROID_SDK_ROOT.",
         )
 
-    val osName = System.getProperty("os.name").lowercase()
-    val isWindowsHost = osName.contains("windows")
-    val isWsl = !isWindowsHost && System.getenv("WSL_DISTRO_NAME") != null
-    val adbCandidates = if (isWindowsHost || isWsl) {
+    val adbCandidates = if (isWindowsHost || isWslHost) {
         listOf("adb.exe", "adb")
     } else {
         listOf("adb")

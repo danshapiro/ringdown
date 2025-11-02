@@ -30,13 +30,10 @@ class TextSessionRepositoryInstrumentedTest {
     @Before
     fun setUp() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val arguments = InstrumentationRegistry.getArguments()
-        baseUrl = arguments.getString("textSessionBaseUrl")
-            ?: BuildConfig.STAGING_BACKEND_BASE_URL
+        val arguments = instrumentation.arguments
+        baseUrl = arguments.getString("textSessionBaseUrl", "")
 
-        if (baseUrl.isBlank()) {
-            Assume.assumeTrue("textSessionBaseUrl not configured", false)
-        }
+        Assume.assumeTrue("textSessionBaseUrl not provided", baseUrl.isNotBlank())
 
         val context = instrumentation.targetContext
         val dataStore = DeviceIdStore.createDataStore(context)

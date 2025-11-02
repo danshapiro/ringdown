@@ -128,6 +128,11 @@ The Android client uses Daily's managed A/V pipeline. Capture these once and add
 ### Pipecat pipeline notes
 The Managed A/V pipeline is configured directly in the Pipecat Cloud console (or via the Pipecat CLI). The code and Dockerfile used to build the production agent are mirrored in `pipelines/pipecat-agent/`; keep that directory in sync with whatever you deploy. After any change, run `uv run python -m app.mobile.smoke --device-id <approved-device> --base-url <backend-url>` to verify managed sessions return useful responses.
 
+## Android Local Audio Assets
+- `./gradlew :app:prepareLocalModels` (also wired into every `preBuild`) runs `android/scripts/prepare_local_models.py`, downloading the sherpa-onnx streaming ASR bundle (zipformer en 20M int8) and the Piper en_US Amy (low) voice if they are missing or stale, then regenerates `model_manifest.json`.
+- The combined asset footprint is ~120 MB (≈78 MB Piper, ≈42 MB sherpa-onnx). Track APK size while iterating; the manifest enforces checksums so upgrades replace the entire bundle atomically.
+- `LocalModelInstaller` reads the manifest at runtime, verifies recorded checksums, and only reinstalls when the manifest hash changes. We can migrate to a single multi-voice pack once a compact bilingual streaming model is ready; updating the manifest and script will automatically roll new assets out.
+
 ## Technical Details
 - Architecture: Twilio ConversationRelay streams audio to FastAPI over `/ws`, and the app routes messages through the `stream_response` pipeline (backed by your configured LLM provider), SQLite conversation memory, and any tools you enabled.
 - Configuration: Override `RINGDOWN_CONFIG_PATH` to swap between "workday" and "weekend" personalities without editing files.

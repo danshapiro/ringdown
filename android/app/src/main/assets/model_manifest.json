@@ -1,0 +1,59 @@
+{
+  "content_sha256": "028e5df6f633faf1cbf8fc98239af9776cc74fffbc326555bbbfb04a36c5826f",
+  "models": [
+    {
+      "asset_dir": "vits-piper-en_US-amy-low",
+      "display_name": "Piper en_US Amy (low)",
+      "id": "piper-amy-low-tts",
+      "install_dir": "piper_en_us_amy_low",
+      "kind": "tts",
+      "payloads": [
+        {
+          "relative_path": "en_US-amy-low.onnx",
+          "sha256": "8275b02c37c4ce6483b26a91704807e6de0c3f0bf8068e5d3b3598ab0da4253e",
+          "size_bytes": 63104657
+        },
+        {
+          "relative_path": "en_US-amy-low.onnx.json",
+          "sha256": "2250a9a605b8dc35a116717fadc5056695dd809e34a15d02f72a0f52d53d3ebb",
+          "size_bytes": 4164
+        },
+        {
+          "relative_path": "tokens.txt",
+          "sha256": "42d1a69ed2b91a51928a711aa228ed9f3dc021c6d359a3e9c4f37eb1d20f80bd",
+          "size_bytes": 763
+        }
+      ]
+    },
+    {
+      "asset_dir": "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17",
+      "display_name": "sherpa-onnx streaming zipformer en 20M (int8)",
+      "id": "sherpa-streaming-zipformer-en-20m",
+      "install_dir": "sherpa_streaming_en_20m",
+      "kind": "asr",
+      "payloads": [
+        {
+          "relative_path": "encoder-epoch-99-avg-1.int8.onnx",
+          "sha256": "3810755ce7c3ab26b42a8bcf39d191308fa27fb0f53358823ba46141d03b7eb3",
+          "size_bytes": 42845182
+        },
+        {
+          "relative_path": "decoder-epoch-99-avg-1.int8.onnx",
+          "sha256": "21e2a2acd961b3ac72f55be2f10f1a285e1b0b0ba010d7c0b6eab141411b163c",
+          "size_bytes": 539499
+        },
+        {
+          "relative_path": "joiner-epoch-99-avg-1.int8.onnx",
+          "sha256": "e085d73b593cf9b0707f370dbd656d58327d3fe36d80d849202ef81df02cb01e",
+          "size_bytes": 259572
+        },
+        {
+          "relative_path": "tokens.txt",
+          "sha256": "49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb",
+          "size_bytes": 5048
+        }
+      ]
+    }
+  ],
+  "schema_version": 1
+}
