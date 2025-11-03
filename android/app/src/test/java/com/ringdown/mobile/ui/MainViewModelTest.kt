@@ -1,6 +1,5 @@
 package com.ringdown.mobile.ui
 
-import android.media.projection.MediaProjection
 import com.google.common.truth.Truth.assertThat
 import com.ringdown.mobile.data.DeviceDescriptor
 import com.ringdown.mobile.data.RegistrationGateway
@@ -132,6 +131,5 @@ class MainViewModelTest {
 
         override fun stop() {}
 
-        override fun updateMediaProjection(token: MediaProjection?) {}
     }
 }

@@ -11,7 +11,6 @@ import com.ringdown.mobile.domain.RegistrationStatus
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -36,28 +35,22 @@ class RegistrationRepository @Inject constructor(
     @IoDispatcher private val dispatcher: CoroutineDispatcher,
 ) : RegistrationGateway {
 
-    private val stubAttempts = ConcurrentHashMap<String, Int>()
-
     override suspend fun ensureDeviceId(): String = withContext(dispatcher) {
         deviceIdStore.getOrCreateId()
     }
 
     override suspend fun register(deviceId: String, descriptor: DeviceDescriptor): RegistrationStatus =
         withContext(dispatcher) {
-            if (backendEnvironment.useStubRegistration) {
-                invokeStub(deviceId)
-            } else {
-                val response = api.registerDevice(
-                    RegisterDeviceRequest(
-                        deviceId = deviceId,
-                        label = descriptor.label,
-                        platform = descriptor.platform,
-                        model = descriptor.model,
-                        appVersion = descriptor.appVersion,
-                    ),
-                )
-                mapResponse(deviceId, response)
-            }
+            val response = api.registerDevice(
+                RegisterDeviceRequest(
+                    deviceId = deviceId,
+                    label = descriptor.label,
+                    platform = descriptor.platform,
+                    model = descriptor.model,
+                    appVersion = descriptor.appVersion,
+                ),
+            )
+            mapResponse(deviceId, response)
         }
 
     private suspend fun mapResponse(
@@ -84,24 +77,6 @@ class RegistrationRepository @Inject constructor(
             )
 
             else -> throw RegistrationException("Unexpected registration status '${response.status}'")
-        }
-    }
-
-    private suspend fun invokeStub(deviceId: String): RegistrationStatus {
-        val attempt = stubAttempts.merge(deviceId, 1) { current, _ -> current + 1 } ?: 1
-        val threshold = backendEnvironment.stubApprovalThreshold.coerceAtLeast(1)
-        return if (attempt >= threshold) {
-            val agentName = "debug-agent"
-            deviceIdStore.saveLastSuccessfulAgent(agentName)
-            RegistrationStatus.Approved(
-                agentName = agentName,
-                message = "Device approved (stub)",
-            )
-        } else {
-            RegistrationStatus.Pending(
-                message = "Awaiting administrator approval",
-                pollAfterSeconds = 5,
-            )
         }
     }
 

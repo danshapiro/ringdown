@@ -78,7 +78,6 @@ fun locatePythonExecutable(rootDir: File): String {
 
 val stagingBackend = stringConfig("STAGING_BACKEND_BASE_URL", "https://staging.api.ringdown.ai/", ensureSlash = true)
 val productionBackend = stringConfig("PRODUCTION_BACKEND_BASE_URL", "https://api.ringdown.ai/", ensureSlash = true)
-val debugStubEnabled = booleanConfig("DEBUG_USE_REGISTRATION_STUB", true)
 val localAudioAlpha = booleanConfig("ENABLE_LOCAL_AUDIO_ALPHA", false)
 
 android {
@@ -100,9 +99,6 @@ android {
         testApplicationId = "com.ringdown.mobile.test"
         buildConfigField("String", "STAGING_BACKEND_BASE_URL", "\"$stagingBackend\"")
         buildConfigField("String", "PRODUCTION_BACKEND_BASE_URL", "\"$productionBackend\"")
-        buildConfigField("Boolean", "DEBUG_USE_REGISTRATION_STUB", "${debugStubEnabled}")
-        buildConfigField("int", "DEBUG_STUB_APPROVAL_THRESHOLD", "2")
-        buildConfigField("Boolean", "ENABLE_TEST_CONTROL_HARNESS", "false")
         buildConfigField("Boolean", "ENABLE_LOCAL_AUDIO_ALPHA", "${localAudioAlpha}")
     }
 
@@ -110,7 +106,6 @@ android {
         getByName("debug") {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-            buildConfigField("Boolean", "ENABLE_TEST_CONTROL_HARNESS", "true")
         }
         getByName("release") {
             isMinifyEnabled = false

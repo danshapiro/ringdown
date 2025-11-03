@@ -1,9 +1,8 @@
 package com.ringdown.mobile.data
 
 import android.util.Log
-import com.ringdown.mobile.BuildConfig
-import com.ringdown.mobile.data.remote.VoiceApi
 import com.ringdown.mobile.data.remote.ControlFetchRequest
+import com.ringdown.mobile.data.remote.VoiceApi
 import com.ringdown.mobile.data.remote.VoiceSessionRequest
 import com.ringdown.mobile.domain.ControlMessage
 import com.ringdown.mobile.domain.ManagedVoiceSession
@@ -21,6 +20,8 @@ interface VoiceSessionDataSource {
 }
 
 private const val TAG = "VoiceSessionRepo"
+private const val ENABLE_REGISTRATION_STUB_PROPERTY = "ringdown.enable_registration_stub"
+private const val DISABLE_REGISTRATION_STUB_PROPERTY = "ringdown.disable_registration_stub"
 
 @Singleton
 class VoiceSessionRepository @Inject constructor(
@@ -30,20 +31,25 @@ class VoiceSessionRepository @Inject constructor(
 
     override suspend fun createSession(deviceId: String, agent: String?): ManagedVoiceSession =
         withContext(dispatcher) {
-            if (BuildConfig.DEBUG_USE_REGISTRATION_STUB) {
-                Log.i(TAG, "Returning stub managed session for device=$deviceId agent=$agent")
+            val stubEnabled = java.lang.Boolean.getBoolean(ENABLE_REGISTRATION_STUB_PROPERTY) &&
+                !java.lang.Boolean.getBoolean(DISABLE_REGISTRATION_STUB_PROPERTY)
+            if (stubEnabled) {
+                Log.i(TAG, "Returning stub managed session for device=" + deviceId + " agent=" + agent)
+                val suffix4 = if (deviceId.length >= 4) deviceId.takeLast(4) else deviceId
+                val suffix6 = if (deviceId.length >= 6) deviceId.takeLast(6) else deviceId
                 return@withContext ManagedVoiceSession(
-                    sessionId = "stub-session-$deviceId",
+                    sessionId = "stub-session-" + deviceId,
                     agent = agent ?: "stub-agent",
-                    roomUrl = "https://example.invalid/room/${deviceId.takeLast(4)}",
+                    roomUrl = "https://example.invalid/room/" + suffix4,
                     accessToken = "stub-access-token",
                     expiresAt = Instant.now().plusSeconds(600),
-                    pipelineSessionId = "stub-pipeline-${deviceId.takeLast(6)}",
+                    pipelineSessionId = "stub-pipeline-" + suffix6,
                     metadata = emptyMap(),
                     greeting = "Stub greeting ready.",
                 )
             }
-            Log.i(TAG, "Requesting managed session for device=$deviceId agent=$agent")
+
+            Log.i(TAG, "Requesting managed session for device=" + deviceId + " agent=" + agent)
             val response = api.createVoiceSession(
                 VoiceSessionRequest(
                     deviceId = deviceId,
@@ -72,7 +78,7 @@ class VoiceSessionRepository @Inject constructor(
             val payload = response.message ?: return@withContext null
             val audioBase64 = payload.audioBase64?.takeIf { it.isNotBlank() } ?: return@withContext null
             val promptId = payload.promptId?.takeIf { it.isNotBlank() } ?: return@withContext null
-            val messageId = payload.messageId?.takeIf { it.isNotBlank() } ?: "control-${System.currentTimeMillis()}"
+            val messageId = payload.messageId?.takeIf { it.isNotBlank() } ?: "control-" + System.currentTimeMillis()
 
             ControlMessage(
                 messageId = messageId,
@@ -94,7 +100,7 @@ class VoiceSessionRepository @Inject constructor(
         return try {
             Instant.parse(trimmed)
         } catch (error: DateTimeParseException) {
-            throw IllegalStateException("expiresAt is not ISO-8601: $trimmed", error)
+            throw IllegalStateException("expiresAt is not ISO-8601: " + trimmed, error)
         }
     }
 
@@ -116,7 +122,7 @@ class VoiceSessionRepository @Inject constructor(
 private fun String?.requireNonBlank(field: String): String {
     val value = this?.trim().orEmpty()
     if (value.isEmpty()) {
-        throw IllegalStateException("$field missing from voice session response")
+        throw IllegalStateException(field + " missing from voice session response")
     }
     return value
 }

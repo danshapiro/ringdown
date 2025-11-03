@@ -1,6 +1,5 @@
 package com.ringdown.mobile.voice
 
-import android.media.projection.MediaProjection
 import android.util.Log
 import com.ringdown.mobile.data.TextSessionGateway
 import com.ringdown.mobile.di.IoDispatcher
@@ -33,7 +32,7 @@ class LocalVoiceSessionController @Inject constructor(
     @IoDispatcher dispatcher: CoroutineDispatcher,
     @MainDispatcher private val mainDispatcher: CoroutineDispatcher,
     private val nowProvider: InstantProvider,
-) : VoiceSessionGateway {
+) {
 
     private val stateScope = CoroutineScope(SupervisorJob() + dispatcher)
     private val sessionScope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -41,7 +40,7 @@ class LocalVoiceSessionController @Inject constructor(
     private val sessionLock = Mutex()
 
     private val _state = MutableStateFlow<VoiceConnectionState>(VoiceConnectionState.Idle)
-    override val state: StateFlow<VoiceConnectionState> = _state
+    val state: StateFlow<VoiceConnectionState> = _state
 
     private val transcripts: MutableList<TranscriptMessage> = mutableListOf()
     private val userDrafts: MutableMap<String, UserDraft> = mutableMapOf()
@@ -50,7 +49,7 @@ class LocalVoiceSessionController @Inject constructor(
 
     private var activeJobs: MutableList<Job> = mutableListOf()
 
-    override fun start(deviceId: String, agent: String?) {
+    fun start(deviceId: String, agent: String?) {
         if (!sessionActive.compareAndSet(false, true)) {
             Log.w(TAG, "Session already running; ignoring start")
             return
@@ -81,7 +80,7 @@ class LocalVoiceSessionController @Inject constructor(
         }
     }
 
-    override fun stop() {
+    fun stop() {
         if (!sessionActive.compareAndSet(true, false)) {
             return
         }
@@ -89,11 +88,6 @@ class LocalVoiceSessionController @Inject constructor(
             teardownSession()
             postState(VoiceConnectionState.Idle)
         }
-    }
-
-    override fun updateMediaProjection(token: MediaProjection?) {
-        // Local pipeline does not rely on MediaProjection.
-        Log.d(TAG, "updateMediaProjection ignored for local audio pipeline")
     }
 
     private suspend fun registerCollectors() {
@@ -127,6 +121,7 @@ class LocalVoiceSessionController @Inject constructor(
 
     private fun handleReady(event: TextSessionEvent.Ready) {
         Log.i(TAG, "Session ready (sessionId=${event.sessionId ?: "unknown"})")
+        seedGreetingIfPresent(event)
         publishTranscripts()
     }
 
@@ -291,6 +286,27 @@ class LocalVoiceSessionController @Inject constructor(
         stateScope.launch(mainDispatcher) {
             _state.value = VoiceConnectionState.Connected(snapshot)
         }
+    }
+
+    private fun seedGreetingIfPresent(event: TextSessionEvent.Ready) {
+        val greeting = event.greeting?.trim().orEmpty()
+        if (greeting.isEmpty()) {
+            return
+        }
+
+        val speaker = event.agent?.takeIf { it.isNotBlank() } ?: "assistant"
+        val alreadySeeded = transcripts.any { candidate ->
+            candidate.speaker == speaker && candidate.text == greeting
+        }
+        if (alreadySeeded) {
+            return
+        }
+
+        transcripts += TranscriptMessage(
+            speaker = speaker,
+            text = greeting,
+            timestampIso = nowProvider.now().toString(),
+        )
     }
 
     private fun postState(newState: VoiceConnectionState) {

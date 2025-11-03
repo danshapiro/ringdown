@@ -1,10 +1,7 @@
 package com.ringdown.mobile.ui
 
-import android.media.projection.MediaProjection
-import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ringdown.mobile.BuildConfig
 import com.ringdown.mobile.data.DeviceDescriptor
 import com.ringdown.mobile.data.RegistrationException
 import com.ringdown.mobile.data.RegistrationGateway
@@ -12,7 +9,6 @@ import com.ringdown.mobile.data.RegistrationRepository
 import com.ringdown.mobile.domain.RegistrationStatus
 import com.ringdown.mobile.voice.VoiceConnectionState
 import com.ringdown.mobile.voice.VoiceSessionGateway
-import com.ringdown.mobile.voice.ControlCaptureService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -34,8 +30,6 @@ data class MainUiState(
     val pendingAutoConnect: Boolean = false,
     val permissionRequestVersion: Int = 0,
     val voiceState: VoiceConnectionState = VoiceConnectionState.Idle,
-    val captureSupported: Boolean = false,
-    val captureRequestVersion: Int = 0,
 )
 
 @HiltViewModel
@@ -49,22 +43,8 @@ class MainViewModel @Inject constructor(
 
     private var pollJob: Job? = null
     private var lastDescriptor: DeviceDescriptor = RegistrationRepository.buildDefaultDescriptor()
-    private val captureSupported =
-        BuildConfig.ENABLE_TEST_CONTROL_HARNESS && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
-    private var captureInitialized = false
-    private var projectionActive = false
-    private var projectionRequestPending = false
-    private val projectionListener: (MediaProjection?) -> Unit = { projection ->
-        val wasActive = projectionActive
-        projectionActive = projection != null
-        voiceGateway.updateMediaProjection(projection)
-        if (captureSupported && wasActive && projection == null) {
-            requestProjection()
-        }
-    }
 
     init {
-        ControlCaptureService.registerListener(projectionListener)
         viewModelScope.launch {
             initialise()
         }
@@ -93,27 +73,9 @@ class MainViewModel @Inject constructor(
                 lastApprovedAgent = agent,
                 isLoading = true,
                 errorMessage = null,
-                captureSupported = captureSupported,
             )
         }
         refreshRegistration()
-        ensureProjectionRequested()
-    }
-
-    private fun ensureProjectionRequested() {
-        if (!captureSupported) return
-        if (projectionActive) return
-        requestProjection()
-    }
-
-    private fun requestProjection() {
-        if (!captureSupported) return
-        if (projectionRequestPending) return
-        projectionRequestPending = true
-        captureInitialized = true
-        _state.update {
-            it.copy(captureRequestVersion = it.captureRequestVersion + 1)
-        }
     }
 
     fun onCheckAgainClicked() {
@@ -231,7 +193,6 @@ class MainViewModel @Inject constructor(
                 permissionRequestVersion = it.permissionRequestVersion,
             )
         }
-        ensureProjectionRequested()
         voiceGateway.start(deviceId, agent)
     }
 
@@ -247,25 +208,9 @@ class MainViewModel @Inject constructor(
         startVoiceSession()
     }
 
-    fun onProjectionPermissionResult(granted: Boolean) {
-        if (!captureSupported) {
-            return
-        }
-        projectionRequestPending = false
-        if (!granted) {
-            projectionActive = false
-            if (captureInitialized && !projectionActive) {
-                requestProjection()
-            }
-        }
-    }
-
     override fun onCleared() {
         super.onCleared()
-        ControlCaptureService.unregisterListener(projectionListener)
         voiceGateway.stop()
-        projectionActive = false
-        projectionRequestPending = false
     }
 
     companion object {
