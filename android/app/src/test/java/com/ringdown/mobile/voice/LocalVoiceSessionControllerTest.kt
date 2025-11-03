@@ -11,7 +11,8 @@ import com.ringdown.mobile.voice.asr.LocalAsrEngine
 import java.time.Instant
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlin.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
@@ -27,8 +28,7 @@ class LocalVoiceSessionControllerTest {
 
     @Test
     fun greetingSeededOnReadyEvent() = runTest {
-        val dispatcher = backgroundScope.coroutineContext[CoroutineDispatcher]
-            ?: error("Missing test dispatcher")
+        val dispatcher = StandardTestDispatcher(testScheduler)
         val controller = createController(dispatcher)
 
         invokeHandleReady(
@@ -54,8 +54,7 @@ class LocalVoiceSessionControllerTest {
 
     @Test
     fun duplicateReadyEventsDoNotDuplicateGreeting() = runTest {
-        val dispatcher = backgroundScope.coroutineContext[CoroutineDispatcher]
-            ?: error("Missing test dispatcher")
+        val dispatcher = StandardTestDispatcher(testScheduler)
         val controller = createController(dispatcher)
         val readyEvent = TextSessionEvent.Ready(
             sessionId = "session-1",
