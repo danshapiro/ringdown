@@ -168,16 +168,6 @@ docs_folder_greenlist_defaults:
 
 # Registered Android devices managed by the backend
 mobile_devices: {}
-mobile_managed_av:
-  provider: daily
-  api_base_url: https://api.daily.co/v1
-  agent_name: phone-danbot-agent
-  pipeline_handle: ringdown-pipecat
-  room_domain: ringdown.daily.co
-  session_ttl_seconds: 600
-  metadata:
-    product: ringdown
-
 mobile_text:
   websocket_path: /v1/mobile/text/session
   session_ttl_seconds: 900

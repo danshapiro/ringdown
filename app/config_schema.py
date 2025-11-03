@@ -163,19 +163,6 @@ class MobileDeviceConfig(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
-class MobileManagedAVConfig(BaseModel):
-    """Configuration describing the managed audio/video provider for mobile clients."""
-
-    provider: str = Field(..., min_length=1)
-    api_base_url: str = Field(..., alias="apiBaseUrl", min_length=1)
-    agent_name: str = Field(..., alias="agentName", min_length=1)
-    room_domain: str | None = Field(default=None, alias="roomDomain")
-    session_ttl_seconds: int = Field(600, ge=60, le=7200, alias="sessionTtlSeconds")
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
-
-
 class MobileTextConfig(BaseModel):
     """Configuration describing text streaming behaviour for mobile clients."""
 
@@ -204,7 +191,6 @@ class ConfigModel(BaseModel):
     hints: str | None = None
     docs_folder_greenlist_defaults: List[str] = Field(default_factory=list)
     mobile_devices: Dict[str, MobileDeviceConfig] = Field(default_factory=dict, alias="mobileDevices")
-    mobile_managed_av: MobileManagedAVConfig = Field(alias="mobileManagedAv")
     mobile_text: MobileTextConfig = Field(alias="mobileText")
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
