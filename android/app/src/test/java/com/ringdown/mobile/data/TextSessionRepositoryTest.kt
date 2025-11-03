@@ -1,0 +1,158 @@
+package com.ringdown.mobile.data
+
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import com.ringdown.mobile.data.remote.TextSessionApi
+import com.ringdown.mobile.data.remote.TextSessionRequest
+import com.ringdown.mobile.data.remote.TextSessionResponse
+import com.ringdown.mobile.data.store.DeviceIdStore
+import java.io.File
+import java.util.UUID
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+import retrofit2.HttpException
+import retrofit2.Response
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class TextSessionRepositoryTest {
+
+    private val dispatcher = StandardTestDispatcher()
+
+    @Test
+    fun clearsStaleAuthTokenAndRetriesAfter401() = runTest(dispatcher) {
+        val scope = TestScope(dispatcher)
+        val store = DeviceIdStore(testDataStore(scope))
+        val staleToken = "stale-token"
+        store.updateAuthToken(staleToken)
+        store.updateResumeToken("resume-old")
+
+        val captures = mutableListOf<TextSessionRequest>()
+        val api = object : TextSessionApi {
+            private var attempts = 0
+            override suspend fun createTextSession(payload: TextSessionRequest): TextSessionResponse {
+                captures += payload
+                attempts += 1
+                return if (attempts == 1) {
+                    throw unauthorized()
+                } else {
+                    TextSessionResponse(
+                        sessionId = "session-abc",
+                        sessionToken = "session-token",
+                        resumeToken = "resume-new",
+                        websocketPath = "/v1/mobile/text/session",
+                        agent = "Agent Alpha",
+                        expiresAt = "2025-11-02T00:00:00Z",
+                        heartbeatIntervalSeconds = 15,
+                        heartbeatTimeoutSeconds = 45,
+                        tlsPins = emptyList(),
+                        authToken = "fresh-token",
+                    )
+                }
+            }
+        }
+
+        val repository = TextSessionRepository(api, store, dispatcher)
+        val bootstrap = repository.startTextSession(null)
+        val updatedAuth = store.currentAuthToken()
+        val updatedResume = store.currentResumeToken()
+
+        assertEquals("session-abc", bootstrap.sessionId)
+        assertEquals(staleToken, captures.first().authToken)
+        assertEquals("fresh-token", updatedAuth)
+        assertEquals("resume-new", updatedResume)
+        assertEquals(null, captures.last().authToken)
+    }
+
+    @Test
+    fun clearsStaleResumeTokenAndRetriesAfter404() = runTest(dispatcher) {
+        val scope = TestScope(dispatcher)
+        val store = DeviceIdStore(testDataStore(scope))
+        store.updateAuthToken("valid-token")
+        store.updateResumeToken("resume-old")
+
+        val captures = mutableListOf<TextSessionRequest>()
+        val api = object : TextSessionApi {
+            private var attempts = 0
+            override suspend fun createTextSession(payload: TextSessionRequest): TextSessionResponse {
+                captures += payload
+                attempts += 1
+                return if (attempts == 1) {
+                    throw resumeNotFound()
+                } else {
+                    TextSessionResponse(
+                        sessionId = "session-xyz",
+                        sessionToken = "session-token",
+                        resumeToken = "resume-fresh",
+                        websocketPath = "/v1/mobile/text/session",
+                        agent = "Agent Alpha",
+                        expiresAt = "2025-11-02T00:00:00Z",
+                        heartbeatIntervalSeconds = 20,
+                        heartbeatTimeoutSeconds = 60,
+                        tlsPins = emptyList(),
+                        authToken = "valid-token",
+                    )
+                }
+            }
+        }
+
+        val repository = TextSessionRepository(api, store, dispatcher)
+        val bootstrap = repository.startTextSession(null)
+
+        assertEquals("session-xyz", bootstrap.sessionId)
+        assertEquals("resume-old", captures.first().resumeToken)
+        assertNull(captures.last().resumeToken)
+        assertEquals("resume-fresh", store.currentResumeToken())
+    }
+
+    @Test
+    fun propagatesErrorWhenRetryAlsoFails() = runTest(dispatcher) {
+        val scope = TestScope(dispatcher)
+        val store = DeviceIdStore(testDataStore(scope))
+        store.updateAuthToken("bad-token")
+
+        val api = object : TextSessionApi {
+            override suspend fun createTextSession(payload: TextSessionRequest): TextSessionResponse {
+                throw unauthorized()
+            }
+        }
+
+        val repository = TextSessionRepository(api, store, dispatcher)
+        try {
+            repository.startTextSession(null)
+            throw AssertionError("Expected HttpException to be thrown")
+        } catch (error: HttpException) {
+            assertEquals(401, error.code())
+        }
+    }
+
+    private fun unauthorized(): HttpException {
+        val body = "{\"error\":\"unauthorized\"}".toResponseBody("application/json".toMediaType())
+        val response = Response.error<TextSessionResponse>(401, body)
+        return HttpException(response)
+    }
+
+    private fun resumeNotFound(): HttpException {
+        val body =
+            """
+            {"detail":{"code":"resume_token_not_recognised","message":"Resume token not recognised or expired."}}
+            """.trimIndent().toResponseBody("application/json".toMediaType())
+        val response = Response.error<TextSessionResponse>(404, body)
+        return HttpException(response)
+    }
+
+    private fun testDataStore(scope: TestScope): androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences> {
+        val tempDir = File(System.getProperty("java.io.tmpdir"), "datastore-test-" + UUID.randomUUID())
+        if (!tempDir.exists()) {
+            tempDir.mkdirs()
+        }
+        return PreferenceDataStoreFactory.create(scope = scope) {
+            File(tempDir, UUID.randomUUID().toString() + ".preferences_pb")
+        }
+    }
+}

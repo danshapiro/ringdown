@@ -44,19 +44,6 @@ fun stringConfig(key: String, default: String, ensureSlash: Boolean = false): St
     return if (ensureSlash && value.isNotEmpty()) value.ensureTrailingSlash() else value
 }
 
-fun booleanConfig(key: String, default: Boolean): Boolean {
-    val raw = (localProperties.getProperty(key)
-        ?: envConfig[key]
-        ?: System.getenv(key))
-    return raw?.trim()?.lowercase()?.let {
-        when (it) {
-            "true", "1", "yes" -> true
-            "false", "0", "no" -> false
-            else -> default
-        }
-    } ?: default
-}
-
 val hostOsName = System.getProperty("os.name").lowercase()
 val isWindowsHost = hostOsName.contains("windows")
 val isWslHost = !isWindowsHost && System.getenv("WSL_DISTRO_NAME") != null
@@ -78,7 +65,6 @@ fun locatePythonExecutable(rootDir: File): String {
 
 val stagingBackend = stringConfig("STAGING_BACKEND_BASE_URL", "https://staging.api.ringdown.ai/", ensureSlash = true)
 val productionBackend = stringConfig("PRODUCTION_BACKEND_BASE_URL", "https://api.ringdown.ai/", ensureSlash = true)
-val localAudioAlpha = booleanConfig("ENABLE_LOCAL_AUDIO_ALPHA", false)
 
 android {
     namespace = "com.ringdown.mobile"
@@ -99,7 +85,6 @@ android {
         testApplicationId = "com.ringdown.mobile.test"
         buildConfigField("String", "STAGING_BACKEND_BASE_URL", "\"$stagingBackend\"")
         buildConfigField("String", "PRODUCTION_BACKEND_BASE_URL", "\"$productionBackend\"")
-        buildConfigField("Boolean", "ENABLE_LOCAL_AUDIO_ALPHA", "${localAudioAlpha}")
     }
 
     buildTypes {

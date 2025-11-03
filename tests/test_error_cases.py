@@ -49,6 +49,27 @@ def test_log_turn_records_source(tmp_path, monkeypatch):
         assert row.source == "android-realtime"
 
 
+def test_log_turn_bootstraps_schema(tmp_path, monkeypatch):
+    """log_turn should create required tables when backing store is empty."""
+
+    from sqlmodel import Session, create_engine, select
+
+    db_path = tmp_path / "memory.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+
+    monkeypatch.setattr(memory, "engine", engine)
+    monkeypatch.setattr(memory, "Session", Session)
+    monkeypatch.setattr(memory, "_SCHEMA_READY", False, raising=False)
+    monkeypatch.setattr(memory, "_TURN_SOURCE_COLUMN_READY", False, raising=False)
+
+    memory.log_turn("user", "bootstrap check")
+
+    with Session(engine) as sess:
+        row = sess.exec(select(memory.Turn).order_by(memory.Turn.id.desc())).first()
+        assert row is not None
+        assert row.text == "bootstrap check"
+
+
 def test_execute_tool_invalid_args_raises():
     """execute_tool must raise ValidationError when args fail validation."""
 

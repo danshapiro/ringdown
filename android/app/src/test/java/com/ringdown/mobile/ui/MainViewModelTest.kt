@@ -1,19 +1,29 @@
 package com.ringdown.mobile.ui
 
 import com.google.common.truth.Truth.assertThat
+import com.ringdown.mobile.data.BackendEnvironment
 import com.ringdown.mobile.data.DeviceDescriptor
 import com.ringdown.mobile.data.RegistrationGateway
+import com.ringdown.mobile.data.TextSessionStarter
 import com.ringdown.mobile.domain.RegistrationStatus
+import com.ringdown.mobile.domain.TextSessionBootstrap
 import com.ringdown.mobile.util.MainDispatcherRule
+import com.ringdown.mobile.voice.InstantProvider
+import com.ringdown.mobile.voice.LocalVoiceSessionController
 import com.ringdown.mobile.voice.VoiceConnectionState
-import com.ringdown.mobile.voice.VoiceSessionGateway
+import com.ringdown.mobile.voice.asr.AsrEvent
+import com.ringdown.mobile.voice.asr.LocalAsrEngine
+import java.time.Instant
 import java.util.ArrayDeque
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CoroutineDispatcher
+import okhttp3.OkHttpClient
 import org.junit.Rule
 import org.junit.Test
 
@@ -41,8 +51,9 @@ class MainViewModelTest {
         }
         val gateway = FakeRegistrationGateway(statuses)
 
-        val voiceGateway = RecordingVoiceGateway()
-        val viewModel = MainViewModel(gateway, voiceGateway)
+        val dispatcher = dispatcherRule.dispatcher
+        val voiceController = RecordingVoiceController(dispatcher)
+        val viewModel = MainViewModel(gateway, voiceController)
 
         viewModel.onPermissionResult(true)
 
@@ -57,7 +68,7 @@ class MainViewModelTest {
         val approved = state.registrationStatus as RegistrationStatus.Approved
         assertThat(approved.agentName).isEqualTo("tester")
         assertThat(gateway.registerCalls).isEqualTo(2)
-        assertThat(voiceGateway.starts).containsExactly("device-123" to "tester")
+        assertThat(voiceController.starts).containsExactly("tester")
         assertThat(state.pendingAutoConnect).isFalse()
         assertThat(state.permissionRequestVersion).isEqualTo(0)
     }
@@ -78,8 +89,10 @@ class MainViewModelTest {
                 ),
             ),
         )
-        val voiceGateway = RecordingVoiceGateway()
-        val viewModel = MainViewModel(gateway, voiceGateway)
+
+        val dispatcher = dispatcherRule.dispatcher
+        val voiceController = RecordingVoiceController(dispatcher)
+        val viewModel = MainViewModel(gateway, voiceController)
 
         viewModel.onPermissionResult(false)
 
@@ -93,7 +106,7 @@ class MainViewModelTest {
         val state = viewModel.state.value
         assertThat(state.pendingAutoConnect).isFalse()
         assertThat(state.showMicrophoneReminder).isTrue()
-        assertThat(voiceGateway.starts).isEmpty()
+        assertThat(voiceController.starts).isEmpty()
         assertThat(state.permissionRequestVersion).isGreaterThan(0)
     }
 
@@ -119,17 +132,60 @@ class MainViewModelTest {
         override suspend fun lastKnownAgent(): String? = null
     }
 
-    private class RecordingVoiceGateway : VoiceSessionGateway {
+    private class RecordingVoiceController(
+        dispatcher: CoroutineDispatcher,
+    ) : LocalVoiceSessionController(
+        textSessionStarter = TextSessionStarter { agent ->
+            TextSessionBootstrap(
+                sessionId = "session",
+                sessionToken = "token",
+                resumeToken = null,
+                websocketPath = "/ws",
+                agent = agent.orEmpty(),
+                expiresAtIso = "2025-01-01T00:00:00Z",
+                heartbeatIntervalSeconds = 15,
+                heartbeatTimeoutSeconds = 45,
+                tlsPins = emptyList(),
+            )
+        },
+        textSessionClient = TextSessionClientStub(dispatcher),
+        asrEngine = object : LocalAsrEngine {
+            override val events = MutableSharedFlow<AsrEvent>()
+            override suspend fun start() {}
+            override suspend fun stop() {}
+        },
+        dispatcher = dispatcher,
+        mainDispatcher = dispatcher,
+        nowProvider = InstantProvider { Instant.parse("2025-01-01T00:00:00Z") },
+    ) {
         private val _state = MutableStateFlow<VoiceConnectionState>(VoiceConnectionState.Idle)
         override val state: StateFlow<VoiceConnectionState> = _state
 
-        val starts = mutableListOf<Pair<String, String?>>()
+        val starts = mutableListOf<String?>()
 
-        override fun start(deviceId: String, agent: String?) {
-            starts += deviceId to agent
+        override fun start(agent: String?) {
+            starts += agent
+            _state.value = VoiceConnectionState.Connecting
         }
 
-        override fun stop() {}
+        override fun stop() {
+            _state.value = VoiceConnectionState.Idle
+        }
+    }
 
+    private class TextSessionClientStub(
+        dispatcher: CoroutineDispatcher,
+    ) : com.ringdown.mobile.text.TextSessionClient(
+        backendEnvironment = object : BackendEnvironment() {
+            override fun baseUrl(): String = "https://example.com/"
+        },
+        baseClient = OkHttpClient(),
+        dispatcher = dispatcher,
+    ) {
+        override suspend fun connect(bootstrap: TextSessionBootstrap) {}
+        override suspend fun disconnect() {}
+        override suspend fun sendUserToken(token: String, final: Boolean, utteranceId: String?) {}
+        override suspend fun sendUserMessage(text: String, utteranceId: String?) {}
+        override suspend fun sendCancel() {}
     }
 }

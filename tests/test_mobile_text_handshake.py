@@ -189,6 +189,8 @@ def test_text_session_handshake_rejects_bad_auth() -> None:
         )
 
     assert resp.status_code == 401
+    detail = resp.json()["detail"]
+    assert detail["code"] == "invalid_credentials"
     store.create_session.assert_not_called()
 
 
@@ -209,6 +211,8 @@ def test_text_session_handshake_rejects_unknown_resume() -> None:
         )
 
     assert resp.status_code == 404
+    detail = resp.json()["detail"]
+    assert detail["code"] == "resume_token_not_recognised"
 
 
 def test_text_session_handshake_conflict_when_active() -> None:
@@ -228,3 +232,41 @@ def test_text_session_handshake_conflict_when_active() -> None:
         )
 
     assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "session_already_active"
+
+
+def test_text_session_unknown_device_returns_error_detail() -> None:
+    store = MagicMock()
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("app.api.mobile.settings.get_mobile_device", return_value=None))
+        stack.enter_context(patch("app.api.mobile.settings.get_mobile_text_config", return_value={}))
+        stack.enter_context(patch("app.api.mobile.settings.get_agent_config", return_value={}))
+        stack.enter_context(patch("app.api.mobile.get_text_session_store", return_value=store))
+        response = client.post(
+            "/v1/mobile/text/session",
+            json={"deviceId": "device-999", "authToken": "token"},
+        )
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["code"] == "device_not_registered"
+    assert "mobile_devices" in detail["message"]
+
+
+def test_text_session_denied_when_device_not_enabled() -> None:
+    store = MagicMock()
+    device_cfg = {"enabled": False, "agent": "Agent Alpha"}
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("app.api.mobile.settings.get_mobile_device", return_value=device_cfg))
+        stack.enter_context(patch("app.api.mobile.settings.get_mobile_text_config", return_value={}))
+        stack.enter_context(patch("app.api.mobile.settings.get_agent_config", return_value={}))
+        stack.enter_context(patch("app.api.mobile.get_text_session_store", return_value=store))
+        response = client.post(
+            "/v1/mobile/text/session",
+            json={"deviceId": "device-123", "authToken": "token"},
+        )
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "device_not_approved"

@@ -22,6 +22,30 @@ class TextSessionClientTest {
     val dispatcherRule = MainDispatcherRule()
 
     @Test
+    fun `token traces capture assistant tokens`() = runTest {
+        val backend = object : BackendEnvironment() {
+            override fun baseUrl(): String = "https://example.com/"
+        }
+
+        val client = TextSessionClient(
+            backendEnvironment = backend,
+            baseClient = OkHttpClient(),
+            dispatcher = dispatcherRule.dispatcher,
+        )
+
+        client.tokenTraces.test {
+            client.handleInboundMessage(
+                """{"type":"assistant_token","token":"Hi","final":false,"messageType":"greeting"}"""
+            )
+            val trace = awaitItem()
+            assert(trace.token == "Hi")
+            assert(!trace.final)
+            assert(trace.messageType == "greeting")
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun `handleInboundMessage emits events`() = runTest {
         val backend = object : BackendEnvironment() {
             override fun baseUrl(): String = "https://example.com/"

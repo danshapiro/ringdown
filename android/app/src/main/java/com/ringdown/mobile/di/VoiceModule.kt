@@ -1,7 +1,5 @@
 package com.ringdown.mobile.di
 
-import com.ringdown.mobile.voice.VoiceSessionController
-import com.ringdown.mobile.voice.VoiceSessionGateway
 import com.ringdown.mobile.voice.asr.AudioInputSource
 import com.ringdown.mobile.voice.asr.LocalAsrEngine
 import com.ringdown.mobile.voice.asr.MicrophoneAudioInputSource
@@ -15,12 +13,6 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class VoiceModule {
-
-    @Binds
-    @Singleton
-    abstract fun bindVoiceSessionGateway(
-        controller: VoiceSessionController,
-    ): VoiceSessionGateway
 
     @Binds
     @Singleton

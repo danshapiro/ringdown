@@ -162,6 +162,30 @@ def approve_device(config_path: Path | None, device_id: str, *, agent: Optional[
     )
 
 
+def auto_approve_single_pending(
+    config_path: Path | None = None,
+    *,
+    agent: Optional[str] = None,
+) -> Optional[DeviceRequest]:
+    """Approve the sole pending handset request, if exactly one exists.
+
+    Returns the approved device entry, or ``None`` when no pending devices exist.
+    Raises ``RuntimeError`` if multiple pending approvals are present.
+    """
+
+    pending = list_pending_devices(config_path)
+    if not pending:
+        return None
+    if len(pending) > 1:
+        raise RuntimeError(
+            "Multiple pending handset approvals detected; manual resolution required."
+        )
+
+    target = pending[0]
+    chosen_agent = agent or target.agent
+    return approve_device(config_path, target.device_id, agent=chosen_agent)
+
+
 def _format_row(row: DeviceRequest) -> str:
     note = f" | {row.notes}" if row.notes else ""
     return (
@@ -199,7 +223,38 @@ def _handle_list(args: argparse.Namespace) -> int:
 
 def _handle_approve(args: argparse.Namespace) -> int:
     config_path = Path(args.config) if args.config else None
-    result = approve_device(config_path, args.device_id, agent=args.agent)
+    parser: Optional[argparse.ArgumentParser] = getattr(args, "parser", None)
+
+    if args.auto and args.device_id:
+        if parser:
+            parser.error("Specify either a device id or --auto, not both.")
+        raise SystemExit(2)
+
+    if not args.auto and not args.device_id:
+        if parser:
+            parser.error("device_id is required unless using --auto.")
+        raise SystemExit(2)
+
+    if args.auto:
+        pending = list_pending_devices(config_path)
+        if not pending:
+            print("No pending handset requests found.")
+            return 1
+        if len(pending) > 1:
+            print("Multiple pending handset requests found; refusing to auto-approve.\n")
+            for row in pending:
+                print(_format_row(row))
+            return 1
+
+        selected = pending[0]
+        print(
+            f"Auto-approving pending handset {selected.device_id} ({selected.label}) requested by {selected.agent}."
+        )
+        target_device_id = selected.device_id
+    else:
+        target_device_id = args.device_id
+
+    result = approve_device(config_path, target_device_id, agent=args.agent)
     print(f"Approved {result.device_id} for agent {result.agent}.")
     if args.sync_env:
         env_path = Path(args.env_file).resolve()
@@ -323,7 +378,12 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser.set_defaults(func=_handle_list)
 
     approve_parser = subparsers.add_parser("approve", help="Approve a handset by device id")
-    approve_parser.add_argument("device_id", help="Device identifier to approve")
+    approve_parser.add_argument("device_id", nargs="?", help="Device identifier to approve")
+    approve_parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="Approve the only pending handset request; fails if zero or multiple requests exist.",
+    )
     approve_parser.add_argument("--agent", help="Override agent mapping during approval")
     approve_parser.add_argument(
         "--sync-env",
@@ -348,23 +408,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="When syncing env, prefer device IDs/labels containing this substring.",
     )
     approve_parser.add_argument(
-        "--deploy",
-        dest="deploy",
-        action="store_true",
-        help="Run cloudrun-deploy.py after approval (default behaviour).",
-    )
-    approve_parser.add_argument(
         "--no-deploy",
         dest="deploy",
         action="store_false",
-        help="Skip the Cloud Run deployment step.",
+        help="Skip the Cloud Run deployment step (deploys by default).",
     )
     approve_parser.add_argument(
         "--deploy-script",
         help="Path to cloudrun-deploy.py (defaults to repo root).",
     )
-    approve_parser.set_defaults(deploy=True, deploy_script=None, sync_env=False)
-    approve_parser.set_defaults(func=_handle_approve)
+    approve_parser.set_defaults(
+        deploy=True,
+        deploy_script=None,
+        sync_env=False,
+        auto=False,
+        func=_handle_approve,
+        parser=approve_parser,
+    )
 
     sync_parser = subparsers.add_parser("sync-env", help="Update LIVE_TEST_MOBILE_DEVICE_ID using config.yaml")
     sync_parser.add_argument(
@@ -388,8 +448,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    raw_args = list(argv) if argv is not None else sys.argv[1:]
+    subcommands = {"list", "approve", "sync-env"}
+    has_subcommand = any(arg in subcommands for arg in raw_args if not arg.startswith("-"))
+    if not has_subcommand and "--auto" in raw_args:
+        insert_at = raw_args.index("--auto")
+        raw_args.insert(insert_at, "approve")
+
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_args)
     return args.func(args)
 
 

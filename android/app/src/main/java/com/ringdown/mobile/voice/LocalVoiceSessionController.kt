@@ -1,7 +1,7 @@
 package com.ringdown.mobile.voice
 
 import android.util.Log
-import com.ringdown.mobile.data.TextSessionGateway
+import com.ringdown.mobile.data.TextSessionStarter
 import com.ringdown.mobile.di.IoDispatcher
 import com.ringdown.mobile.di.MainDispatcher
 import com.ringdown.mobile.text.TextSessionClient
@@ -21,12 +21,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import org.json.JSONObject
 
 private const val TAG = "LocalVoiceSession"
 
 @Singleton
-class LocalVoiceSessionController @Inject constructor(
-    private val textSessionGateway: TextSessionGateway,
+open class LocalVoiceSessionController @Inject constructor(
+    private val textSessionStarter: TextSessionStarter,
     private val textSessionClient: TextSessionClient,
     private val asrEngine: LocalAsrEngine,
     @IoDispatcher dispatcher: CoroutineDispatcher,
@@ -40,16 +41,17 @@ class LocalVoiceSessionController @Inject constructor(
     private val sessionLock = Mutex()
 
     private val _state = MutableStateFlow<VoiceConnectionState>(VoiceConnectionState.Idle)
-    val state: StateFlow<VoiceConnectionState> = _state
+    open val state: StateFlow<VoiceConnectionState> = _state
 
     private val transcripts: MutableList<TranscriptMessage> = mutableListOf()
     private val userDrafts: MutableMap<String, UserDraft> = mutableMapOf()
     private val outgoingStates: MutableMap<String, OutgoingUtteranceState> = mutableMapOf()
     private var assistantDraft: AssistantDraft? = null
+    private var currentSessionId: String? = null
 
     private var activeJobs: MutableList<Job> = mutableListOf()
 
-    fun start(deviceId: String, agent: String?) {
+    open fun start(agent: String?) {
         if (!sessionActive.compareAndSet(false, true)) {
             Log.w(TAG, "Session already running; ignoring start")
             return
@@ -64,7 +66,7 @@ class LocalVoiceSessionController @Inject constructor(
 
                 registerCollectors()
 
-                val bootstrap = textSessionGateway.startTextSession(agent)
+                val bootstrap = textSessionStarter.startTextSession(agent)
                 textSessionClient.connect(bootstrap)
                 asrEngine.start()
             } catch (cancel: CancellationException) {
@@ -80,7 +82,7 @@ class LocalVoiceSessionController @Inject constructor(
         }
     }
 
-    fun stop() {
+    open fun stop() {
         if (!sessionActive.compareAndSet(true, false)) {
             return
         }
@@ -121,6 +123,16 @@ class LocalVoiceSessionController @Inject constructor(
 
     private fun handleReady(event: TextSessionEvent.Ready) {
         Log.i(TAG, "Session ready (sessionId=${event.sessionId ?: "unknown"})")
+        currentSessionId = event.sessionId
+        logStructured(
+            level = "INFO",
+            event = "local_voice.session_ready",
+            fields = mapOf(
+                "sessionId" to event.sessionId,
+                "agent" to event.agent,
+                "hasGreeting" to (event.greeting?.isNotBlank() == true),
+            ),
+        )
         seedGreetingIfPresent(event)
         publishTranscripts()
     }
@@ -138,6 +150,17 @@ class LocalVoiceSessionController @Inject constructor(
         if (event.final) {
             assistantDraft = null
         }
+        logStructured(
+            level = "INFO",
+            event = "local_voice.assistant_token",
+            fields = mapOf(
+                "sessionId" to currentSessionId,
+                "token" to event.token.take(MAX_TOKEN_LOG_LENGTH),
+                "tokenLength" to event.token.length,
+                "final" to event.final,
+                "messageType" to event.messageType,
+            ),
+        )
     }
 
     private fun handleServerError(event: TextSessionEvent.ServerError) {
@@ -279,6 +302,7 @@ class LocalVoiceSessionController @Inject constructor(
         userDrafts.clear()
         outgoingStates.clear()
         assistantDraft = null
+        currentSessionId = null
     }
 
     private fun publishTranscripts() {
@@ -352,4 +376,27 @@ class LocalVoiceSessionController @Inject constructor(
         var emitted: String = "",
         var hasSentTokens: Boolean = false,
     )
+
+    private fun logStructured(level: String, event: String, fields: Map<String, Any?>) {
+        val payload = buildMap {
+            put("severity", level)
+            put("event", event)
+            fields.forEach { (key, value) ->
+                if (value != null) {
+                    put(key, value)
+                }
+            }
+        }
+        val json = JSONObject(payload).toString()
+        when (level.uppercase()) {
+            "ERROR" -> Log.e(TAG, json)
+            "WARNING", "WARN" -> Log.w(TAG, json)
+            "DEBUG" -> Log.d(TAG, json)
+            else -> Log.i(TAG, json)
+        }
+    }
+
+    companion object {
+        private const val MAX_TOKEN_LOG_LENGTH = 160
+    }
 }

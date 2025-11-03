@@ -5,6 +5,7 @@ import com.ringdown.mobile.BuildConfig
 import com.ringdown.mobile.data.BackendEnvironment
 import com.ringdown.mobile.di.IoDispatcher
 import com.ringdown.mobile.domain.TextSessionBootstrap
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -37,7 +38,7 @@ import org.json.JSONException
 import org.json.JSONObject
 
 @Singleton
-class TextSessionClient @Inject constructor(
+open class TextSessionClient @Inject constructor(
     private val backendEnvironment: BackendEnvironment,
     private val baseClient: OkHttpClient,
     @IoDispatcher dispatcher: CoroutineDispatcher,
@@ -49,6 +50,11 @@ class TextSessionClient @Inject constructor(
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     val events: SharedFlow<TextSessionEvent> = _events.asSharedFlow()
+    private val _tokenTraces = MutableSharedFlow<AssistantTokenTrace>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val tokenTraces: SharedFlow<AssistantTokenTrace> = _tokenTraces.asSharedFlow()
 
     private val _state = MutableStateFlow<TextSessionConnectionState>(TextSessionConnectionState.Idle)
     val state: StateFlow<TextSessionConnectionState> = _state.asStateFlow()
@@ -59,7 +65,7 @@ class TextSessionClient @Inject constructor(
     private var sessionInfo: SessionInfo? = null
     private var readyAcknowledged = false
 
-    suspend fun connect(bootstrap: TextSessionBootstrap) {
+    open suspend fun connect(bootstrap: TextSessionBootstrap) {
         lock.withLock {
             disconnectLocked()
 
@@ -87,13 +93,13 @@ class TextSessionClient @Inject constructor(
         }
     }
 
-    suspend fun disconnect() {
+    open suspend fun disconnect() {
         lock.withLock {
             disconnectLocked()
         }
     }
 
-    suspend fun sendUserToken(token: String, final: Boolean, utteranceId: String?) {
+    open suspend fun sendUserToken(token: String, final: Boolean, utteranceId: String?) {
         sendMessage(
             JSONObject()
                 .put("type", "user_token")
@@ -107,7 +113,7 @@ class TextSessionClient @Inject constructor(
         )
     }
 
-    suspend fun sendUserMessage(text: String, utteranceId: String?) {
+    open suspend fun sendUserMessage(text: String, utteranceId: String?) {
         sendMessage(
             JSONObject()
                 .put("type", "user_message")
@@ -120,7 +126,7 @@ class TextSessionClient @Inject constructor(
         )
     }
 
-    suspend fun sendCancel() {
+    open suspend fun sendCancel() {
         sendMessage(JSONObject().put("type", "cancel"))
     }
 
@@ -240,6 +246,16 @@ class TextSessionClient @Inject constructor(
         val intervalSeconds = message.optInt("heartbeatIntervalSeconds", 15).coerceAtLeast(5)
         val timeoutSeconds = message.optInt("heartbeatTimeoutSeconds", intervalSeconds + 5)
 
+        logStructured(
+            level = "INFO",
+            event = "text_session.ready",
+            fields = mapOf(
+                "sessionId" to sessionId,
+                "agent" to agent,
+                "heartbeatIntervalSeconds" to intervalSeconds,
+                "heartbeatTimeoutSeconds" to timeoutSeconds,
+            ),
+        )
         scope.launch {
             _events.emit(
                 TextSessionEvent.Ready(
@@ -275,14 +291,35 @@ class TextSessionClient @Inject constructor(
         } else {
             null
         }
+        val sessionId = sessionInfo?.bootstrap?.sessionId ?: message.optString("sessionId").takeIf { it.isNotBlank() }
+        val receivedAt = Instant.now().toString()
+        logStructured(
+            level = "INFO",
+            event = "text_session.assistant_token",
+            fields = mapOf(
+                "sessionId" to sessionId,
+                "length" to token.length,
+                "final" to finalFlag,
+                "messageType" to messageType,
+            ).let { base ->
+                if (token.isEmpty()) base else base + ("token" to token)
+            },
+        )
+        val event = TextSessionEvent.AssistantToken(
+            token = token,
+            final = finalFlag,
+            messageType = messageType,
+        )
+        val trace = AssistantTokenTrace(
+            token = token,
+            final = finalFlag,
+            messageType = messageType,
+            sessionId = sessionId,
+            receivedAtIso = receivedAt,
+        )
         scope.launch {
-            _events.emit(
-                TextSessionEvent.AssistantToken(
-                    token = token,
-                    final = finalFlag,
-                    messageType = messageType,
-                ),
-            )
+            _events.emit(event)
+            _tokenTraces.emit(trace)
         }
     }
 
@@ -298,6 +335,14 @@ class TextSessionClient @Inject constructor(
             is JSONArray -> mapOf("items" to payload.toList())
             else -> emptyMap()
         }
+        logStructured(
+            level = "INFO",
+            event = "text_session.tool_event",
+            fields = mapOf(
+                "event" to eventType,
+                "payloadKeys" to payloadMap.keys.joinToString(","),
+            ),
+        )
         scope.launch {
             _events.emit(
                 TextSessionEvent.ToolEvent(
@@ -311,6 +356,14 @@ class TextSessionClient @Inject constructor(
     private fun handleServerError(message: JSONObject) {
         val code = message.optString("code").takeIf { it.isNotBlank() }
         val detail = message.optString("message").takeIf { it.isNotBlank() }
+        logStructured(
+            level = "ERROR",
+            event = "text_session.server_error",
+            fields = mapOf(
+                "code" to code,
+                "message" to detail,
+            ),
+        )
         scope.launch {
             _events.emit(
                 TextSessionEvent.ServerError(
@@ -327,6 +380,14 @@ class TextSessionClient @Inject constructor(
 
     private fun onSocketClosed(code: Int, reason: String?) {
         Log.i(TAG, "WebSocket closed: code=$code reason=${reason.orEmpty()}")
+        logStructured(
+            level = "INFO",
+            event = "text_session.socket_closed",
+            fields = mapOf(
+                "code" to code,
+                "reason" to reason,
+            ),
+        )
         scope.launch {
             _events.emit(TextSessionEvent.ConnectionClosed(code, reason))
         }
@@ -344,6 +405,11 @@ class TextSessionClient @Inject constructor(
     private fun onSocketFailure(error: Throwable) {
         if (error is CancellationException) return
         Log.e(TAG, "WebSocket failure", error)
+        logStructured(
+            level = "ERROR",
+            event = "text_session.socket_failure",
+            fields = mapOf("message" to (error.message ?: "unknown")),
+        )
         scope.launch {
             _events.emit(TextSessionEvent.ConnectionFailure(error))
         }
@@ -387,6 +453,28 @@ class TextSessionClient @Inject constructor(
         val heartbeatIntervalSeconds: Int = bootstrap.heartbeatIntervalSeconds,
         val heartbeatTimeoutSeconds: Int = bootstrap.heartbeatTimeoutSeconds,
     )
+
+    private fun logStructured(
+        level: String,
+        event: String,
+        fields: Map<String, Any?> = emptyMap(),
+    ) {
+        val payload = JSONObject()
+        payload.put("severity", level)
+        payload.put("event", event)
+        fields.forEach { (key, value) ->
+            if (value != null) {
+                payload.put(key, value)
+            }
+        }
+        val message = payload.toString()
+        when (level.uppercase()) {
+            "ERROR" -> Log.e(TAG, message)
+            "WARNING", "WARN" -> Log.w(TAG, message)
+            "DEBUG" -> Log.d(TAG, message)
+            else -> Log.i(TAG, message)
+        }
+    }
 
     companion object {
         private const val TAG = "TextSessionClient"

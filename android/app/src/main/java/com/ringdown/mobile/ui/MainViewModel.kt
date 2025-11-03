@@ -7,8 +7,8 @@ import com.ringdown.mobile.data.RegistrationException
 import com.ringdown.mobile.data.RegistrationGateway
 import com.ringdown.mobile.data.RegistrationRepository
 import com.ringdown.mobile.domain.RegistrationStatus
+import com.ringdown.mobile.voice.LocalVoiceSessionController
 import com.ringdown.mobile.voice.VoiceConnectionState
-import com.ringdown.mobile.voice.VoiceSessionGateway
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -35,7 +35,7 @@ data class MainUiState(
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val registrationGateway: RegistrationGateway,
-    private val voiceGateway: VoiceSessionGateway,
+    private val voiceController: LocalVoiceSessionController,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -49,7 +49,7 @@ class MainViewModel @Inject constructor(
             initialise()
         }
         viewModelScope.launch {
-            voiceGateway.state.collect { voiceState ->
+            voiceController.state.collect { voiceState ->
                 _state.update { current ->
                     when (voiceState) {
                         is VoiceConnectionState.Failed -> current.copy(
@@ -193,11 +193,11 @@ class MainViewModel @Inject constructor(
                 permissionRequestVersion = it.permissionRequestVersion,
             )
         }
-        voiceGateway.start(deviceId, agent)
+        voiceController.start(agent)
     }
 
     fun stopVoiceSession() {
-        voiceGateway.stop()
+        voiceController.stop()
     }
 
     private fun maybeStartVoiceSession() {
@@ -210,7 +210,7 @@ class MainViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        voiceGateway.stop()
+        voiceController.stop()
     }
 
     companion object {

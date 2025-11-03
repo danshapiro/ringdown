@@ -1,7 +1,7 @@
 package com.ringdown.mobile.di
 
-import com.ringdown.mobile.data.TextSessionGateway
 import com.ringdown.mobile.data.TextSessionRepository
+import com.ringdown.mobile.data.TextSessionStarter
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -14,7 +14,7 @@ abstract class TextSessionModule {
 
     @Binds
     @Singleton
-    abstract fun bindTextSessionGateway(
+    abstract fun bindTextSessionStarter(
         repository: TextSessionRepository,
-    ): TextSessionGateway
+    ): TextSessionStarter
 }

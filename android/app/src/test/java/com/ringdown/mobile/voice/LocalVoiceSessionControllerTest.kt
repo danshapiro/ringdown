@@ -2,7 +2,7 @@ package com.ringdown.mobile.voice
 
 import com.google.common.truth.Truth.assertThat
 import com.ringdown.mobile.data.BackendEnvironment
-import com.ringdown.mobile.data.TextSessionGateway
+import com.ringdown.mobile.data.TextSessionStarter
 import com.ringdown.mobile.domain.TextSessionBootstrap
 import com.ringdown.mobile.text.TextSessionClient
 import com.ringdown.mobile.text.TextSessionEvent
@@ -76,6 +76,41 @@ class LocalVoiceSessionControllerTest {
         assertThat(greeting.text).isEqualTo("Welcome aboard.")
     }
 
+    @Test
+    fun assistantTokensAccumulateTranscript() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val controller = createController(dispatcher)
+
+        val readyEvent = TextSessionEvent.Ready(
+            sessionId = "session-99",
+            agent = "assistant-b",
+            greeting = null,
+            heartbeatIntervalSeconds = 15,
+            heartbeatTimeoutSeconds = 45,
+        )
+        invokeHandleReady(controller, readyEvent)
+        runCurrent()
+
+        invokeHandleAssistantToken(
+            controller,
+            TextSessionEvent.AssistantToken(token = "Hello ", final = false, messageType = null),
+        )
+        runCurrent()
+
+        invokeHandleAssistantToken(
+            controller,
+            TextSessionEvent.AssistantToken(token = "there!", final = true, messageType = null),
+        )
+        runCurrent()
+
+        val state = controller.state.value
+        require(state is VoiceConnectionState.Connected)
+        assertThat(state.transcripts).hasSize(1)
+        val assistantLine = state.transcripts.first()
+        assertThat(assistantLine.text).isEqualTo("Hello there!")
+        assertThat(assistantLine.speaker).isEqualTo("assistant")
+    }
+
     private fun createController(
         dispatcher: CoroutineDispatcher,
     ): LocalVoiceSessionController {
@@ -87,20 +122,18 @@ class LocalVoiceSessionControllerTest {
             OkHttpClient(),
             dispatcher,
         )
-        val textSessionGateway = object : TextSessionGateway {
-            override suspend fun startTextSession(agent: String?): TextSessionBootstrap {
-                return TextSessionBootstrap(
-                    sessionId = "session-1",
-                    sessionToken = "token",
-                    resumeToken = "resume",
-                    websocketPath = "/ws",
-                    agent = "assistant-b",
-                    expiresAtIso = "2025-11-02T00:10:00Z",
-                    heartbeatIntervalSeconds = 15,
-                    heartbeatTimeoutSeconds = 45,
-                    tlsPins = emptyList(),
-                )
-            }
+        val textSessionStarter = TextSessionStarter { _ ->
+            TextSessionBootstrap(
+                sessionId = "session-1",
+                sessionToken = "token",
+                resumeToken = "resume",
+                websocketPath = "/ws",
+                agent = "assistant-b",
+                expiresAtIso = "2025-11-02T00:10:00Z",
+                heartbeatIntervalSeconds = 15,
+                heartbeatTimeoutSeconds = 45,
+                tlsPins = emptyList(),
+            )
         }
         val asrEngine = object : LocalAsrEngine {
             override val events: MutableSharedFlow<AsrEvent> = MutableSharedFlow(extraBufferCapacity = 1)
@@ -109,7 +142,7 @@ class LocalVoiceSessionControllerTest {
         }
 
         return LocalVoiceSessionController(
-            textSessionGateway = textSessionGateway,
+            textSessionStarter = textSessionStarter,
             textSessionClient = textSessionClient,
             asrEngine = asrEngine,
             dispatcher = dispatcher,
@@ -125,6 +158,18 @@ class LocalVoiceSessionControllerTest {
         val method = LocalVoiceSessionController::class.java.getDeclaredMethod(
             "handleReady",
             TextSessionEvent.Ready::class.java,
+        )
+        method.isAccessible = true
+        method.invoke(controller, event)
+    }
+
+    private fun invokeHandleAssistantToken(
+        controller: LocalVoiceSessionController,
+        event: TextSessionEvent.AssistantToken,
+    ) {
+        val method = LocalVoiceSessionController::class.java.getDeclaredMethod(
+            "handleAssistantToken",
+            TextSessionEvent.AssistantToken::class.java,
         )
         method.isAccessible = true
         method.invoke(controller, event)

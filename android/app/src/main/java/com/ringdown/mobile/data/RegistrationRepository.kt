@@ -2,9 +2,9 @@ package com.ringdown.mobile.data
 
 import android.os.Build
 import com.ringdown.mobile.BuildConfig
+import com.ringdown.mobile.data.remote.RegisterDeviceResponse
 import com.ringdown.mobile.data.remote.RegisterDeviceRequest
 import com.ringdown.mobile.data.remote.RegistrationApi
-import com.ringdown.mobile.data.remote.RegisterDeviceResponse
 import com.ringdown.mobile.data.store.DeviceIdStore
 import com.ringdown.mobile.di.IoDispatcher
 import com.ringdown.mobile.domain.RegistrationStatus
@@ -31,7 +31,6 @@ interface RegistrationGateway {
 class RegistrationRepository @Inject constructor(
     private val api: RegistrationApi,
     private val deviceIdStore: DeviceIdStore,
-    private val backendEnvironment: BackendEnvironment,
     @IoDispatcher private val dispatcher: CoroutineDispatcher,
 ) : RegistrationGateway {
 

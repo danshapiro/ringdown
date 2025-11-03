@@ -108,7 +108,13 @@ async def register_device(payload: MobileRegisterRequest) -> MobileRegisterRespo
 
     device_id = payload.device_id.strip()
     if not device_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid deviceId")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_device_id",
+                "message": "deviceId must be a non-empty string.",
+            },
+        )
 
     metadata = {
         "platform": payload.platform,
@@ -153,15 +159,33 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
 
     device_id = payload.device_id.strip()
     if not device_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid deviceId")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_device_id",
+                "message": "deviceId must be a non-empty string.",
+            },
+        )
 
     raw_cfg = settings.get_mobile_device(device_id)
     if not raw_cfg:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown device")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "device_not_registered",
+                "message": f"Device '{device_id}' is not registered. Add the device under mobile_devices in config.yaml and redeploy.",
+            },
+        )
 
     device_cfg = _normalise_device_entry(raw_cfg)
     if not device_cfg.get("enabled"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device not approved")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "device_not_approved",
+                "message": f"Device '{device_id}' is pending approval. Set enabled: true in config.yaml mobile_devices and redeploy.",
+            },
+        )
 
     provided_token = (payload.auth_token or "").strip()
     configured_token = (device_cfg.get("auth_token") or "").strip()
@@ -173,14 +197,23 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
             logger.exception("Failed to backfill security fields for device %s: %s", device_id, exc)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Unable to prepare device security configuration",
+                detail={
+                    "code": "security_initialisation_failed",
+                    "message": f"Unable to prepare security configuration for device '{device_id}'. Check server logs.",
+                },
             ) from exc
         device_cfg = _normalise_device_entry(refreshed_entry)
         configured_token = (device_cfg.get("auth_token") or "").strip()
 
     if provided_token and configured_token:
         if not secrets.compare_digest(provided_token, configured_token):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "code": "invalid_credentials",
+                    "message": "Auth token rejected. Verify the mobile device entry matches the handset token.",
+                },
+            )
     elif configured_token:
         logger.warning(
             "Device %s initiated text session without auth token; allowing due to legacy client",
@@ -192,14 +225,23 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
 
     agent_name = payload.agent or device_cfg.get("agent")
     if not agent_name:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Agent not specified")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "agent_not_specified",
+                "message": "Agent not specified in request or device configuration.",
+            },
+        )
 
     try:
         agent_cfg = settings.get_agent_config(agent_name)
     except KeyError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Agent '{agent_name}' not found",
+            detail={
+                "code": "agent_not_found",
+                "message": f"Agent '{agent_name}' not found in server configuration.",
+            },
         ) from exc
 
     text_cfg = settings.get_mobile_text_config()
@@ -235,18 +277,27 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
         except KeyError as exc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Resume token not recognised",
+                detail={
+                    "code": "resume_token_not_recognised",
+                    "message": "Resume token not recognised or expired.",
+                },
             ) from exc
         except RuntimeError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Session already active",
+                detail={
+                    "code": "session_already_active",
+                    "message": "Session already active on another connection.",
+                },
             ) from exc
 
         if state.agent_name != agent_name:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Session bound to a different agent",
+                detail={
+                    "code": "agent_mismatch",
+                    "message": "Resume token belongs to a different agent.",
+                },
             )
         state.agent_config = agent_cfg
     else:

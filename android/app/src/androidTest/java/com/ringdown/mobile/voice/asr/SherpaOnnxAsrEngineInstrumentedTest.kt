@@ -3,7 +3,6 @@ package com.ringdown.mobile.voice.asr
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.ringdown.mobile.BuildConfig
 import com.ringdown.mobile.data.models.LocalModelInstaller
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -12,7 +11,6 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
-import org.junit.Assume
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -21,7 +19,6 @@ class SherpaOnnxAsrEngineInstrumentedTest {
 
     @Test
     fun startAndStopDoesNotEmitErrors() = runBlocking {
-        Assume.assumeTrue("Local audio alpha disabled", BuildConfig.ENABLE_LOCAL_AUDIO_ALPHA)
         val context = ApplicationProvider.getApplicationContext<Context>()
         val installer = LocalModelInstaller(context)
         val fakeAudio = object : AudioInputSource {
