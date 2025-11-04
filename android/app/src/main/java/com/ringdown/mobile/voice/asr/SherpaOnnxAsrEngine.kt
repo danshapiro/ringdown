@@ -73,7 +73,10 @@ class SherpaOnnxAsrEngine @Inject constructor(
         try {
             val modelDirectory = modelInstaller.ensureSherpaStreamingAsrModel()
             val recognizerConfig = buildRecognizerConfig(modelDirectory)
-            val recognizer = OnlineRecognizer(appContext.assets, recognizerConfig)
+            // Models are installed under the app's files directory with absolute paths,
+            // so we must avoid passing an AssetManager reference (sherpa-onnx expects
+            // a null assetManager when loading from the filesystem).
+            val recognizer = OnlineRecognizer(null, recognizerConfig)
             val stream = recognizer.createStream("")
 
             this@SherpaOnnxAsrEngine.recognizer = recognizer

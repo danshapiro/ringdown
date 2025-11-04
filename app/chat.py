@@ -834,7 +834,7 @@ async def stream_response(
 
         assistant_content = "".join(assistant_tokens)
         if assistant_content:
-            logger.info(f"🤖🤖🤖 Assistant reply: {assistant_content}")
+            logger.info("Assistant reply: %s", assistant_content)
 
         messages.append({"role": "assistant", "content": assistant_content})
         thinking_audio.stop()
