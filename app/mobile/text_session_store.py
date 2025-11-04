@@ -154,7 +154,7 @@ class TextSessionStore:
             self._resume_index.pop(resume_token, None)
             self._resume_index[new_resume_token] = session_id
 
-            return state, new_session_token
+        return state, new_session_token
 
     async def consume_session_token(self, session_token: str) -> TextSessionState:
         """Consume a one-time session token for WebSocket connection."""

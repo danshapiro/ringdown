@@ -16,6 +16,9 @@ logs/
 
 # Docker & runtime artifacts
 *.log
+logcat*.txt
+/screenshot.png
+/uidump.xml
 *log*.json
 *.mp3
 logs_since_*.json

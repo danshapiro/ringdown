@@ -289,14 +289,22 @@ async def mobile_text_session(ws: WebSocket) -> None:
                     "mobile_text_session.stream_failure",
                     session_id=session_id,
                     error=str(exc),
+                    exception_type=exc.__class__.__name__,
+                    exception_repr=repr(exc),
                 )
+                detail_text = str(exc).strip()
+                error_payload = {
+                    "type": "error",
+                    "code": "assistant_failure",
+                    "message": "Sorry, I ran into an error.",
+                }
+                if detail_text:
+                    error_payload["detail"] = detail_text
+                error_payload["exceptionType"] = exc.__class__.__name__
+                error_payload["exceptionRepr"] = repr(exc)
                 await _send_json(
                     ws,
-                    {
-                        "type": "error",
-                        "code": "assistant_failure",
-                        "message": "Sorry, I ran into an error.",
-                    },
+                    error_payload,
                 )
                 return
 

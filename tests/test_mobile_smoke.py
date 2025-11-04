@@ -1,41 +1,19 @@
 from __future__ import annotations
 
 import contextlib
-from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.mobile.smoke import SmokeResult, SmokeTestError, run_smoke_test
-from app.mobile.text_session_store import TextSessionStore, TextSessionState
+from app.mobile.text_session_store import TextSessionStore
 
 
 client = TestClient(app)
-
-
-def _text_state() -> TextSessionState:
-    now = datetime.now(timezone.utc)
-    return TextSessionState(
-        session_id="session-abc",
-        device_id="device-123",
-        agent_name="Agent Alpha",
-        agent_config={
-            "model": "gpt-5",
-            "prompt": "You are helpful.",
-            "welcome_greeting": "Hi there!",
-        },
-        created_at=now,
-        expires_at=now + timedelta(minutes=15),
-        resume_expires_at=now + timedelta(minutes=5),
-        resume_token="resume-abc",
-        session_ttl_seconds=900,
-        resume_ttl_seconds=300,
-        heartbeat_interval_seconds=12,
-        heartbeat_timeout_seconds=30,
-        tls_pins=[],
-    )
 
 
 def _patch_mobile_layers(store: TextSessionStore) -> contextlib.ExitStack:
@@ -58,6 +36,10 @@ def _patch_mobile_layers(store: TextSessionStore) -> contextlib.ExitStack:
         "model": "gpt-5",
         "prompt": "You are helpful.",
         "welcome_greeting": "Hi there!",
+        "temperature": 0.1,
+        "max_tokens": 128,
+        "max_history": 16,
+        "tools": [],
     }
 
     stack = contextlib.ExitStack()
@@ -72,53 +54,88 @@ def _patch_mobile_layers(store: TextSessionStore) -> contextlib.ExitStack:
     return stack
 
 
-async def _fake_stream_response(
-    user_text: str,
-    agent_cfg: dict[str, Any],
-    messages: list[dict[str, Any]],
-    **kwargs: Any,
-):
-    yield "assistant reply"
-
-
 def test_smoke_success() -> None:
     store = TextSessionStore()
-    state = _text_state()
+    stack = _patch_mobile_layers(store)
 
-    patches = _patch_mobile_layers(store)
-    with patches:
-        store.create_session = AsyncMock(return_value=(state, "session-token"))  # type: ignore[assignment]
-        store.consume_session_token = AsyncMock(return_value=state)  # type: ignore[assignment]
-        with patch("app.api.mobile_text.stream_response", _fake_stream_response):
-            result = run_smoke_test(client, device_id="device-123", prompt_text="hello")
+    class DummyThinkingAudio:
+        def __init__(self, source: str) -> None:
+            self.source = source
+
+        def start_payload(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    async def fake_acompletion(*args: Any, **kwargs: Any) -> Any:
+        class _FakeResponse:
+            def __aiter__(self_inner):
+                async def _generator():
+                    yield SimpleNamespace(
+                        choices=[SimpleNamespace(delta={"content": "assistant reply"}, finish_reason=None)]
+                    )
+                    yield SimpleNamespace(
+                        choices=[SimpleNamespace(delta={}, finish_reason="stop")]
+                    )
+                return _generator()
+
+        return _FakeResponse()
+
+    stack.enter_context(patch("app.chat.ThinkingAudioController", DummyThinkingAudio))
+    stack.enter_context(patch("app.chat.acompletion", fake_acompletion))
+    stack.enter_context(patch("app.chat.tf.get_tools_for_agent", return_value=[]))
+    stack.enter_context(patch("app.chat.tf.set_agent_context"))
+    stack.enter_context(patch("app.chat.tf.set_call_context"))
+    stack.enter_context(patch("app.chat.tf.get_async_result", return_value=None))
+
+    with stack:
+        result = run_smoke_test(client, device_id="device-123", prompt_text="hello")
 
     assert isinstance(result, SmokeResult)
     assert result.success is True
-    assert result.session_id == "session-abc"
+    assert isinstance(result.session_id, str) and result.session_id
     assert result.agent == "Agent Alpha"
+    assert result.greeting == "Hi there!"
     assert "assistant reply" in result.assistant_text
-    assert result.resume_token == "resume-abc"
+    assert isinstance(result.resume_token, str) and result.resume_token
     assert result.websocket_path == "/v1/mobile/text/session"
     assert any(evt.get("type") == "ready" for evt in result.events)
 
 
 def test_smoke_raises_on_error_event() -> None:
     store = TextSessionStore()
-    state = _text_state()
+    stack = _patch_mobile_layers(store)
+    stack.enter_context(patch("app.chat.tf.get_tools_for_agent", return_value=[]))
+    stack.enter_context(patch("app.chat.tf.set_agent_context"))
+    stack.enter_context(patch("app.chat.tf.set_call_context"))
+    stack.enter_context(patch("app.chat.tf.get_async_result", return_value=None))
 
-    patches = _patch_mobile_layers(store)
-    with patches:
-        store.create_session = AsyncMock(return_value=(state, "session-token"))  # type: ignore[assignment]
-        store.consume_session_token = AsyncMock(return_value=state)  # type: ignore[assignment]
+    async def failing_stream(*args: Any, **kwargs: Any):
+        raise RuntimeError("boom")
+        yield  # pragma: no cover
 
-        async def failing_stream(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
-            raise RuntimeError("boom")
-            yield  # pragma: no cover
+    stack.enter_context(patch("app.api.mobile_text.stream_response", failing_stream))
 
-        with patch("app.api.mobile_text.stream_response", failing_stream):
-            try:
-                run_smoke_test(client, device_id="device-123", prompt_text="hello")
-            except SmokeTestError as exc:
-                assert "WebSocket error" in str(exc)
-            else:
-                raise AssertionError("Expected SmokeTestError to be raised")
+    with stack:
+        with pytest.raises(SmokeTestError) as excinfo:
+            run_smoke_test(client, device_id="device-123", prompt_text="hello")
+
+    logs = excinfo.value.logs
+    events = excinfo.value.events
+    stream_log = next(
+        (
+            entry
+            for entry in logs
+            if entry.get("event") == "mobile_text_session.stream_failure"
+        ),
+        {},
+    )
+    assert stream_log.get("error") == "boom"
+    assert stream_log.get("exception_type") == "RuntimeError"
+    assert stream_log.get("exception_repr") == "RuntimeError('boom')"
+
+    assert events and events[-1].get("type") == "error"
+    assert events[-1].get("detail") == "boom"
+    assert events[-1].get("exceptionType") == "RuntimeError"
+    assert events[-1].get("exceptionRepr") == "RuntimeError('boom')"

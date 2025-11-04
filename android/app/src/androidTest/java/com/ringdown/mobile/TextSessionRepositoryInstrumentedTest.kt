@@ -66,7 +66,7 @@ class TextSessionRepositoryInstrumentedTest {
         deviceIdStore.updateResumeToken(null)
 
         val bootstrap = try {
-            repository.startTextSession()
+            repository.startTextSession(agent = null)
         } catch (error: HttpException) {
             Assume.assumeTrue(
                 "Text session endpoint unavailable (${error.code()})",

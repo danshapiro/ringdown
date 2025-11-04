@@ -5,10 +5,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+from unittest.mock import patch
 
 import httpx
 from fastapi.testclient import TestClient
@@ -18,6 +19,31 @@ from websockets.client import WebSocketClientProtocol
 
 class SmokeTestError(RuntimeError):
     """Raised when the mobile text smoke flow fails."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        events: Optional[List[Dict[str, Any]]] = None,
+        logs: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        self.events: List[Dict[str, Any]] = list(events or [])
+        self.logs: List[Dict[str, Any]] = list(logs or [])
+
+        detail_parts: List[str] = []
+        if self.events:
+            try:
+                detail_parts.append(f"events_tail={json.dumps(self.events[-3:], default=str)}")
+            except Exception:  # pragma: no cover - defensive
+                detail_parts.append(f"events_tail={self.events[-3:]!r}")
+        if self.logs:
+            try:
+                detail_parts.append(f"logs_tail={json.dumps(self.logs[-3:], default=str)}")
+            except Exception:  # pragma: no cover - defensive
+                detail_parts.append(f"logs_tail={self.logs[-3:]!r}")
+
+        suffix = f" ({'; '.join(detail_parts)})" if detail_parts else ""
+        super().__init__(message + suffix)
 
 
 @dataclass(slots=True)
@@ -40,14 +66,46 @@ class SmokeResult:
         return self.assistant_text
 
 
-def _require(condition: bool, message: str) -> None:
+def _require(
+    condition: bool,
+    message: str,
+    *,
+    events: Optional[List[Dict[str, Any]]] = None,
+    logs: Optional[List[Dict[str, Any]]] = None,
+) -> None:
     if not condition:
-        raise SmokeTestError(message)
+        raise SmokeTestError(message, events=events, logs=logs)
 
 
-def _assert_message_type(message: Dict[str, Any], expected: str) -> None:
+def _assert_message_type(
+    message: Dict[str, Any],
+    expected: str,
+    *,
+    events: List[Dict[str, Any]],
+    logs: List[Dict[str, Any]],
+) -> None:
     actual = message.get("type")
-    _require(actual == expected, f"Expected message type '{expected}', observed '{actual}'")
+    _require(actual == expected, f"Expected message type '{expected}', observed '{actual}'", events=events, logs=logs)
+
+
+def _capture_mobile_text_logs(buffer: List[Dict[str, Any]]):
+    """Return a context manager that records structured logs emitted by the mobile text stack."""
+
+    try:
+        from app.api import mobile_text as mobile_text_module  # noqa: WPS433 - runtime import for optional patch
+    except Exception:  # pragma: no cover - defensive fallback when module missing
+        return nullcontext()
+
+    original = getattr(mobile_text_module, "_structured_log", None)
+    if original is None:
+        return nullcontext()
+
+    def _combined(level: str, event: str, **fields: Any) -> None:
+        record = {"level": level, "event": event, **fields}
+        buffer.append(record)
+        original(level, event, **fields)
+
+    return patch("app.api.mobile_text._structured_log", new=_combined)
 
 
 def run_smoke_test(
@@ -58,68 +116,102 @@ def run_smoke_test(
 ) -> SmokeResult:
     """Exercise session bootstrap + websocket streaming against a local TestClient."""
 
-    handshake = client.post(
-        "/v1/mobile/text/session",
-        json={"deviceId": device_id},
-    )
-    _require(handshake.status_code == 200, f"Session handshake failed: {handshake.text}")
-    body = handshake.json()
-
-    session_id = body.get("sessionId")
-    session_token = body.get("sessionToken")
-    resume_token = body.get("resumeToken")
-    websocket_path = body.get("websocketPath")
-    agent = body.get("agent")
-
-    _require(isinstance(session_id, str) and session_id, "sessionId missing from handshake")
-    _require(isinstance(session_token, str) and session_token, "sessionToken missing from handshake")
-    _require(isinstance(resume_token, str) and resume_token, "resumeToken missing from handshake")
-    _require(isinstance(websocket_path, str) and websocket_path, "websocketPath missing from handshake")
-    _require(isinstance(agent, str) and agent, "agent missing from handshake")
-
     events: List[Dict[str, Any]] = []
-    assistant_parts: List[str] = []
-    greeting_text: str | None = None
+    log_records: List[Dict[str, Any]] = []
 
-    with client.websocket_connect(
-        websocket_path,
-        headers={"x-ringdown-session-token": session_token},
-    ) as websocket:
-        ready = websocket.receive_json()
-        events.append(ready)
-        _assert_message_type(ready, "ready")
-        if isinstance(ready.get("greeting"), str):
-            greeting_text = ready["greeting"].strip() or None
+    with _capture_mobile_text_logs(log_records):
+        handshake = client.post(
+            "/v1/mobile/text/session",
+            json={"deviceId": device_id},
+        )
+        _require(
+            handshake.status_code == 200,
+            f"Session handshake failed: {handshake.text}",
+            events=events,
+            logs=log_records,
+        )
+        body = handshake.json()
 
-        websocket.send_json({"type": "user_message", "text": prompt_text, "final": True})
+        session_id = body.get("sessionId")
+        session_token = body.get("sessionToken")
+        resume_token = body.get("resumeToken")
+        websocket_path = body.get("websocketPath")
+        agent = body.get("agent")
 
-        while True:
-            message = websocket.receive_json()
-            events.append(message)
-            msg_type = message.get("type")
+        _require(
+            isinstance(session_id, str) and session_id,
+            "sessionId missing from handshake",
+            events=events,
+            logs=log_records,
+        )
+        _require(
+            isinstance(session_token, str) and session_token,
+            "sessionToken missing from handshake",
+            events=events,
+            logs=log_records,
+        )
+        _require(
+            isinstance(resume_token, str) and resume_token,
+            "resumeToken missing from handshake",
+            events=events,
+            logs=log_records,
+        )
+        _require(
+            isinstance(websocket_path, str) and websocket_path,
+            "websocketPath missing from handshake",
+            events=events,
+            logs=log_records,
+        )
+        _require(
+            isinstance(agent, str) and agent,
+            "agent missing from handshake",
+            events=events,
+            logs=log_records,
+        )
 
-            if msg_type == "assistant_token":
-                token = message.get("token")
-                if isinstance(token, str):
-                    assistant_parts.append(token)
-                message_type = message.get("messageType")
-                if message_type == "greeting" and isinstance(token, str):
-                    greeting_text = token.strip() or greeting_text
+        assistant_parts: List[str] = []
+        greeting_text: str | None = None
+
+        with client.websocket_connect(
+            websocket_path,
+            headers={"x-ringdown-session-token": session_token},
+        ) as websocket:
+            ready = websocket.receive_json()
+            events.append(ready)
+            _assert_message_type(ready, "ready", events=events, logs=log_records)
+            if isinstance(ready.get("greeting"), str):
+                greeting_text = ready["greeting"].strip() or None
+
+            websocket.send_json({"type": "user_message", "text": prompt_text, "final": True})
+
+            while True:
+                message = websocket.receive_json()
+                events.append(message)
+                msg_type = message.get("type")
+
+                if msg_type == "assistant_token":
+                    token = message.get("token")
+                    if isinstance(token, str):
+                        assistant_parts.append(token)
+                    message_type = message.get("messageType")
+                    if message_type == "greeting" and isinstance(token, str):
+                        greeting_text = token.strip() or greeting_text
+                        continue
+                    if message.get("final") is True:
+                        break
                     continue
-                if message.get("final") is True:
-                    break
-                continue
 
-            if msg_type in {"ack", "heartbeat"}:
-                continue
+                if msg_type in {"ack", "heartbeat", "tool_event"}:
+                    continue
 
-            if msg_type == "tool_event":
-                continue
+                if msg_type == "error":
+                    raise SmokeTestError(
+                        f"WebSocket error: {json.dumps(message)}",
+                        events=list(events),
+                        logs=list(log_records),
+                    )
 
-            if msg_type == "error":
-                raise SmokeTestError(f"WebSocket error: {json.dumps(message)}")
-
-            # Any other event types (e.g., additional ready) should not terminate the loop.
+                # Any other event types (e.g., additional ready) should not terminate the loop.
 
     assistant_text = "".join(assistant_parts).strip()
     return SmokeResult(
@@ -205,14 +297,35 @@ async def run_remote_smoke(
         resolved_agent = body.get("agent") or agent
         auth_token = body.get("authToken")
 
-    _require(isinstance(session_id, str) and session_id, "sessionId missing from handshake")
-    _require(isinstance(session_token, str) and session_token, "sessionToken missing from handshake")
-    _require(isinstance(resume_token, str) and resume_token, "resumeToken missing from handshake")
-    _require(isinstance(websocket_path, str) and websocket_path, "websocketPath missing from handshake")
-    _require(isinstance(resolved_agent, str) and resolved_agent, "agent missing from handshake")
+    events: List[Dict[str, Any]] = []
+
+    _require(
+        isinstance(session_id, str) and session_id,
+        "sessionId missing from handshake",
+        events=events,
+    )
+    _require(
+        isinstance(session_token, str) and session_token,
+        "sessionToken missing from handshake",
+        events=events,
+    )
+    _require(
+        isinstance(resume_token, str) and resume_token,
+        "resumeToken missing from handshake",
+        events=events,
+    )
+    _require(
+        isinstance(websocket_path, str) and websocket_path,
+        "websocketPath missing from handshake",
+        events=events,
+    )
+    _require(
+        isinstance(resolved_agent, str) and resolved_agent,
+        "agent missing from handshake",
+        events=events,
+    )
 
     ws_url = _build_websocket_url(base, websocket_path)
-    events: List[Dict[str, Any]] = []
     assistant_parts: List[str] = []
     greeting_text: str | None = None
 
@@ -220,7 +333,7 @@ async def run_remote_smoke(
         ready_raw = await asyncio.wait_for(websocket.recv(), timeout)
         ready = json.loads(ready_raw)
         events.append(ready)
-        _assert_message_type(ready, "ready")
+        _assert_message_type(ready, "ready", events=events, logs=[])
         if isinstance(ready.get("greeting"), str):
             greeting_text = ready["greeting"].strip() or None
 
@@ -248,10 +361,13 @@ async def run_remote_smoke(
                 continue
 
             if msg_type == "error":
-                raise SmokeTestError(f"WebSocket error: {json.dumps(message)}")
+                raise SmokeTestError(
+                    f"WebSocket error: {json.dumps(message)}",
+                    events=list(events),
+                )
 
     assistant_text = "".join(assistant_parts).strip()
-    _require(bool(assistant_text), "Assistant produced no response tokens.")
+    _require(bool(assistant_text), "Assistant produced no response tokens.", events=events)
 
     if verify_resume:
         resume_payload = {
@@ -270,16 +386,19 @@ async def run_remote_smoke(
             except Exception:  # noqa: BLE001
                 detail = resume_resp.text
             raise SmokeTestError(
-                f"Resume handshake failed ({resume_resp.status_code}) for device {device_id}: {detail}"
+                f"Resume handshake failed ({resume_resp.status_code}) for device {device_id}: {detail}",
+                events=list(events),
             )
         resume_body = resume_resp.json()
         _require(
             isinstance(resume_body.get("sessionToken"), str),
             "Resume handshake missing sessionToken",
+            events=events,
         )
         _require(
             isinstance(resume_body.get("resumeToken"), str),
             "Resume handshake missing resumeToken",
+            events=events,
         )
 
     return SmokeResult(

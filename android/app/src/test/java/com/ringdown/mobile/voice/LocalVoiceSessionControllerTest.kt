@@ -20,6 +20,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLog
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -109,6 +110,63 @@ class LocalVoiceSessionControllerTest {
         val assistantLine = state.transcripts.first()
         assertThat(assistantLine.text).isEqualTo("Hello there!")
         assertThat(assistantLine.speaker).isEqualTo("assistant")
+    }
+
+    @Test
+    fun startFailureLogsStructuredMessage() = runTest {
+        ShadowLog.clear()
+        val dispatcher = StandardTestDispatcher(testScheduler)
+
+        val backendEnvironment = object : BackendEnvironment() {
+            override fun baseUrl(): String = "https://example.invalid"
+        }
+        val failingClient = object : TextSessionClient(
+            backendEnvironment,
+            OkHttpClient(),
+            dispatcher,
+        ) {
+            override suspend fun connect(bootstrap: TextSessionBootstrap) {
+                throw IllegalArgumentException("unexpected scheme: wss")
+            }
+        }
+
+        val controller = LocalVoiceSessionController(
+            textSessionStarter = TextSessionStarter { agent ->
+                TextSessionBootstrap(
+                    sessionId = "session-err",
+                    sessionToken = "token",
+                    resumeToken = "resume",
+                    websocketPath = "/ws",
+                    agent = agent ?: "assistant-b",
+                    expiresAtIso = "2025-11-02T00:10:00Z",
+                    heartbeatIntervalSeconds = 15,
+                    heartbeatTimeoutSeconds = 45,
+                    tlsPins = emptyList(),
+                )
+            },
+            textSessionClient = failingClient,
+            asrEngine = object : LocalAsrEngine {
+                override val events: MutableSharedFlow<AsrEvent> = MutableSharedFlow(extraBufferCapacity = 1)
+                override suspend fun start() {}
+                override suspend fun stop() {}
+            },
+            dispatcher = dispatcher,
+            mainDispatcher = dispatcher,
+            nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
+        )
+
+        controller.start("assistant-b")
+        runCurrent()
+
+        val logs = ShadowLog.getLogs()
+        val structuredLog = logs.firstOrNull { entry ->
+            entry.tag == "LocalVoiceSession" && entry.msg.contains("\"event\":\"local_voice.start_failed\"")
+        }
+        assertThat(structuredLog).isNotNull()
+        assertThat(structuredLog!!.msg).contains("unexpected scheme: wss")
+
+        val state = controller.state.value
+        assertThat(state).isInstanceOf(VoiceConnectionState.Failed::class.java)
     }
 
     private fun createController(

@@ -27,7 +27,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.CertificatePinner
 import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -69,11 +69,11 @@ open class TextSessionClient @Inject constructor(
         lock.withLock {
             disconnectLocked()
 
-            val wsUrl = buildWebSocketUrl(bootstrap.websocketPath)
-            val client = buildClientForPins(wsUrl, bootstrap.tlsPins)
+            val endpoint = buildWebSocketEndpoint(bootstrap.websocketPath)
+            val client = buildClientForPins(endpoint.httpUrl, bootstrap.tlsPins)
 
             val request = Request.Builder()
-                .url(wsUrl)
+                .url(endpoint.webSocketUrl)
                 .header(SESSION_TOKEN_HEADER, bootstrap.sessionToken)
                 .header("User-Agent", userAgent())
                 .build()
@@ -86,7 +86,7 @@ open class TextSessionClient @Inject constructor(
             sessionInfo = SessionInfo(
                 bootstrap = bootstrap,
                 client = client,
-                url = wsUrl,
+                url = endpoint.webSocketUrl,
             )
             activeWebSocket = socket
             readyAcknowledged = false
@@ -175,14 +175,11 @@ open class TextSessionClient @Inject constructor(
             .build()
     }
 
-    private fun buildWebSocketUrl(path: String): HttpUrl {
-        val baseUrl = backendEnvironment.baseUrl()
-        val httpUrl = baseUrl.toHttpUrl()
-        val normalisedPath = if (path.startsWith("/")) path else "/$path"
-        return httpUrl.newBuilder()
-            .scheme(if (httpUrl.isHttps) "wss" else "ws")
-            .encodedPath(normalisedPath)
-            .build()
+    private fun buildWebSocketEndpoint(path: String): WebSocketEndpoint {
+        return computeWebSocketEndpoint(
+            baseUrl = backendEnvironment.baseUrl(),
+            websocketPath = path,
+        )
     }
 
     private fun startHeartbeat(intervalSeconds: Int) {
@@ -449,9 +446,14 @@ open class TextSessionClient @Inject constructor(
     private data class SessionInfo(
         val bootstrap: TextSessionBootstrap,
         val client: OkHttpClient,
-        val url: HttpUrl,
+        val url: String,
         val heartbeatIntervalSeconds: Int = bootstrap.heartbeatIntervalSeconds,
         val heartbeatTimeoutSeconds: Int = bootstrap.heartbeatTimeoutSeconds,
+    )
+
+    internal data class WebSocketEndpoint(
+        val httpUrl: HttpUrl,
+        val webSocketUrl: String,
     )
 
     private fun logStructured(
@@ -480,6 +482,82 @@ open class TextSessionClient @Inject constructor(
         private const val TAG = "TextSessionClient"
         private const val SESSION_TOKEN_HEADER = "x-ringdown-session-token"
         private const val MAX_ERROR_DETAIL = 256
+
+        internal fun computeWebSocketEndpoint(
+            baseUrl: String,
+            websocketPath: String,
+        ): WebSocketEndpoint {
+            val trimmedPath = websocketPath.trim()
+            require(trimmedPath.isNotEmpty()) { "websocketPath must not be blank" }
+
+            val (httpUrl, wsSchemeOverride) = when {
+                trimmedPath.startsWith("ws://", ignoreCase = true) ->
+                    requireHttpUrl("http://${trimmedPath.substringAfter("://")}") to "ws"
+                trimmedPath.startsWith("wss://", ignoreCase = true) ->
+                    requireHttpUrl("https://${trimmedPath.substringAfter("://")}") to "wss"
+                trimmedPath.startsWith("http://", ignoreCase = true) ->
+                    requireHttpUrl(trimmedPath) to "ws"
+                trimmedPath.startsWith("https://", ignoreCase = true) ->
+                    requireHttpUrl(trimmedPath) to "wss"
+                else -> {
+                    val trimmedBase = baseUrl.trim()
+                    require(trimmedBase.isNotEmpty()) {
+                        "baseUrl must not be blank when websocketPath is relative"
+                    }
+                    val baseHttpUrl = requireHttpUrl(trimmedBase)
+                    val resolved = baseHttpUrl.resolve(trimmedPath)
+                        ?: baseHttpUrl.resolve("/${trimmedPath.trimStart('/')}")
+                        ?: throw IllegalArgumentException(
+                            "Unable to resolve websocket path: $websocketPath",
+                        )
+                    resolved to null
+                }
+            }
+
+            val wsScheme = wsSchemeOverride ?: if (httpUrl.isHttps) "wss" else "ws"
+            val webSocketUrl = buildWebSocketUrl(httpUrl, wsScheme)
+
+            return WebSocketEndpoint(httpUrl = httpUrl, webSocketUrl = webSocketUrl)
+        }
+
+        private fun requireHttpUrl(value: String): HttpUrl {
+            val trimmed = value.trim()
+            if (trimmed.isEmpty()) {
+                throw IllegalArgumentException("Invalid HTTP URL: $value")
+            }
+            return trimmed.toHttpUrlOrNull()
+                ?: throw IllegalArgumentException("Invalid HTTP URL: $value")
+        }
+
+        private fun buildWebSocketUrl(httpUrl: HttpUrl, scheme: String): String {
+            val builder = StringBuilder()
+            builder.append(scheme)
+            builder.append("://")
+            builder.append(httpUrl.host)
+
+            val normalisedScheme = scheme.lowercase()
+            val defaultPort = when (normalisedScheme) {
+                "wss" -> 443
+                "ws" -> 80
+                else -> -1
+            }
+            val port = httpUrl.port
+            if (port > 0 && port != defaultPort) {
+                builder.append(":").append(port)
+            }
+
+            builder.append(httpUrl.encodedPath)
+
+            httpUrl.encodedQuery?.takeIf { it.isNotEmpty() }?.let { query ->
+                builder.append('?').append(query)
+            }
+
+            httpUrl.encodedFragment?.takeIf { it.isNotEmpty() }?.let { fragment ->
+                builder.append('#').append(fragment)
+            }
+
+            return builder.toString()
+        }
 
         private fun JSONObject.toMap(): Map<String, Any?> {
             val result = mutableMapOf<String, Any?>()

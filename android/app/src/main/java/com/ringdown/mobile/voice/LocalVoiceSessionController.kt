@@ -74,6 +74,15 @@ open class LocalVoiceSessionController @Inject constructor(
                 throw cancel
             } catch (error: Exception) {
                 Log.e(TAG, "Failed to start local voice session", error)
+                logStructured(
+                    level = "ERROR",
+                    event = "local_voice.start_failed",
+                    fields = mapOf(
+                        "message" to (error.message ?: "Unknown failure"),
+                        "exceptionType" to error::class.java.simpleName,
+                        "agent" to agent,
+                    ),
+                )
                 sessionActive.set(false)
                 runCatching { textSessionClient.disconnect() }
                 runCatching { asrEngine.stop() }

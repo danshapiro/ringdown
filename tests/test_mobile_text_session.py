@@ -154,3 +154,4 @@ def test_mobile_text_session_rejects_unknown_session_token(client: TestClient) -
                 assert exc.value.code == status.WS_1008_POLICY_VIOLATION
         except WebSocketDisconnect as exc:
             assert exc.code == status.WS_1008_POLICY_VIOLATION
+
