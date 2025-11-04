@@ -17,7 +17,6 @@ def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     config_path.write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
 
     monkeypatch.setenv("RINGDOWN_CONFIG_PATH", str(config_path))
-    monkeypatch.setenv("MANAGED_AV_API_KEY", "test-key")
     settings.refresh_config_cache()
     try:
         yield config_path

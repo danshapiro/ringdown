@@ -105,29 +105,6 @@ python -m utils.websocket_smoke --url wss://<your-cloud-run-host>/ws --receive 3
 ```
 Listen for the greeting and ensure the call summary appears in your logs.
 
-### Managed A/V secrets (Daily Pipecat)
-The Android client uses Daily's managed A/V pipeline. Capture these once and add them to your `.env` so `cloudrun-deploy.py` can sync them into Secret Manager:
-
-1. Sign in to https://dashboard.daily.co with the account that owns the Ringdown pipeline.
-2. Open https://pipecat.daily.co (same Daily credentials) and note the **Agent name** for the deployment. This value must match `mobile_managed_av.agent_name` in `config.yaml` (production uses `phone-danbot-agent`).
-3. Generate a Pipecat Cloud token from **Developers → Tokens** and store it as `PIPECAT_API_KEY`.
-4. (Optional) For handset audio-loop automation (ringdown-32), generate a shared secret and store it as `MANAGED_AV_CONTROL_TOKEN`. The backend only enables the control channel test harness when this token is present, and the live harness must supply it via the `X-Ringdown-Control-Token` header.
-5. Run `cloudrun-deploy.py` and the helper will upload everything listed in `secret-manager.yaml`, wiring the environment variables into Cloud Run. After the first deploy, Android devices provision managed sessions without hitting the approval dialog.
-6. The Pipecat agent source lives in `pipelines/pipecat-agent/` (with Krisp dependencies baked in). Build the Docker image from that directory when you need to update the managed A/V runtime.
-
-## Android Managed A/V pipeline
-- Configure realtime model, voice, and VAD defaults through the `defaults.realtime` block in `config.yaml`. Agent-specific overrides still live under `agents.<name>.realtime` and are merged automatically when provisioning sessions.
-- Devices call `POST /v1/mobile/voice/session` to obtain a Daily room URL, access token, `pipelineSessionId`, and metadata describing the selected model, voice, and server VAD thresholds. The backend logs a structured `mobile_managed_session_started` event with the same identifiers for traceability across systems.
-- The Pipecat pipeline posts transcripts to `POST /v1/mobile/managed-av/completions`. The backend streams the agent response through `stream_response`, logs a `mobile_managed_completion` entry (character counts and reset state included), and returns the assistant text plus optional hold/reset hints.
-- When a session ends, Pipecat calls `DELETE /v1/mobile/managed-av/sessions/{session_id}`. The backend performs cleanup, closes the upstream session, and emits `mobile_managed_session_closed` with the pipeline handle for traceability.
-- Smoke automation lives at `android/scripts/run-voice-smoke.sh`. The wrapper exports the correct `UV_PROJECT_ENVIRONMENT` and runs `uv run python -m app.mobile.smoke --device-id <device> --base-url <backend>`, validating session bootstrap, managed completions, and teardown end to end.
-- The handset audio loop harness (`tests/live/handset_audio_loop.py`) enqueues deterministic PCM via the control channel, then uses `adb` to retrieve the handset-captured audio artifact for offline analysis.
-- Automation helpers live in `tests/live/managed_session_helper.py` (fetch/create managed sessions via `GET /v1/mobile/managed-av/sessions/active`) and `tests/live/run_handset_harness.py` (ensures a session and runs the audio loop end to end for CI pipelines).
-- Refresh the `.env` device pointer with `uv run python approve_new_phone.py sync-env`; it locates the newest enabled entry in `mobile_devices` and updates `LIVE_TEST_MOBILE_DEVICE_ID` for the harness.
-
-### Pipecat pipeline notes
-The Managed A/V pipeline is configured directly in the Pipecat Cloud console (or via the Pipecat CLI). The code and Dockerfile used to build the production agent are mirrored in `pipelines/pipecat-agent/`; keep that directory in sync with whatever you deploy. After any change, run `uv run python -m app.mobile.smoke --device-id <approved-device> --base-url <backend-url>` to verify managed sessions return useful responses.
-
 ## Android Local Audio Assets
 - `./gradlew :app:prepareLocalModels` (also wired into every `preBuild`) runs `android/scripts/prepare_local_models.py`, downloading the sherpa-onnx streaming ASR bundle (zipformer en 20M int8) and the Piper en_US Amy (low) voice if they are missing or stale, then regenerates `model_manifest.json`.
 - The combined asset footprint is ~120 MB (≈78 MB Piper, ≈42 MB sherpa-onnx). Track APK size while iterating; the manifest enforces checksums so upgrades replace the entire bundle atomically.

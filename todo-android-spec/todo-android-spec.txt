@@ -8,8 +8,7 @@ Date: 2025-10-25
 
 2. Core Assumptions
 - Single trusted user per phone and per bot, with only a handful of users total, but multiple preconfigured personas exist in backend config (mirrors caller-ID agents today).
-- The Android client keeps using the existing FastAPI backend for conversation state, agent selection, and tool invocation, but voice capture/playback tunnels through a Daily Pipecat Cloud managed A/V session that is federated by that backend.
-- Daily is completing the migration from Daily Bots to Pipecat Cloud by July 1, 2025; all Android voice features must target the Pipecat Cloud managed session APIs and operate on Pipecat base images ≥0.1.0 (starter images are deprecated after October 15, 2025).
+- Legacy Pipecat/Daily managed A/V transport has been retired; the Android client now relies exclusively on the local audio pipeline backed by the mobile text WebSocket.
 - Credentials are baked into the app build; no login or user-managed auth inside the UI.
 - Bluetooth audio accessories are commonly in use; the user may be driving and unable to interact with the screen once a session starts.
 
@@ -51,23 +50,23 @@ Date: 2025-10-25
 7. Voice Session Experience
 → See mockups: mockup-3-voice-active.html (active session), mockup-4-voice-reconnecting.html (reconnecting state), mockup-8-background-notification.html (backgrounded)
 
-- Transport handshake (Daily Pipecat Cloud):
-  - Immediately after permissions and registration succeed, call the backend `POST /mobile/voice/session` endpoint to exchange the device + agent id for a Daily managed session descriptor. The backend provisions the session via Pipecat Cloud and returns the Daily room URL, meeting token, pipeline session id, server-side VAD settings, and any agent metadata required by the pipeline.
-  - Create a single `RTCPeerConnection` with microphone audio track and gather ICE candidates (support TURN servers included in the Daily response). Use `pc.createOffer()` and send the SDP offer to the Daily endpoint referenced in the descriptor, authenticating with the returned meeting token. Apply the remote description, add the provided remote audio track, and open two negotiated data channels: `ringdown-transcripts` (ordered, reliable) for JSON events emitted by Pipecat and `ringdown-control` (unordered) for metrics and keep-alives.
-  - Once the Daily connection is established, send a Pipecat control message enabling server-side VAD with the backend-provided thresholds and confirm that audio responses remain in manual mode so the backend decides when speech is generated.
+- Transport handshake (Local text WebSocket):
+  - After permissions and registration succeed, request `POST /v1/mobile/text/session` with the device id (and optional agent override) to obtain a session token, resume token, websocket path, heartbeat intervals, and TLS pin set.
+  - Instantiate `TextSessionClient` with the resolved websocket endpoint, attach structured logging, and connect using the provided session token. Persist the returned resume token after every successful handshake so reconnect attempts can rehydrate without user interaction.
+  - LocalVoiceSessionController owns reconnection loops: on heartbeat timeout or network loss, stop Sherpa engines, call `TextSessionStarter.startTextSession()` with the last agent hint, and resume playback once a new session is ready.
 - Conversation bridging and timing:
-  - The existing Ringdown conversation websocket remains authoritative. Partial transcripts received from Pipecat update on-screen captions only; when Pipecat marks a segment final, forward it to the backend as the user turn (schema identical to the telephony path, speaker=`user`, source=`android-realtime`). The backend therefore continues to run the same LLM and tool orchestration code.
-  - When the backend streams back assistant text, it injects the message into the Pipecat pipeline (using the pipeline session id) so Daily synthesises audio that matches the backend-produced content while keeping the chat transcript identical across transports. The app should rely on the pipeline’s audio track rather than local TTS.
-  - Track the managed session expiry returned by the backend. Any call approaching the Daily TTL should request a refresh before expiry to avoid audio gaps.
+  - The mobile text WebSocket is the source of truth for transcripts. Partial ASR hypotheses from Sherpa update on-screen captions; final transcripts invoke `sendUserToken`/`sendUserMessage` so the backend logs the turn (speaker=`user`, source=`android-local`).
+  - Assistant text arrives as `assistant_token` frames; LocalVoiceSessionController streams it into the transcript state and feeds local TTS. Preserve messageType markers (e.g., `greeting`, `tool_event`) so UI chips remain accurate.
+  - Track heartbeat and resume TTL values returned by the handshake. Begin reconnect attempts before TTL expiry to avoid the server invalidating the session token.
 - Model and voice selection:
-  - Default Daily pipeline configuration (model, voice, filters) lives in `config.yaml` under each agent. Switching providers, voices, or server-vad parameters requires only a config update; the Android client simply consumes what the backend returns in the session payload.
-  - Where speech-to-text relies on Deepgram Flux, prefer Pipecat Cloud managed keys (`enableManagedKeys` flag) so the Android app never ships embedded STT credentials; coordinate with backend to supply the required service key via Pipecat Cloud and reference the `PIPECATCLOUD` placeholder in session metadata.
+  - Agent configuration in `config.yaml` maps to local model identifiers (ASR + TTS). Switching voices/models remains a config-only change as long as assets are packaged via `prepare_local_models`.
+  - Maintain compatibility with future downloadable voices by funnelling overrides through the same agent metadata that seeds `TextSessionBootstrap`.
 - Screen: The voice UI still presents a single large Hang Up button centered vertically and horizontally occupying 50% of screen width; no additional chrome.
-- Audio routing: Request Bluetooth SCO routing as soon as the peer connection becomes active and hold it while available. If Bluetooth drops, fall back to speakerphone automatically. No manual route picker.
-- Backgrounding: If the app loses foreground focus, leave the Realtime connection active, keep the microphone + remote tracks alive, and persist an ongoing-call notification with only a Hang Up action. When the user taps Hang Up in the notification, tear down the peer connection, notify the backend to end the conversation turn, and return to the idle main screen.
-- Unexpected disconnects (network, backend error, Realtime session expiry):
-  - Immediately play the local reconnecting audio loop and surface the reconnect banner with contextual copy (backend-provided reason if available).
-  - Kick off an automatic reconnect loop (up to 1 minute) that requests a refreshed managed session token on every attempt (call the backend refresh endpoint) before rebuilding the peer connection. Backoff 3–5 seconds between attempts to avoid hammering the backend or Daily edge.
+- Audio routing: Request Bluetooth SCO routing as soon as `LocalVoiceSessionController` reports `Connected` and hold it while available. If Bluetooth drops, fall back to speakerphone automatically. No manual route picker.
+- Backgrounding: If the app loses foreground focus, leave `TextSessionClient` connected, keep the Sherpa ASR/TTS engines active, and persist an ongoing-call notification with only a Hang Up action. When the user taps Hang Up in the notification, stop the audio engines, disconnect the websocket, notify the backend to end the conversation turn, and return to the idle main screen.
+- Unexpected disconnects (network, backend error, heartbeat timeout):
+  - Immediately play the local reconnecting audio loop and surface the reconnect banner with contextual copy (include backend-provided reason if available).
+  - Kick off an automatic reconnect loop (up to 1 minute) that calls `TextSessionStarter.startTextSession()` to refresh session/resume tokens before reconnecting `TextSessionClient`. Backoff 3–5 seconds between attempts to avoid hammering the backend.
   - The Hang Up button remains available at all times. When pressed, cancel any in-flight reconnect, close the peer connection, and return to idle.
   - On successful reconnect, stop the local loop audio, clear banners, and resume normal audio playback where the conversation left off.
 - **Implementation note:** Maintain parity with mockup visuals (button dimensions, banner placement, notification copy). Log and track any deviations, especially around motion cues (reconnect banner animation, hang up press feedback), and record all session + handshake errors to the existing telemetry sink for backend tuning.
@@ -162,43 +161,4 @@ Phase 2 – Backend Integration & Permission Handling
 - After resolving AAPT2, immediately run `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest` followed by `bash android/scripts/gradle.sh ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.ringdown.registration.RegistrationSuite`.
 - Deploy to USB device with `bash android/scripts/install.sh --device $ANDROID_SERIAL` (Codex CLI sets serial). Deliverable: device auto-registers and transitions to idle when backend approval flips.
 
-Phase 3 - Realtime Voice MVP (Fast Track)
-- Implement the Android voice client: fetch the Daily managed session descriptor from the backend, build the WebRTC peer connection to Pipecat (audio track + transcripts/control data channels), apply server-vad parameters into the Compose layer for captions, and ensure manual-output mode wiring matches Section 7. Compose Hang Up UI, Bluetooth routing, and ForegroundService notification exactly as described earlier.
-- Extend the FastAPI backend with `/v1/mobile/voice/session` (provision Pipecat managed sessions, emit Daily credentials + server-vad thresholds, enforce agent/device mapping) and update the existing conversation websocket to tag android-realtime turns while reusing the same LLM + tool orchestration.
-- Ensure the managed session pipeline references the Pipecat base image `py-pipecat-base:0.1.0` (starter images are deprecated mid-October 2025) and configures auto-scaling bounds via Pipecat Cloud (`autoscaling.minInstances`/`maxInstances`) so reconnect loops have warm capacity.
-- Enable Pipecat Cloud managed service keys for Deepgram Flux in staging/production (`enableManagedKeys` REST toggle) so audio transcription secrets live in Pipecat instead of the mobile app or our config repo.
-- Add CLI automation for live call smoke test: `bash android/scripts/run-voice-smoke.sh --backend $BACKEND_URL` now invokes the backend smoke harness (currently using the interim OpenAI Realtime bridge) to mint a session, run websocket prompts, and verify mirrored audio. Swap the helper to Pipecat once the managed transport lands.
-- Run `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:connectedVoiceMvpAndroidTest`. Deliverable: first end-to-end realtime voice call from emulator and USB device using only scripted commands.
-- Configure the Android `.env` to point at the production HTTPS backend (the service is live). Loops at `127.0.0.1` or any other cleartext URL are not acceptable—Phase 3 validation requires hitting the real backend over TLS so the voice flow mirrors production.
-- Ensure backend prerequisites are in place before client testing: `/v1/mobile/devices/register`, conversation websocket, and the new `/v1/mobile/voice/session` endpoint must be deployed with configured realtime model/voice slots.
-- After each new device registers, mirror the updated `config.yaml` to `gs://<project>-test-assets/config/pending/config.yaml` so the approval helper has fresh input. The backend (or automation hook) should remove that pending object once `authorize_new_phone.py` promotes it.
-- Confirm the backend reloads config changes produced by `authorize_new_phone.py` (watch the `config/live/config.yaml` object or redeploy automatically) so newly enabled devices can connect without manual restarts.
-- Add admin helper `python authorize_new_phone.py` to streamline device approvals: the script resolves the repo root, downloads the pending config from `gs://<project>-test-assets/config/pending/config.yaml`, shows a unified diff against the local `config.yaml`, flips all `enabled: false` phone entries to `true`, writes a timestamped backup, promotes the approved config to `gs://<project>-test-assets/config/live/config.yaml`, and deletes the pending artifact once confirmed.
-- Ensure the end-to-end “promote pending phone” workflow (authorize script + backend job) runs as part of Phase 3 validation so device approvals remain deployable without manual YAML edits.
-- Outstanding (Phase 3 follow-up):
-  - Add automated coverage that toggles server-vad parameters and verifies transcripts still route through the backend without double responses.
-  - Wire the realtime smoke script (`android/scripts/run-voice-smoke.sh`) into CI after ensuring emulator/device `adb` visibility; at present it must be run manually against a tethered device.
-  - Broaden instrumentation coverage to exercise the realtime voice path (connectedVoiceMvpAndroidTest) and verify manual-response flow plus session refresh.
-  - Coordinate with infra on the Daily Bots sunset (July 1, 2025) so production traffic runs exclusively through Pipecat Cloud-managed pipelines ahead of the cutoff, including disaster-recovery playbooks for pipeline redeploys.
-
-Phase 4 – Reconnect Loop & Audio Asset Polish
-- Bundle reconnect audio asset under `android/app/app/src/main/res/raw/reconnect_loop.ogg`; script `bash android/scripts/convert-audio.sh assets/reconnect.mp3` handles conversion.
-- Implement reconnect backoff scheduler, banner messaging, and ensure notification removal on completion. Each reconnect attempt must request a refreshed managed session (including new Daily credentials), rebuild the peer connection, and resend the Pipecat control message that keeps audio output in manual mode before resuming playback. Extend smoke test script to toggle network via `adb shell cmd connectivity airplane-mode enable/disable` within bash automation.
-- Tests: `bash android/scripts/gradle.sh ./gradlew :app:testDebugUnitTest --tests "*Reconnect*" :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=ReconnectSuite`.
-- Outstanding (Phase 4 follow-up): wire the reconnect audio loop, banner messaging, and notification lifecycle once the transport is live so reconnect UX matches spec.
-
-Phase 5 – Chat Mode & Shared Conversation State
-- Generate chat UI (LazyColumn, attachments, reset, model selector) with Compose using MCP templates. Implement repository sharing conversation state between voice/chat with Room-backed cache and streaming updates from backend log endpoints.
-- Provide CLI command `bash android/scripts/run-chat-smoke.sh --backend $BACKEND_URL --fixtures fixtures/chat/*.json` to replay log fixtures against the UI.
-- Tests: `bash android/scripts/gradle.sh ./gradlew :app:testDebugUnitTest :app:connectedChatAndroidTest :app:verifyComposeSnapshots`. Deliverable: fully functional chat with tool/thinking pills and attachments cap enforcement.
-
-Phase 6 – Hardening, Analytics, and Deployment
-- Add accessibility labels, localisation hooks, Crashlytics (behind build flag), and WorkManager jobs for background reconnect resilience. Ensure CLI workflow `bash android/scripts/full-ci.sh` chains lint, unit, instrumentation, and bundle builds.
-- Integrate Pipecat Cloud tracing with Langfuse via the provided OpenTelemetry exporter so live sessions capture pipeline spans alongside backend logs; expose trace IDs in mobile telemetry for cross-system debugging.
-- Produce release bundle with `bash android/scripts/gradle.sh ./gradlew :app:bundleRelease` and sign via `bash android/scripts/signing.sh --keystore keys/internal.keystore`.
-- For deployment, run `bash android/scripts/publish-internal.sh --track internal --artifact app/build/outputs/bundle/release/app-release.aab` (script uses Play Developer API credentials configured beforehand). Deliverable: release candidate uploaded to internal testing without manual UI steps.
-
-Ongoing Operations
-- Nightly CI job triggers `bash android/scripts/full-ci.sh` and archives emulator + device logs.
-- Before each release, execute `bash android/scripts/device-soak.sh --duration 30m` to automate reconnect stress test on a tethered phone.
-- Review Pipecat Cloud usage dashboards weekly (Daily account includes 10,000 managed minutes per month); alert if the quota exceeds 80% so autoscaling limits and managed key allowances can be adjusted ahead of the next billing cycle.
+Phase 3 (legacy Realtime Voice MVP) has been superseded by the local audio architecture; see current beads for remaining handset work.

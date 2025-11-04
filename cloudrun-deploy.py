@@ -16,12 +16,6 @@ from typing import List, Optional, Sequence
 import yaml
 from log_love import setup_logging
 from tenacity import retry, stop_after_attempt, wait_fixed
-from pipecat_agent_deploy import (
-    DEFAULT_CONFIG_PATH as DEFAULT_PIPECAT_CONFIG_PATH,
-    PipecatAgentConfig,
-    deploy_if_needed as deploy_pipecat_agent_if_needed,
-    load_config as load_pipecat_agent_config,
-)
 # DEFER HEAVY GOOGLE CLOUD IMPORTS UNTIL NEEDED
 # Importing google.cloud.run_v2 at module import time pulls in a large dependency
 # tree (aiohttp, attrs, etc.) which can appear to "hang" on Windows / networked
@@ -684,8 +678,6 @@ def deploy(
     extra_args: Optional[List[str]] = None,
     labels: Optional[List[str]] = None,
     secret_config: Optional[Path] = None,
-    pipecat_config: Optional[Path] = None,
-    skip_pipecat: bool = False,
 ) -> str:
     """Build, push and deploy the service to Cloud Run. Returns the service URL."""
 
@@ -716,15 +708,6 @@ def deploy(
     _verify_gcloud_auth()
 
     secret_plans = _load_secret_plans(secret_config)
-    pipecat_agent_config: PipecatAgentConfig | None = None
-    if not skip_pipecat:
-        try:
-            pipecat_agent_config = load_pipecat_agent_config(pipecat_config)
-        except SystemExit:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            log.error("Unable to load Pipecat agent config: %s", exc)
-            raise
 
     gmail_required = any(key.startswith("GMAIL_") for key in env_vars)
     if not gmail_required:
@@ -773,17 +756,6 @@ def deploy(
     _run_cmd(f"gcloud config set project {project_id}")
 
     timestamp = _dt.datetime.utcnow().strftime("%Y%m%d%H%M")
-
-    if pipecat_agent_config:
-        try:
-            deploy_pipecat_agent_if_needed(
-                pipecat_agent_config,
-                timestamp=timestamp,
-                no_cache=no_cache,
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.error("Pipecat agent deploy failed: %s", exc)
-            raise
 
     repo = f"{region}-docker.pkg.dev/{project_id}/{service}/{service}"
 
@@ -1018,17 +990,6 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--docker-arg", nargs="*", default=[], metavar="ARG", help="Extra raw arg to pass to docker build (e.g. --platform linux/amd64)")
     parser.add_argument("--label", nargs="*", default=[], metavar="KEY=VAL", help="Additional image label key=value pairs")
     parser.add_argument("--timeout", type=int, default=DEFAULT_CLOUDRUN_TIMEOUT, help=f"Request timeout in seconds (default: {DEFAULT_CLOUDRUN_TIMEOUT}s/60min)")
-    parser.add_argument(
-        "--pipecat-agent-config",
-        default=str(DEFAULT_PIPECAT_CONFIG_PATH),
-        help="Path to Pipecat agent deploy config (default: %(default)s; pass 'none' to disable).",
-    )
-    parser.add_argument(
-        "--skip-pipecat",
-        action="store_true",
-        help="Skip rebuilding/redeploying the Pipecat managed A/V agent.",
-    )
-
     parser.add_argument("--yes", action="store_true", help="Skip interactive confirmations (assume yes)")
 
     print("[cloudrun-deploy] parsing args...")
@@ -1062,7 +1023,6 @@ def main(argv: Optional[List[str]] = None) -> None:
         "ANTHROPIC_API_KEY",  # Claude models
         "TAVILY_API_KEY",     # Tavily search
         "TWILIO_AUTH_TOKEN",  # Twilio webhook validation
-        "MANAGED_AV_CONTROL_TOKEN",  # handset control channel
         "GMAIL_IMPERSONATE_EMAIL",  # Gmail impersonation
         "GMAIL_SA_KEY_PATH",  # Gmail service account path
     )
@@ -1078,14 +1038,6 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     print("[cloudrun-deploy] starting deploy...")
     secret_config_path = Path(args.secret_config).expanduser() if args.secret_config else None
-    skip_pipecat = bool(args.skip_pipecat)
-    pipecat_config_path: Path | None = None
-    if not skip_pipecat:
-        cfg_arg = (args.pipecat_agent_config or "").strip()
-        if cfg_arg.lower() in {"", "none", "null"}:
-            skip_pipecat = True
-        else:
-            pipecat_config_path = Path(cfg_arg).expanduser()
 
     service_url = deploy(
         project_id=project_id,
@@ -1102,8 +1054,6 @@ def main(argv: Optional[List[str]] = None) -> None:
         extra_args=args.docker_arg,
         labels=args.label,
         secret_config=secret_config_path,
-        pipecat_config=pipecat_config_path,
-        skip_pipecat=skip_pipecat,
     )
     # Print completion time in Pacific Time
     pt_time = _dt.datetime.now(ZoneInfo("America/Los_Angeles"))
@@ -1112,7 +1062,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     mobile_device_id = os.environ.get("LIVE_TEST_MOBILE_DEVICE_ID")
     if mobile_device_id:
         base_url = service_url.rstrip("/")
-        print("[cloudrun-deploy] running managed A/V smoke test...")
+        print("[cloudrun-deploy] running mobile text smoke test...")
         try:
             from app.mobile.smoke import SmokeTestError, run_remote_smoke
 
@@ -1125,15 +1075,15 @@ def main(argv: Optional[List[str]] = None) -> None:
                 )
             )
         except (SmokeTestError, Exception) as exc:  # noqa: BLE001
-            raise SystemExit(f"Managed A/V smoke test failed: {exc}") from exc
+            raise SystemExit(f"Mobile text smoke test failed: {exc}") from exc
         else:
             print(
-                f"[cloudrun-deploy] managed A/V smoke test succeeded "
+                f"[cloudrun-deploy] mobile text smoke test succeeded "
                 f"(session {result.session_id}, response='{result.response_text[:60]}...')."
             )
     else:
         print(
-            "[cloudrun-deploy] skipping managed A/V smoke test "
+            "[cloudrun-deploy] skipping mobile text smoke test "
             "(LIVE_TEST_MOBILE_DEVICE_ID not set)."
         )
 

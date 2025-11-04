@@ -79,7 +79,7 @@ PROMPTS: List[str] = [
 @click.option(
     "--mobile-device-id",
     default=None,
-    help="Managed A/V device id for the Pipecat smoke test (defaults to LIVE_TEST_MOBILE_DEVICE_ID).",
+    help="Mobile text smoke-test device id (defaults to LIVE_TEST_MOBILE_DEVICE_ID).",
 )
 def main(
     to_number: str,
@@ -159,7 +159,7 @@ def main(
             if not base_url:
                 if not (DEFAULT_SERVICE_NAME and DEFAULT_SERVICE_REGION and DEFAULT_PROJECT_ID):
                     raise click.ClickException(
-                        "Unable to resolve Cloud Run service for managed A/V smoke test."
+                        "Unable to resolve Cloud Run service for mobile text smoke test."
                     )
                 cmd = (
                     "gcloud run services describe "
@@ -172,25 +172,25 @@ def main(
 
             base_url = (base_url or "").strip().rstrip("/")
             if not base_url:
-                click.echo("!! Skipping managed A/V smoke test: service URL unavailable.")
+                click.echo("!! Skipping mobile text smoke test: service URL unavailable.")
             else:
-                click.echo(">> Running managed A/V mobile smoke test ...")
+                click.echo(">> Running mobile text smoke test ...")
                 result = asyncio.run(
                     run_remote_smoke(
                         base_url=base_url,
                         device_id=resolved_device_id,
-                        prompt_text="Managed A/V live smoke verification.",
+                        prompt_text="Mobile text live smoke verification.",
                         timeout=30.0,
                     )
                 )
                 preview = (result.response_text or "")[:60]
                 click.echo(
-                    f">> Managed A/V smoke test succeeded (session {result.session_id}, response '{preview}...')."
+                    f">> Mobile text smoke test succeeded (session {result.session_id}, response '{preview}...')."
                 )
         except (SmokeTestError, Exception) as exc:  # noqa: BLE001
-            raise click.ClickException(f"Managed A/V smoke test failed: {exc}") from exc
+            raise click.ClickException(f"Mobile text smoke test failed: {exc}") from exc
     else:
-        click.echo("!! Skipping managed A/V smoke test: LIVE_TEST_MOBILE_DEVICE_ID not provided.")
+        click.echo("!! Skipping mobile text smoke test: LIVE_TEST_MOBILE_DEVICE_ID not provided.")
 
 
 if __name__ == "__main__":

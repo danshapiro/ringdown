@@ -236,13 +236,6 @@ def get_mobile_device(device_id: str) -> Dict[str, Any] | None:
     return devices.get(device_id)
 
 
-    cfg = _load_config()
-    managed = cfg.get("mobile_managed_av")
-    if not managed:
-        raise ValueError("mobile_managed_av missing in config.yaml")
-    return copy.deepcopy(managed)
-
-
 def get_mobile_text_config() -> Dict[str, Any]:
     """Return configuration for mobile text streaming sessions."""
 

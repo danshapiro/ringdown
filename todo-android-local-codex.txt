@@ -3,15 +3,15 @@ Ringdown Android Local-Audio Rearchitecture Plan
 
 Context
 -------
-- Current mobile client depends on Daily Pipecat managed A/V: cloud handles VAD, STT, TTS; handset just joins a Daily room and optionally consumes deterministic control audio.
-- Backend exposes `/v1/mobile/voice/session` returning Daily credentials plus metadata. Litellm runs server-side and streams text to ConversationRelay; the handset only sees audio generated in the cloud.
+- Legacy Daily Pipecat managed A/V dependency has been removed; handset now runs the local sherpa-onnx stack end to end.
+- Backend now issues `/v1/mobile/text/session` WebSocket bootstrap details directly so all token streaming stays on-device.
 - Goal: shift to fully on-device audio pipeline (VAD, STT, TTS) using sherpa-onnx initially, while leaving room to experiment with Piper or Kokoro-onnx.
 - Requirement: stream litellm tokens directly to the handset as text; handset synthesizes speech locally and captures microphone input locally for transcription/turn-taking.
 
 High-Level Architecture Changes
 -------------------------------
 1. Replace Daily session bootstrap with a lightweight WebSocket text-stream protocol between handset and backend for litellm token streaming.
-2. Remove managed A/V dependency paths (`ManagedAVClient`, `VoiceSessionRepository`, Daily CallClient) and introduce new session API that:
+2. Removed managed A/V dependency paths (`ManagedAVClient`, `VoiceSessionRepository`, Daily CallClient) and introduced a new session API that:
    - Authenticates devices.
    - Provides conversation metadata, agent config, and stream endpoints for upstream (user text) and downstream (assistant tokens).
 3. Android app gains local audio engine module managing:
@@ -60,7 +60,7 @@ Backend Workstreams
   - Allow clients to send recognized text instead of relying on Twilio transcripts.
   - Stream litellm tokens as text frames (existing logic already emits tokens; ensure format is mobile-friendly).
   - Provide markers for tool execution, hold music hints (client can choose local audio cues).
-- Remove dependencies on Daily-managed sessions when user agent is `android_local_audio`.
+- ✅ Removed dependencies on Daily-managed sessions when user agent is `android_local_audio`.
 - Update `config.yaml` schema for device capability flags (e.g., `audio_mode: local` vs `cloud`).
 - Ensure conversation logging continues (store user/assistant text).
 
@@ -73,7 +73,7 @@ High early priority: harnesses so we can run the app, inject and read all types 
 
 Migration & Rollout Considerations
 ----------------------------------
-- Managed A/V removal: once the Android client is on the local audio path, delete the managed A/V integrations and scrub remaining Daily references (telephony via Twilio ConversationRelay is already independent).
+- ✅ Managed A/V removal: deleted legacy integrations and scrubbed remaining Daily references (telephony via Twilio ConversationRelay remains independent).
 - Model distribution: evaluate APK size; consider first-run download with checksum verification.
 - Observability: structured logs from handset (JSONL) to diagnose on-device pipeline; telemetry for latency, synthesis duration, ASR accuracy.
 - Security: ensure token streams are encrypted; sanitize logs to avoid leaking transcripts.

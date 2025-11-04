@@ -260,7 +260,7 @@ async def run_remote_smoke(
     timeout: float = 30.0,
     verify_resume: bool = True,
 ) -> SmokeResult:
-    """Execute a managed handset smoke test against a deployed service."""
+    """Execute a mobile text smoke test against a deployed service."""
 
     base = base_url.rstrip("/")
     session_url = f"{base}/v1/mobile/text/session"
