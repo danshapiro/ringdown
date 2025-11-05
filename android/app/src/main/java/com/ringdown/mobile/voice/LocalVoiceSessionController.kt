@@ -92,12 +92,20 @@ open class LocalVoiceSessionController @Inject constructor(
     }
 
     open fun stop() {
-        if (!sessionActive.compareAndSet(true, false)) {
-            return
-        }
         sessionScope.launch {
-            teardownSession()
-            postState(VoiceConnectionState.Idle)
+            val wasActive = sessionActive.getAndSet(false)
+            try {
+                teardownSession()
+            } finally {
+                postState(VoiceConnectionState.Idle)
+                if (!wasActive) {
+                    logStructured(
+                        level = "INFO",
+                        event = "local_voice.stop_noop",
+                        fields = emptyMap(),
+                    )
+                }
+            }
         }
     }
 
