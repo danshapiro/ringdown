@@ -104,7 +104,26 @@ class DeviceIdStore @Inject constructor(
         if (!BuildConfig.DEBUG) {
             return
         }
-        Log.i(TAG, buildLogPayload("INFO", event, fields))
+        val payload = buildLogPayload("INFO", event, fields)
+        if (!emitAndroidLog("INFO", payload)) {
+            println(payload)
+        }
+    }
+
+    private fun emitAndroidLog(level: String, payload: String): Boolean {
+        return try {
+            when (level.uppercase()) {
+                "ERROR" -> Log.e(TAG, payload)
+                "WARNING", "WARN" -> Log.w(TAG, payload)
+                "DEBUG" -> Log.d(TAG, payload)
+                else -> Log.i(TAG, payload)
+            }
+            true
+        } catch (_: RuntimeException) {
+            false
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun buildLogPayload(level: String, event: String, fields: Map<String, Any?>): String {
