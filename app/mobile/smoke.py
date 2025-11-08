@@ -13,8 +13,7 @@ from unittest.mock import patch
 
 import httpx
 from fastapi.testclient import TestClient
-import websockets
-from websockets.client import WebSocketClientProtocol
+from websockets.asyncio.client import ClientConnection, connect
 
 
 class SmokeTestError(RuntimeError):
@@ -468,26 +467,16 @@ def _build_websocket_url(base_url: str, websocket_path: str) -> str:
 
 
 @asynccontextmanager
-async def _open_websocket(url: str, session_token: str, timeout: float) -> WebSocketClientProtocol:
+async def _open_websocket(url: str, session_token: str, timeout: float) -> ClientConnection:
     headers = {"x-ringdown-session-token": session_token}
-    try:
-        ws = await websockets.connect(
-            url,
-            additional_headers=headers,
-            max_size=1_000_000,
-            open_timeout=timeout,
-            close_timeout=timeout,
-            ping_interval=None,
-        )
-    except TypeError:
-        ws = await websockets.connect(
-            url,
-            extra_headers=headers,
-            max_size=1_000_000,
-            open_timeout=timeout,
-            close_timeout=timeout,
-            ping_interval=None,
-        )
+    ws = await connect(
+        url,
+        additional_headers=headers,
+        max_size=1_000_000,
+        open_timeout=timeout,
+        close_timeout=timeout,
+        ping_interval=None,
+    )
     try:
         yield ws
     finally:
