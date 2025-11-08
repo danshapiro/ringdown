@@ -66,6 +66,9 @@ open class TextSessionClient @Inject constructor(
     private var readyAcknowledged = false
 
     open suspend fun connect(bootstrap: TextSessionBootstrap) {
+        if (handleFakeBootstrap(bootstrap)) {
+            return
+        }
         lock.withLock {
             disconnectLocked()
 
@@ -97,6 +100,29 @@ open class TextSessionClient @Inject constructor(
         lock.withLock {
             disconnectLocked()
         }
+    }
+
+    private suspend fun handleFakeBootstrap(bootstrap: TextSessionBootstrap): Boolean {
+        if (!bootstrap.websocketPath.startsWith("fake://", ignoreCase = true)) {
+            return false
+        }
+
+        lock.withLock {
+            disconnectLocked()
+            _state.value = TextSessionConnectionState.Connecting
+        }
+
+        _events.emit(
+            TextSessionEvent.Ready(
+                sessionId = bootstrap.sessionId,
+                agent = bootstrap.agent,
+                greeting = FAKE_GREETING,
+                heartbeatIntervalSeconds = bootstrap.heartbeatIntervalSeconds,
+                heartbeatTimeoutSeconds = bootstrap.heartbeatTimeoutSeconds,
+            ),
+        )
+        _state.value = TextSessionConnectionState.Connected(bootstrap.sessionId, bootstrap.agent)
+        return true
     }
 
     open suspend fun sendUserToken(token: String, final: Boolean, utteranceId: String?) {
@@ -482,6 +508,7 @@ open class TextSessionClient @Inject constructor(
         private const val TAG = "TextSessionClient"
         private const val SESSION_TOKEN_HEADER = "x-ringdown-session-token"
         private const val MAX_ERROR_DETAIL = 256
+        private const val FAKE_GREETING = "Connected to instrumentation stub."
 
         internal fun computeWebSocketEndpoint(
             baseUrl: String,

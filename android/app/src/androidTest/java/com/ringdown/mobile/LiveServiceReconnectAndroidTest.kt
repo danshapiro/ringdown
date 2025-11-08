@@ -3,8 +3,8 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.ViewModelProvider
@@ -21,6 +21,9 @@ import com.ringdown.mobile.voice.VoiceConnectionState
 import dagger.hilt.android.testing.BindValue
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
+import com.ringdown.mobile.testing.TEST_LIVE_DEVICE_ID_PROPERTY
+import com.ringdown.mobile.testing.TEST_REGISTRATION_MODE_PROPERTY
+import com.ringdown.mobile.testing.TEST_TEXT_SESSION_MODE_PROPERTY
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,23 +54,29 @@ class LiveServiceReconnectAndroidTest {
             TestRule { base, _ -> base }
         }
 
-    @BindValue
-    @JvmField
-    var deviceIdStoreOverride: DeviceIdStore? = null
+    @field:BindValue
+    lateinit var deviceIdStoreOverride: DeviceIdStore
 
     private lateinit var resolvedDeviceId: String
     private lateinit var testDataStoreScope: CoroutineScope
     private lateinit var testDataStore: DataStore<Preferences>
+    private var previousRegistrationMode: String? = null
+    private var previousTextSessionMode: String? = null
+    private var previousLiveDeviceId: String? = null
 
     @Before
     fun setUp() {
         resolvedDeviceId = resolveDeviceId()
+        previousRegistrationMode = setSystemProperty(TEST_REGISTRATION_MODE_PROPERTY, "live")
+        previousTextSessionMode = setSystemProperty(TEST_TEXT_SESSION_MODE_PROPERTY, "live")
+        previousLiveDeviceId = setSystemProperty(TEST_LIVE_DEVICE_ID_PROPERTY, resolvedDeviceId)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         testDataStoreScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val storeFile = context.cacheDir.resolve("live_device_datastore.preferences_pb")
         testDataStore = PreferenceDataStoreFactory.create(
             scope = testDataStoreScope,
         ) {
-            context.cacheDir.resolve("live_device_datastore.preferences_pb")
+            storeFile
         }
         val deviceKey = stringPreferencesKey("device_id")
         val agentKey = stringPreferencesKey("last_agent")
@@ -81,6 +90,13 @@ class LiveServiceReconnectAndroidTest {
                 prefs.remove(resumeKey)
             }
         }
+        logInfo(
+            event = "live_test.datastore_configured",
+            fields = mapOf(
+                "path" to storeFile.absolutePath,
+                "deviceId" to resolvedDeviceId,
+            ),
+        )
         deviceIdStoreOverride = DeviceIdStore(testDataStore)
         hiltRule.inject()
         logInfo(
@@ -91,8 +107,10 @@ class LiveServiceReconnectAndroidTest {
 
     @After
     fun tearDown() {
-        deviceIdStoreOverride = null
         testDataStoreScope.cancel()
+        restoreSystemProperty(TEST_REGISTRATION_MODE_PROPERTY, previousRegistrationMode)
+        restoreSystemProperty(TEST_TEXT_SESSION_MODE_PROPERTY, previousTextSessionMode)
+        restoreSystemProperty(TEST_LIVE_DEVICE_ID_PROPERTY, previousLiveDeviceId)
     }
 
     @Test
@@ -266,5 +284,19 @@ class LiveServiceReconnectAndroidTest {
         private const val TAG = "LiveServiceReconnect"
         private const val DEFAULT_DEVICE_ID = "instrumentation-device"
         private const val MAX_REGISTRATION_ATTEMPTS = 3
+    }
+
+    private fun setSystemProperty(key: String, value: String): String? {
+        val previous = System.getProperty(key)
+        System.setProperty(key, value)
+        return previous
+    }
+
+    private fun restoreSystemProperty(key: String, previous: String?) {
+        if (previous == null) {
+            System.clearProperty(key)
+        } else {
+            System.setProperty(key, previous)
+        }
     }
 }
