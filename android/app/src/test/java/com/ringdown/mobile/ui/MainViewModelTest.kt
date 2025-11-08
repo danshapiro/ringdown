@@ -13,6 +13,7 @@ import com.ringdown.mobile.util.MainDispatcherRule
 import com.ringdown.mobile.voice.InstantProvider
 import com.ringdown.mobile.voice.LocalVoiceSessionController
 import com.ringdown.mobile.voice.VoiceConnectionState
+import com.ringdown.mobile.voice.TranscriptMessage
 import com.ringdown.mobile.voice.asr.AsrEvent
 import com.ringdown.mobile.voice.asr.LocalAsrEngine
 import java.time.Instant
@@ -174,6 +175,45 @@ class MainViewModelTest {
         assertThat(chatGateway.stopCount).isAtLeast(1)
     }
 
+    @Test
+    fun openChatSeedsHistoryFromVoiceTranscripts() = runTest {
+        val statuses = ArrayDeque<RegistrationStatus>().apply {
+            add(RegistrationStatus.Approved(agentName = "tester", message = "Approved!"))
+        }
+        val gateway = FakeRegistrationGateway(statuses)
+        val dispatcher = dispatcherRule.dispatcher
+        val voiceController = RecordingVoiceController(dispatcher)
+        val chatGateway = FakeChatGateway()
+        val viewModel = MainViewModel(gateway, voiceController, chatGateway)
+
+        advanceUntilIdle()
+
+        voiceController.emitTranscripts(
+            listOf(
+                TranscriptMessage(
+                    speaker = "user",
+                    text = "Hello",
+                    timestampIso = "2025-01-01T00:00:00Z",
+                ),
+                TranscriptMessage(
+                    speaker = "assistant",
+                    text = "Hi there",
+                    timestampIso = "2025-01-01T00:00:01Z",
+                ),
+            ),
+        )
+
+        advanceUntilIdle()
+
+        viewModel.openChatSession()
+        advanceUntilIdle()
+
+        val history = viewModel.state.value.chatHistory
+        assertThat(history).hasSize(2)
+        assertThat(history.first().text).isEqualTo("Hello")
+        assertThat(history.last().text).isEqualTo("Hi there")
+    }
+
     private class FakeRegistrationGateway(
         private val statuses: ArrayDeque<RegistrationStatus>,
     ) : RegistrationGateway {
@@ -234,6 +274,10 @@ class MainViewModelTest {
 
         override fun stop() {
             _state.value = VoiceConnectionState.Idle
+        }
+
+        fun emitTranscripts(transcripts: List<TranscriptMessage>) {
+            _state.value = VoiceConnectionState.Connected(transcripts)
         }
     }
 
