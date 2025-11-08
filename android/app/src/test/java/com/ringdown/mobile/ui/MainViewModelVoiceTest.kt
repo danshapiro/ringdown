@@ -3,6 +3,7 @@ package com.ringdown.mobile.ui
 import com.google.common.truth.Truth.assertThat
 import com.ringdown.mobile.chat.ChatConnectionState
 import com.ringdown.mobile.chat.ChatSessionGateway
+import com.ringdown.mobile.conversation.ConversationHistoryStore
 import com.ringdown.mobile.data.BackendEnvironment
 import com.ringdown.mobile.data.DeviceDescriptor
 import com.ringdown.mobile.data.RegistrationGateway
@@ -44,8 +45,9 @@ class MainViewModelVoiceTest {
     @Test
     fun voiceStateUpdatesPropagateToUiState() = runTest {
         val dispatcher = dispatcherRule.dispatcher
-        val voiceController = RecordingVoiceController(dispatcher)
-        val viewModel = MainViewModel(registrationGateway, voiceController, FakeChatGateway())
+        val historyStore = ConversationHistoryStore()
+        val voiceController = RecordingVoiceController(dispatcher, historyStore)
+        val viewModel = MainViewModel(registrationGateway, voiceController, FakeChatGateway(historyStore), historyStore)
 
         voiceController.emit(VoiceConnectionState.Connecting)
         advanceUntilIdle()
@@ -57,8 +59,9 @@ class MainViewModelVoiceTest {
     @Test
     fun voiceFailureSurfacesError() = runTest {
         val dispatcher = dispatcherRule.dispatcher
-        val voiceController = RecordingVoiceController(dispatcher)
-        val viewModel = MainViewModel(registrationGateway, voiceController, FakeChatGateway())
+        val historyStore = ConversationHistoryStore()
+        val voiceController = RecordingVoiceController(dispatcher, historyStore)
+        val viewModel = MainViewModel(registrationGateway, voiceController, FakeChatGateway(historyStore), historyStore)
 
         voiceController.emit(VoiceConnectionState.Failed("failure"))
         advanceUntilIdle()
@@ -70,6 +73,7 @@ class MainViewModelVoiceTest {
 
     private class RecordingVoiceController(
         dispatcher: CoroutineDispatcher,
+        private val conversationHistoryStore: ConversationHistoryStore,
     ) : LocalVoiceSessionController(
         textSessionStarter = TextSessionStarter { agent ->
             TextSessionBootstrap(
@@ -93,6 +97,7 @@ class MainViewModelVoiceTest {
         dispatcher = dispatcher,
         mainDispatcher = dispatcher,
         nowProvider = InstantProvider { Instant.parse("2025-01-01T00:00:00Z") },
+        conversationHistoryStore = conversationHistoryStore,
     ) {
         private val _state = MutableStateFlow<VoiceConnectionState>(VoiceConnectionState.Idle)
         override val state: StateFlow<VoiceConnectionState> = _state
@@ -138,7 +143,9 @@ class MainViewModelVoiceTest {
         override suspend fun sendCancel() {}
     }
 
-    private class FakeChatGateway : ChatSessionGateway {
+    private class FakeChatGateway(
+        private val _conversationHistoryStore: ConversationHistoryStore,
+    ) : ChatSessionGateway {
         private val _state = MutableStateFlow<ChatConnectionState>(ChatConnectionState.Idle)
         override val state: StateFlow<ChatConnectionState> = _state
         override fun start(agent: String?) {}

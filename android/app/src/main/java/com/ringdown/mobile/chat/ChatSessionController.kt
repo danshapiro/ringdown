@@ -1,6 +1,7 @@
 package com.ringdown.mobile.chat
 
 import android.util.Log
+import com.ringdown.mobile.conversation.ConversationHistoryStore
 import com.ringdown.mobile.data.TextSessionStarter
 import com.ringdown.mobile.di.IoDispatcher
 import com.ringdown.mobile.di.MainDispatcher
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class ChatSessionController @Inject constructor(
     private val textSessionStarter: TextSessionStarter,
     private val textSessionClient: TextSessionClient,
+    private val conversationHistoryStore: ConversationHistoryStore,
     @IoDispatcher dispatcher: CoroutineDispatcher,
     @MainDispatcher private val mainDispatcher: CoroutineDispatcher,
     private val nowProvider: InstantProvider,
@@ -265,6 +267,9 @@ class ChatSessionController @Inject constructor(
     private suspend fun emitState(state: ChatConnectionState) {
         withContext(mainDispatcher) {
             _state.value = state
+        }
+        if (state is ChatConnectionState.Connected) {
+            conversationHistoryStore.setFromChat(state.messages)
         }
     }
 

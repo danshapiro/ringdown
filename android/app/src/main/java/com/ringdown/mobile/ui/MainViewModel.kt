@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.ringdown.mobile.chat.ChatConnectionState
 import com.ringdown.mobile.chat.ChatMessage
 import com.ringdown.mobile.chat.ChatSessionGateway
+import com.ringdown.mobile.conversation.ConversationHistoryStore
 import com.ringdown.mobile.data.DeviceDescriptor
 import com.ringdown.mobile.data.RegistrationException
 import com.ringdown.mobile.data.RegistrationGateway
@@ -12,7 +13,6 @@ import com.ringdown.mobile.data.RegistrationRepository
 import com.ringdown.mobile.domain.RegistrationStatus
 import com.ringdown.mobile.voice.LocalVoiceSessionController
 import com.ringdown.mobile.voice.VoiceConnectionState
-import com.ringdown.mobile.voice.toChatMessages
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -46,6 +46,7 @@ class MainViewModel @Inject constructor(
     private val registrationGateway: RegistrationGateway,
     private val voiceController: LocalVoiceSessionController,
     private val chatController: ChatSessionGateway,
+    private val conversationHistoryStore: ConversationHistoryStore,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -79,9 +80,6 @@ class MainViewModel @Inject constructor(
                     if (chatState is ChatConnectionState.Failed && current.isChatVisible) {
                         next = next.copy(errorMessage = chatState.reason)
                     }
-                    if (chatState is ChatConnectionState.Connected && chatState.messages.isNotEmpty()) {
-                        next = next.copy(chatHistory = chatState.messages)
-                    }
                     next
                 }
             }
@@ -89,6 +87,11 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             voiceController.reconnecting.collect { reconnecting ->
                 _state.update { it.copy(isVoiceReconnecting = reconnecting) }
+            }
+        }
+        viewModelScope.launch {
+            conversationHistoryStore.history.collect { history ->
+                _state.update { it.copy(chatHistory = history) }
             }
         }
     }
@@ -246,10 +249,6 @@ class MainViewModel @Inject constructor(
         val agent = resolvedAgentName() ?: run {
             _state.update { it.copy(errorMessage = "No agent configured for this device.") }
             return
-        }
-        val voiceTranscripts = (_state.value.voiceState as? VoiceConnectionState.Connected)?.transcripts.orEmpty()
-        if (voiceTranscripts.isNotEmpty()) {
-            _state.update { it.copy(chatHistory = voiceTranscripts.toChatMessages()) }
         }
         voiceController.stop()
         chatController.start(agent)

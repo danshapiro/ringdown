@@ -1,6 +1,7 @@
 package com.ringdown.mobile.voice
 
 import com.google.common.truth.Truth.assertThat
+import com.ringdown.mobile.conversation.ConversationHistoryStore
 import com.ringdown.mobile.data.BackendEnvironment
 import com.ringdown.mobile.data.TextSessionStarter
 import com.ringdown.mobile.domain.TextSessionBootstrap
@@ -155,6 +156,7 @@ class LocalVoiceSessionControllerTest {
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
+            conversationHistoryStore = ConversationHistoryStore(),
         )
 
         controller.start("assistant-b")
@@ -219,6 +221,7 @@ class LocalVoiceSessionControllerTest {
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
+            conversationHistoryStore = ConversationHistoryStore(),
         )
 
         controller.start("assistant-b")
@@ -275,6 +278,7 @@ class LocalVoiceSessionControllerTest {
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
+            conversationHistoryStore = ConversationHistoryStore(),
         )
 
         controller.start("assistant-b")
@@ -338,6 +342,7 @@ class LocalVoiceSessionControllerTest {
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
+            conversationHistoryStore = ConversationHistoryStore(),
         )
     }
 

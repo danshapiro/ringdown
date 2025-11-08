@@ -3,6 +3,7 @@ package com.ringdown.mobile.ui
 import com.google.common.truth.Truth.assertThat
 import com.ringdown.mobile.chat.ChatConnectionState
 import com.ringdown.mobile.chat.ChatSessionGateway
+import com.ringdown.mobile.conversation.ConversationHistoryStore
 import com.ringdown.mobile.data.BackendEnvironment
 import com.ringdown.mobile.data.DeviceDescriptor
 import com.ringdown.mobile.data.RegistrationGateway
@@ -55,8 +56,9 @@ class MainViewModelTest {
         val gateway = FakeRegistrationGateway(statuses)
 
         val dispatcher = dispatcherRule.dispatcher
-        val voiceController = RecordingVoiceController(dispatcher)
-        val viewModel = MainViewModel(gateway, voiceController, FakeChatGateway())
+        val historyStore = ConversationHistoryStore()
+        val voiceController = RecordingVoiceController(dispatcher, historyStore)
+        val viewModel = MainViewModel(gateway, voiceController, FakeChatGateway(historyStore), historyStore)
 
         viewModel.onPermissionResult(true)
 
@@ -94,8 +96,9 @@ class MainViewModelTest {
         )
 
         val dispatcher = dispatcherRule.dispatcher
-        val voiceController = RecordingVoiceController(dispatcher)
-        val viewModel = MainViewModel(gateway, voiceController, FakeChatGateway())
+        val historyStore = ConversationHistoryStore()
+        val voiceController = RecordingVoiceController(dispatcher, historyStore)
+        val viewModel = MainViewModel(gateway, voiceController, FakeChatGateway(historyStore), historyStore)
 
         viewModel.onPermissionResult(false)
 
@@ -125,9 +128,10 @@ class MainViewModelTest {
         }
         val gateway = FakeRegistrationGateway(statuses)
         val dispatcher = dispatcherRule.dispatcher
-        val voiceController = RecordingVoiceController(dispatcher)
-        val chatGateway = FakeChatGateway()
-        val viewModel = MainViewModel(gateway, voiceController, chatGateway)
+        val historyStore = ConversationHistoryStore()
+        val voiceController = RecordingVoiceController(dispatcher, historyStore)
+        val chatGateway = FakeChatGateway(historyStore)
+        val viewModel = MainViewModel(gateway, voiceController, chatGateway, historyStore)
 
         advanceUntilIdle()
 
@@ -155,9 +159,10 @@ class MainViewModelTest {
         }
         val gateway = FakeRegistrationGateway(statuses)
         val dispatcher = dispatcherRule.dispatcher
-        val voiceController = RecordingVoiceController(dispatcher)
-        val chatGateway = FakeChatGateway()
-        val viewModel = MainViewModel(gateway, voiceController, chatGateway)
+        val historyStore = ConversationHistoryStore()
+        val voiceController = RecordingVoiceController(dispatcher, historyStore)
+        val chatGateway = FakeChatGateway(historyStore)
+        val viewModel = MainViewModel(gateway, voiceController, chatGateway, historyStore)
 
         advanceUntilIdle()
         viewModel.openChatSession()
@@ -182,9 +187,10 @@ class MainViewModelTest {
         }
         val gateway = FakeRegistrationGateway(statuses)
         val dispatcher = dispatcherRule.dispatcher
-        val voiceController = RecordingVoiceController(dispatcher)
-        val chatGateway = FakeChatGateway()
-        val viewModel = MainViewModel(gateway, voiceController, chatGateway)
+        val historyStore = ConversationHistoryStore()
+        val voiceController = RecordingVoiceController(dispatcher, historyStore)
+        val chatGateway = FakeChatGateway(historyStore)
+        val viewModel = MainViewModel(gateway, voiceController, chatGateway, historyStore)
 
         advanceUntilIdle()
 
@@ -238,6 +244,7 @@ class MainViewModelTest {
 
     private class RecordingVoiceController(
         dispatcher: CoroutineDispatcher,
+        private val conversationHistoryStore: ConversationHistoryStore,
     ) : LocalVoiceSessionController(
         textSessionStarter = TextSessionStarter { agent ->
             TextSessionBootstrap(
@@ -261,6 +268,7 @@ class MainViewModelTest {
         dispatcher = dispatcher,
         mainDispatcher = dispatcher,
         nowProvider = InstantProvider { Instant.parse("2025-01-01T00:00:00Z") },
+        conversationHistoryStore = conversationHistoryStore,
     ) {
         private val _state = MutableStateFlow<VoiceConnectionState>(VoiceConnectionState.Idle)
         override val state: StateFlow<VoiceConnectionState> = _state
@@ -278,6 +286,7 @@ class MainViewModelTest {
 
         fun emitTranscripts(transcripts: List<TranscriptMessage>) {
             _state.value = VoiceConnectionState.Connected(transcripts)
+            conversationHistoryStore.setFromVoice(transcripts)
         }
     }
 
@@ -309,7 +318,9 @@ class MainViewModelTest {
         override suspend fun sendCancel() {}
     }
 
-    private class FakeChatGateway : ChatSessionGateway {
+    private class FakeChatGateway(
+        private val _conversationHistoryStore: ConversationHistoryStore,
+    ) : ChatSessionGateway {
         private val _state = MutableStateFlow<ChatConnectionState>(ChatConnectionState.Idle)
         override val state: StateFlow<ChatConnectionState> = _state
         val starts = mutableListOf<String?>()

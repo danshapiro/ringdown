@@ -1,6 +1,7 @@
 package com.ringdown.mobile.voice
 
 import android.util.Log
+import com.ringdown.mobile.conversation.ConversationHistoryStore
 import com.ringdown.mobile.data.TextSessionStarter
 import com.ringdown.mobile.di.IoDispatcher
 import com.ringdown.mobile.di.MainDispatcher
@@ -36,6 +37,7 @@ open class LocalVoiceSessionController @Inject constructor(
     @IoDispatcher dispatcher: CoroutineDispatcher,
     @MainDispatcher private val mainDispatcher: CoroutineDispatcher,
     private val nowProvider: InstantProvider,
+    private val conversationHistoryStore: ConversationHistoryStore,
 ) {
 
     private val stateScope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -440,6 +442,7 @@ open class LocalVoiceSessionController @Inject constructor(
 
     private fun publishTranscripts() {
         val snapshot = transcripts.toList()
+        conversationHistoryStore.setFromVoice(snapshot)
         stateScope.launch(mainDispatcher) {
             _state.value = VoiceConnectionState.Connected(snapshot)
         }
