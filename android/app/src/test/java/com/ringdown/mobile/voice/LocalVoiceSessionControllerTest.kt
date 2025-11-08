@@ -1,5 +1,6 @@
 package com.ringdown.mobile.voice
 
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.google.common.truth.Truth.assertThat
 import com.ringdown.mobile.conversation.ConversationHistoryStore
 import com.ringdown.mobile.data.BackendEnvironment
@@ -9,11 +10,15 @@ import com.ringdown.mobile.text.TextSessionClient
 import com.ringdown.mobile.text.TextSessionEvent
 import com.ringdown.mobile.voice.asr.AsrEvent
 import com.ringdown.mobile.voice.asr.LocalAsrEngine
+import java.nio.file.Files
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -156,7 +161,7 @@ class LocalVoiceSessionControllerTest {
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
-            conversationHistoryStore = ConversationHistoryStore(),
+            conversationHistoryStore = createHistoryStore(dispatcher),
         )
 
         controller.start("assistant-b")
@@ -221,7 +226,7 @@ class LocalVoiceSessionControllerTest {
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
-            conversationHistoryStore = ConversationHistoryStore(),
+            conversationHistoryStore = createHistoryStore(dispatcher),
         )
 
         controller.start("assistant-b")
@@ -278,7 +283,7 @@ class LocalVoiceSessionControllerTest {
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
-            conversationHistoryStore = ConversationHistoryStore(),
+            conversationHistoryStore = createHistoryStore(dispatcher),
         )
 
         controller.start("assistant-b")
@@ -342,7 +347,7 @@ class LocalVoiceSessionControllerTest {
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
-            conversationHistoryStore = ConversationHistoryStore(),
+            conversationHistoryStore = createHistoryStore(dispatcher),
         )
     }
 
@@ -380,5 +385,14 @@ class LocalVoiceSessionControllerTest {
         )
         method.isAccessible = true
         method.invoke(controller, event)
+    }
+
+    private fun createHistoryStore(dispatcher: CoroutineDispatcher): ConversationHistoryStore {
+        val tempDir = createTempDirectory().toFile()
+        val scope = CoroutineScope(dispatcher + SupervisorJob())
+        val dataStore = PreferenceDataStoreFactory.create(scope = scope) {
+            Files.createTempFile(tempDir.toPath(), "history", ".preferences_pb").toFile()
+        }
+        return ConversationHistoryStore(dataStore, dispatcher)
     }
 }

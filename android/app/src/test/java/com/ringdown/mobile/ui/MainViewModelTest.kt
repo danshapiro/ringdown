@@ -1,5 +1,6 @@
 package com.ringdown.mobile.ui
 
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.google.common.truth.Truth.assertThat
 import com.ringdown.mobile.chat.ChatConnectionState
 import com.ringdown.mobile.chat.ChatSessionGateway
@@ -17,16 +18,20 @@ import com.ringdown.mobile.voice.VoiceConnectionState
 import com.ringdown.mobile.voice.TranscriptMessage
 import com.ringdown.mobile.voice.asr.AsrEvent
 import com.ringdown.mobile.voice.asr.LocalAsrEngine
+import java.nio.file.Files
 import java.time.Instant
 import java.util.ArrayDeque
+import kotlin.io.path.createTempDirectory
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.CoroutineDispatcher
 import okhttp3.OkHttpClient
 import org.junit.Rule
 import org.junit.Test
@@ -56,7 +61,7 @@ class MainViewModelTest {
         val gateway = FakeRegistrationGateway(statuses)
 
         val dispatcher = dispatcherRule.dispatcher
-        val historyStore = ConversationHistoryStore()
+        val historyStore = createHistoryStore(dispatcher)
         val voiceController = RecordingVoiceController(dispatcher, historyStore)
         val viewModel = MainViewModel(gateway, voiceController, FakeChatGateway(historyStore), historyStore)
 
@@ -96,7 +101,7 @@ class MainViewModelTest {
         )
 
         val dispatcher = dispatcherRule.dispatcher
-        val historyStore = ConversationHistoryStore()
+        val historyStore = createHistoryStore(dispatcher)
         val voiceController = RecordingVoiceController(dispatcher, historyStore)
         val viewModel = MainViewModel(gateway, voiceController, FakeChatGateway(historyStore), historyStore)
 
@@ -128,7 +133,7 @@ class MainViewModelTest {
         }
         val gateway = FakeRegistrationGateway(statuses)
         val dispatcher = dispatcherRule.dispatcher
-        val historyStore = ConversationHistoryStore()
+        val historyStore = createHistoryStore(dispatcher)
         val voiceController = RecordingVoiceController(dispatcher, historyStore)
         val chatGateway = FakeChatGateway(historyStore)
         val viewModel = MainViewModel(gateway, voiceController, chatGateway, historyStore)
@@ -159,7 +164,7 @@ class MainViewModelTest {
         }
         val gateway = FakeRegistrationGateway(statuses)
         val dispatcher = dispatcherRule.dispatcher
-        val historyStore = ConversationHistoryStore()
+        val historyStore = createHistoryStore(dispatcher)
         val voiceController = RecordingVoiceController(dispatcher, historyStore)
         val chatGateway = FakeChatGateway(historyStore)
         val viewModel = MainViewModel(gateway, voiceController, chatGateway, historyStore)
@@ -187,7 +192,7 @@ class MainViewModelTest {
         }
         val gateway = FakeRegistrationGateway(statuses)
         val dispatcher = dispatcherRule.dispatcher
-        val historyStore = ConversationHistoryStore()
+        val historyStore = createHistoryStore(dispatcher)
         val voiceController = RecordingVoiceController(dispatcher, historyStore)
         val chatGateway = FakeChatGateway(historyStore)
         val viewModel = MainViewModel(gateway, voiceController, chatGateway, historyStore)
@@ -340,5 +345,14 @@ class MainViewModelTest {
         override fun sendMessage(text: String) {
             sentMessages += text
         }
+    }
+
+    private fun createHistoryStore(dispatcher: CoroutineDispatcher): ConversationHistoryStore {
+        val tempDir = createTempDirectory().toFile()
+        val scope = CoroutineScope(dispatcher + SupervisorJob())
+        val dataStore = PreferenceDataStoreFactory.create(scope = scope) {
+            Files.createTempFile(tempDir.toPath(), "history", ".preferences_pb").toFile()
+        }
+        return ConversationHistoryStore(dataStore, dispatcher)
     }
 }

@@ -1,5 +1,6 @@
 package com.ringdown.mobile.ui
 
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.google.common.truth.Truth.assertThat
 import com.ringdown.mobile.chat.ChatConnectionState
 import com.ringdown.mobile.chat.ChatSessionGateway
@@ -16,14 +17,18 @@ import com.ringdown.mobile.voice.LocalVoiceSessionController
 import com.ringdown.mobile.voice.VoiceConnectionState
 import com.ringdown.mobile.voice.asr.AsrEvent
 import com.ringdown.mobile.voice.asr.LocalAsrEngine
+import java.nio.file.Files
 import java.time.Instant
+import kotlin.io.path.createTempDirectory
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.CoroutineDispatcher
 import okhttp3.OkHttpClient
 import org.junit.Rule
 import org.junit.Test
@@ -45,7 +50,7 @@ class MainViewModelVoiceTest {
     @Test
     fun voiceStateUpdatesPropagateToUiState() = runTest {
         val dispatcher = dispatcherRule.dispatcher
-        val historyStore = ConversationHistoryStore()
+        val historyStore = createHistoryStore(dispatcher)
         val voiceController = RecordingVoiceController(dispatcher, historyStore)
         val viewModel = MainViewModel(registrationGateway, voiceController, FakeChatGateway(historyStore), historyStore)
 
@@ -59,7 +64,7 @@ class MainViewModelVoiceTest {
     @Test
     fun voiceFailureSurfacesError() = runTest {
         val dispatcher = dispatcherRule.dispatcher
-        val historyStore = ConversationHistoryStore()
+        val historyStore = createHistoryStore(dispatcher)
         val voiceController = RecordingVoiceController(dispatcher, historyStore)
         val viewModel = MainViewModel(registrationGateway, voiceController, FakeChatGateway(historyStore), historyStore)
 
@@ -151,5 +156,14 @@ class MainViewModelVoiceTest {
         override fun start(agent: String?) {}
         override fun stop() {}
         override fun sendMessage(text: String) {}
+    }
+
+    private fun createHistoryStore(dispatcher: CoroutineDispatcher): ConversationHistoryStore {
+        val tempDir = createTempDirectory().toFile()
+        val scope = CoroutineScope(dispatcher + SupervisorJob())
+        val dataStore = PreferenceDataStoreFactory.create(scope = scope) {
+            Files.createTempFile(tempDir.toPath(), "history", ".preferences_pb").toFile()
+        }
+        return ConversationHistoryStore(dataStore, dispatcher)
     }
 }
