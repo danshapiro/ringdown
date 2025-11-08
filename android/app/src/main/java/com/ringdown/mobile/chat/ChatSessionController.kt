@@ -62,8 +62,8 @@ class ChatSessionController @Inject constructor(
             registerEventCollectors()
             try {
                 val bootstrap = textSessionStarter.startTextSession(agent)
-                applyBootstrapHistory(bootstrap.history)
                 currentAgent = bootstrap.agent.ifBlank { agent }
+                applyBootstrapHistory(bootstrap.history)
                 textSessionClient.connect(bootstrap)
             } catch (error: Exception) {
                 logStructured(
@@ -210,12 +210,16 @@ class ChatSessionController @Inject constructor(
     }
 
     private suspend fun applyBootstrapHistory(history: List<ChatMessage>) {
-        stateMutex.withLock {
+        val snapshot = stateMutex.withLock {
             transcripts.clear()
             assistantDraft = null
             transcripts += history
+            transcripts.toList()
         }
-        conversationHistoryStore.setFromChat(history)
+        conversationHistoryStore.setFromChat(snapshot)
+        if (snapshot.isNotEmpty()) {
+            emitState(ChatConnectionState.Connected(currentAgent, snapshot))
+        }
     }
 
     private suspend fun failSession(reason: String) {

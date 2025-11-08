@@ -109,6 +109,30 @@ class ChatSessionControllerTest {
         assertThat(store.history.value.first().text).isEqualTo("Remote user")
     }
 
+    @Test
+    fun bootstrapHistoryEmitsConnectedStateImmediately() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = createStore(dispatcher)
+        val bootstrapHistory = listOf(
+            ChatMessage(
+                id = "remote-1",
+                role = ChatMessageRole.USER,
+                text = "From server",
+                timestampIso = "2025-11-08T03:00:00Z",
+            ),
+        )
+
+        val controller = createController(dispatcher, store, bootstrapHistory)
+        controller.start("tester")
+        advanceUntilIdle()
+
+        val state = controller.state.value
+        assertThat(state).isInstanceOf(ChatConnectionState.Connected::class.java)
+        val connected = state as ChatConnectionState.Connected
+        assertThat(connected.messages).hasSize(1)
+        assertThat(connected.messages.first().text).isEqualTo("From server")
+    }
+
     private fun createController(
         dispatcher: CoroutineDispatcher,
         store: ConversationHistoryStore,
