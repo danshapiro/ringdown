@@ -23,6 +23,9 @@ class VoiceSessionForegroundService : LifecycleService() {
     @Inject
     lateinit var coordinator: VoiceSessionForegroundCoordinator
 
+    @Inject
+    lateinit var reconnectTonePlayer: ReconnectTonePlayer
+
     private var foregroundStarted = false
     private var monitorJob: Job? = null
 
@@ -32,6 +35,11 @@ class VoiceSessionForegroundService : LifecycleService() {
             voiceController.state
                 .combine(voiceController.reconnecting) { state, reconnecting -> state to reconnecting }
                 .collect { (state, reconnecting) ->
+                    if (reconnecting) {
+                        reconnectTonePlayer.startLoop()
+                    } else {
+                        reconnectTonePlayer.stop()
+                    }
                     when (state) {
                         is VoiceConnectionState.Connected,
                         VoiceConnectionState.Connecting -> showNotification(state, reconnecting)
@@ -72,6 +80,7 @@ class VoiceSessionForegroundService : LifecycleService() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             foregroundStarted = false
         }
+        reconnectTonePlayer.stop()
         notificationBuilder.cancel()
         stopSelf()
     }
