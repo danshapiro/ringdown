@@ -23,4 +23,7 @@
     <string name="chat_connecting">Connecting to your assistant…</string>
     <string name="chat_empty_state">Start typing to chat with your assistant.</string>
     <string name="chat_retry_button">Retry</string>
+    <string name="chat_tool_title">Tool: %1$s</string>
+    <string name="chat_tool_generic">Tool event</string>
+    <string name="chat_tool_expand_hint">Tap to view tool details</string>
 </resources>

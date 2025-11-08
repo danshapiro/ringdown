@@ -3,6 +3,7 @@
 package com.ringdown.mobile.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -380,6 +382,7 @@ private fun ChatTranscriptList(messages: List<ChatMessage>) {
         ChatPlaceholder(text = stringResource(id = R.string.chat_empty_state))
         return
     }
+    val expandedState = remember { mutableStateMapOf<String, Boolean>() }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -387,13 +390,33 @@ private fun ChatTranscriptList(messages: List<ChatMessage>) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(messages, key = { it.id }) { message ->
-            ChatMessageBubble(message)
+            val expanded = expandedState[message.id] == true
+            ChatMessageBubble(
+                message = message,
+                isExpanded = expanded,
+                onToggleExpand = {
+                    expandedState[message.id] = !expanded
+                },
+            )
         }
     }
 }
 
 @Composable
-private fun ChatMessageBubble(message: ChatMessage) {
+private fun ChatMessageBubble(
+    message: ChatMessage,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
+) {
+    if (message.role == ChatMessageRole.TOOL) {
+        ToolMessageBubble(message, isExpanded, onToggleExpand)
+    } else {
+        StandardChatBubble(message)
+    }
+}
+
+@Composable
+private fun StandardChatBubble(message: ChatMessage) {
     val isUser = message.role == ChatMessageRole.USER
     val background = if (isUser) {
         MaterialTheme.colorScheme.primary
@@ -419,6 +442,54 @@ private fun ChatMessageBubble(message: ChatMessage) {
                 modifier = Modifier.padding(12.dp),
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+    }
+}
+
+@Composable
+private fun ToolMessageBubble(
+    message: ChatMessage,
+    isExpanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    val payload = message.toolPayload.orEmpty()
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = stringResource(
+                    id = R.string.chat_tool_title,
+                    message.messageType ?: stringResource(id = R.string.chat_tool_generic),
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = message.text,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (payload.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                if (isExpanded) {
+                    payload.entries.sortedBy { it.key }.forEach { (key, value) ->
+                        Text(
+                            text = "$key: ${value ?: "—"}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                } else {
+                    Text(
+                        text = stringResource(id = R.string.chat_tool_expand_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
         }
     }
 }

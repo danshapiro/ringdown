@@ -178,6 +178,7 @@ class ChatSessionController @Inject constructor(
                 text = text,
                 timestampIso = nowProvider.now().toString(),
                 messageType = event.event,
+                toolPayload = event.payload.takeIf { it.isNotEmpty() },
             )
         }
         emitState(ChatConnectionState.Connected(currentAgent, transcriptsSnapshot()))
