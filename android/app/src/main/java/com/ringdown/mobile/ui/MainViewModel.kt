@@ -3,6 +3,7 @@ package com.ringdown.mobile.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ringdown.mobile.chat.ChatConnectionState
+import com.ringdown.mobile.chat.ChatMessage
 import com.ringdown.mobile.chat.ChatSessionGateway
 import com.ringdown.mobile.data.DeviceDescriptor
 import com.ringdown.mobile.data.RegistrationException
@@ -35,6 +36,7 @@ data class MainUiState(
     val isChatVisible: Boolean = false,
     val chatState: ChatConnectionState = ChatConnectionState.Idle,
     val chatInput: String = "",
+    val chatHistory: List<ChatMessage> = emptyList(),
 )
 
 @HiltViewModel
@@ -74,6 +76,9 @@ class MainViewModel @Inject constructor(
                     var next = current.copy(chatState = chatState)
                     if (chatState is ChatConnectionState.Failed && current.isChatVisible) {
                         next = next.copy(errorMessage = chatState.reason)
+                    }
+                    if (chatState is ChatConnectionState.Connected) {
+                        next = next.copy(chatHistory = chatState.messages)
                     }
                     next
                 }

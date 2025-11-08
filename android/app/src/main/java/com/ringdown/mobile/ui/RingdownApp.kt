@@ -99,6 +99,7 @@ fun RingdownApp(
             if (state.isChatVisible) {
                 ChatScreen(
                     chatState = state.chatState,
+                    chatHistory = state.chatHistory,
                     inputValue = state.chatInput,
                     onInputChange = onChatInputChanged,
                     onSend = onSendChatMessage,
@@ -327,6 +328,7 @@ private fun VoiceSessionContent(
 @Composable
 private fun ChatScreen(
     chatState: ChatConnectionState,
+    chatHistory: List<ChatMessage>,
     inputValue: String,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
@@ -360,7 +362,13 @@ private fun ChatScreen(
                 .fillMaxWidth(),
         ) {
             when (chatState) {
-                ChatConnectionState.Idle -> ChatPlaceholder(text = stringResource(id = R.string.chat_empty_state))
+                ChatConnectionState.Idle -> {
+                    if (chatHistory.isEmpty()) {
+                        ChatPlaceholder(text = stringResource(id = R.string.chat_empty_state))
+                    } else {
+                        ChatTranscriptList(messages = chatHistory)
+                    }
+                }
                 ChatConnectionState.Connecting -> ChatPlaceholder(text = stringResource(id = R.string.chat_connecting))
                 is ChatConnectionState.Failed -> ChatErrorState(message = chatState.reason, onRetry = onRetry)
                 is ChatConnectionState.Connected -> ChatTranscriptList(messages = chatState.messages)
