@@ -114,7 +114,10 @@ fun RingdownApp(
                         onHangUp = onHangUp,
                     )
 
-                    is VoiceConnectionState.Connecting -> VoiceSessionConnecting(onHangUp)
+                    is VoiceConnectionState.Connecting -> VoiceSessionConnecting(
+                        onHangUp = onHangUp,
+                        isReconnecting = state.isVoiceReconnecting,
+                    )
 
                     else -> when (val status = state.registrationStatus) {
                         is RegistrationStatus.Denied -> DeniedContent(status.message)
@@ -251,7 +254,7 @@ private fun LoadingOverlay() {
 }
 
 @Composable
-private fun VoiceSessionConnecting(onHangUp: () -> Unit) {
+private fun VoiceSessionConnecting(onHangUp: () -> Unit, isReconnecting: Boolean) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -262,8 +265,13 @@ private fun VoiceSessionConnecting(onHangUp: () -> Unit) {
     ) {
         CircularProgressIndicator()
         Spacer(modifier = Modifier.height(16.dp))
+        val messageRes = if (isReconnecting) {
+            R.string.voice_reconnecting_message
+        } else {
+            R.string.voice_connecting_message
+        }
         Text(
-            text = stringResource(id = R.string.voice_connecting_message),
+            text = stringResource(id = messageRes),
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center,
         )

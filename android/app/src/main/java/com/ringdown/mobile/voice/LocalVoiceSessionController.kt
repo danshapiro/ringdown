@@ -45,6 +45,8 @@ open class LocalVoiceSessionController @Inject constructor(
 
     private val _state = MutableStateFlow<VoiceConnectionState>(VoiceConnectionState.Idle)
     open val state: StateFlow<VoiceConnectionState> = _state
+    private val _reconnecting = MutableStateFlow(false)
+    open val reconnecting: StateFlow<Boolean> = _reconnecting
 
     private val transcripts: MutableList<TranscriptMessage> = mutableListOf()
     private val userDrafts: MutableMap<String, UserDraft> = mutableMapOf()
@@ -80,6 +82,7 @@ open class LocalVoiceSessionController @Inject constructor(
                 activeAgent = bootstrap.agent.ifBlank { agent }
                 textSessionClient.connect(bootstrap)
                 asrEngine.start()
+                _reconnecting.value = false
             } catch (cancel: CancellationException) {
                 sessionActive.set(false)
                 throw cancel
@@ -122,6 +125,7 @@ open class LocalVoiceSessionController @Inject constructor(
             try {
                 teardownSession()
             } finally {
+                _reconnecting.value = false
                 postState(VoiceConnectionState.Idle)
                 logStructured(
                     level = "INFO",
@@ -359,6 +363,8 @@ open class LocalVoiceSessionController @Inject constructor(
             Log.w(TAG, "terminateWithFailure called but session already inactive")
             return
         }
+        cancelReconnectJob()
+        _reconnecting.value = false
         sessionScope.launch {
             teardownSession()
             postState(VoiceConnectionState.Failed(reason))
@@ -482,6 +488,7 @@ open class LocalVoiceSessionController @Inject constructor(
             postState(VoiceConnectionState.Connecting)
             val deadline = nowMillis() + RECONNECT_WINDOW_MILLIS
             var attempt = 0
+            _reconnecting.value = true
             while (sessionActive.get() && nowMillis() < deadline) {
                 if (attempt > 0) {
                     delay(RECONNECT_BACKOFF_MILLIS)
@@ -494,6 +501,7 @@ open class LocalVoiceSessionController @Inject constructor(
                         event = "local_voice.reconnect_success",
                         fields = mapOf("attempt" to attempt),
                     )
+                    _reconnecting.value = false
                     reconnectJob = null
                     return@launch
                 } catch (error: Exception) {
@@ -509,6 +517,7 @@ open class LocalVoiceSessionController @Inject constructor(
                 }
             }
             reconnectJob = null
+            _reconnecting.value = false
             terminateWithFailure("Unable to reconnect: $reason")
         }
     }
@@ -527,6 +536,7 @@ open class LocalVoiceSessionController @Inject constructor(
     private fun cancelReconnectJob() {
         reconnectJob?.cancel()
         reconnectJob = null
+        _reconnecting.value = false
     }
 
     private fun nowMillis(): Long = nowProvider.now().toEpochMilli()

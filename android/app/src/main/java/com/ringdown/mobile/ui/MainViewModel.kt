@@ -37,6 +37,7 @@ data class MainUiState(
     val chatState: ChatConnectionState = ChatConnectionState.Idle,
     val chatInput: String = "",
     val chatHistory: List<ChatMessage> = emptyList(),
+    val isVoiceReconnecting: Boolean = false,
 )
 
 @HiltViewModel
@@ -82,6 +83,11 @@ class MainViewModel @Inject constructor(
                     }
                     next
                 }
+            }
+        }
+        viewModelScope.launch {
+            voiceController.reconnecting.collect { reconnecting ->
+                _state.update { it.copy(isVoiceReconnecting = reconnecting) }
             }
         }
     }

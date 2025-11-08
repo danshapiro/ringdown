@@ -11,6 +11,7 @@
     <string name="permission_rationale">Ringdown needs microphone access for voice calls.</string>
     <string name="hang_up_button">Hang up</string>
     <string name="voice_connecting_message">Connecting to your assistant...</string>
+    <string name="voice_reconnecting_message">Reconnecting… hold tight.</string>
     <string name="voice_session_title">Live conversation</string>
     <string name="voice_transcript_empty">Waiting for the first response...</string>
     <string name="control_capture_notification_title">Harness capture active</string>
