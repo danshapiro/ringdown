@@ -111,6 +111,7 @@ fun RingdownApp(
                 when (val voiceState = state.voiceState) {
                     is VoiceConnectionState.Connected -> VoiceSessionContent(
                         transcripts = voiceState.transcripts,
+                        chatHistory = state.chatHistory,
                         onHangUp = onHangUp,
                     )
 
@@ -285,6 +286,7 @@ private fun VoiceSessionConnecting(onHangUp: () -> Unit, isReconnecting: Boolean
 @Composable
 private fun VoiceSessionContent(
     transcripts: List<TranscriptMessage>,
+    chatHistory: List<ChatMessage>,
     onHangUp: () -> Unit,
 ) {
     Box(
@@ -293,6 +295,10 @@ private fun VoiceSessionContent(
             .padding(horizontal = 24.dp, vertical = 32.dp)
             .testTag("voice-active"),
     ) {
+        val combinedTranscripts = remember(transcripts, chatHistory) {
+            val chatAsTranscripts = chatHistory.map { it.toTranscriptMessage() }
+            (chatAsTranscripts + transcripts)
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -304,7 +310,7 @@ private fun VoiceSessionContent(
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
             Spacer(modifier = Modifier.height(16.dp))
-            if (transcripts.isEmpty()) {
+            if (combinedTranscripts.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize(),
@@ -321,7 +327,7 @@ private fun VoiceSessionContent(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(transcripts) { transcript ->
+                    items(combinedTranscripts) { transcript ->
                         TranscriptBubble(transcript)
                     }
                 }
@@ -538,6 +544,19 @@ private fun ChatComposer(
             Text(text = stringResource(id = R.string.chat_send_button))
         }
     }
+}
+
+private fun ChatMessage.toTranscriptMessage(): TranscriptMessage {
+    val speaker = when (role) {
+        ChatMessageRole.USER -> "user"
+        ChatMessageRole.ASSISTANT -> "assistant"
+        ChatMessageRole.TOOL -> messageType ?: "tool"
+    }
+    return TranscriptMessage(
+        speaker = speaker,
+        text = text,
+        timestampIso = timestampIso,
+    )
 }
 
 @Composable
