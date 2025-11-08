@@ -1,6 +1,7 @@
 package com.ringdown.mobile.chat
 
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import com.ringdown.mobile.conversation.ConversationHistoryStore
 import com.ringdown.mobile.data.TextSessionStarter
 import com.ringdown.mobile.di.IoDispatcher
@@ -55,8 +56,7 @@ class ChatSessionController @Inject constructor(
         sessionScope.launch {
             logStructured("INFO", "chat_session.start_requested", mapOf("agent" to agent))
             stateMutex.withLock {
-                transcripts.clear()
-                assistantDraft = null
+                seedPersistedHistoryLocked()
             }
             emitState(ChatConnectionState.Connecting)
             registerEventCollectors()
@@ -199,6 +199,15 @@ class ChatSessionController @Inject constructor(
         failSession(event.error.message ?: "Connection failure")
     }
 
+    private fun seedPersistedHistoryLocked() {
+        transcripts.clear()
+        assistantDraft = null
+        val persisted = conversationHistoryStore.history.value
+        if (persisted.isNotEmpty()) {
+            transcripts += persisted
+        }
+    }
+
     private suspend fun failSession(reason: String) {
         logStructured("ERROR", "chat_session.failed", mapOf("reason" to reason))
         sessionActive.set(false)
@@ -272,6 +281,9 @@ class ChatSessionController @Inject constructor(
             conversationHistoryStore.setFromChat(state.messages)
         }
     }
+
+    @VisibleForTesting
+    internal suspend fun snapshotTranscripts(): List<ChatMessage> = stateMutex.withLock { transcripts.toList() }
 
     private fun buildToolSummary(event: TextSessionEvent.ToolEvent): String {
         if (event.payload.isEmpty()) {
