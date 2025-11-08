@@ -14,6 +14,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
@@ -231,6 +232,75 @@ class LocalVoiceSessionControllerTest {
         assertThat(disconnectCalls.get()).isEqualTo(1)
     }
 
+    @Test
+    fun connectionFailureTriggersReconnect() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connectCalls = mutableListOf<TextSessionBootstrap>()
+
+        val backendEnvironment = object : BackendEnvironment() {
+            override fun baseUrl(): String = "https://example.invalid"
+        }
+        val textSessionClient = object : TextSessionClient(
+            backendEnvironment,
+            OkHttpClient(),
+            dispatcher,
+        ) {
+            override suspend fun connect(bootstrap: TextSessionBootstrap) {
+                connectCalls += bootstrap
+            }
+        }
+        val starter = TextSessionStarter { agent ->
+            TextSessionBootstrap(
+                sessionId = "session-${connectCalls.size + 1}",
+                sessionToken = "token-${connectCalls.size + 1}",
+                resumeToken = "resume-${connectCalls.size + 1}",
+                websocketPath = "/ws",
+                agent = agent ?: "assistant-b",
+                expiresAtIso = "2025-11-02T00:10:00Z",
+                heartbeatIntervalSeconds = 15,
+                heartbeatTimeoutSeconds = 45,
+                tlsPins = emptyList(),
+            )
+        }
+        val asrEngine = object : LocalAsrEngine {
+            override val events: MutableSharedFlow<AsrEvent> = MutableSharedFlow(extraBufferCapacity = 1)
+            override suspend fun start() {}
+            override suspend fun stop() {}
+        }
+
+        val controller = LocalVoiceSessionController(
+            textSessionStarter = starter,
+            textSessionClient = textSessionClient,
+            asrEngine = asrEngine,
+            dispatcher = dispatcher,
+            mainDispatcher = dispatcher,
+            nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
+        )
+
+        controller.start("assistant-b")
+        runCurrent()
+
+        val readyEvent = TextSessionEvent.Ready(
+            sessionId = "session-1",
+            agent = "assistant-b",
+            greeting = null,
+            heartbeatIntervalSeconds = 15,
+            heartbeatTimeoutSeconds = 45,
+        )
+        invokeHandleReady(controller, readyEvent)
+        runCurrent()
+
+        invokeHandleConnectionFailure(
+            controller,
+            TextSessionEvent.ConnectionFailure(RuntimeException("boom")),
+        )
+        runCurrent()
+        advanceTimeBy(100)
+        runCurrent()
+
+        assertThat(connectCalls).hasSize(2)
+    }
+
     private fun createController(
         dispatcher: CoroutineDispatcher,
     ): LocalVoiceSessionController {
@@ -290,6 +360,18 @@ class LocalVoiceSessionControllerTest {
         val method = LocalVoiceSessionController::class.java.getDeclaredMethod(
             "handleAssistantToken",
             TextSessionEvent.AssistantToken::class.java,
+        )
+        method.isAccessible = true
+        method.invoke(controller, event)
+    }
+
+    private fun invokeHandleConnectionFailure(
+        controller: LocalVoiceSessionController,
+        event: TextSessionEvent.ConnectionFailure,
+    ) {
+        val method = LocalVoiceSessionController::class.java.getDeclaredMethod(
+            "handleConnectionFailure",
+            TextSessionEvent.ConnectionFailure::class.java,
         )
         method.isAccessible = true
         method.invoke(controller, event)

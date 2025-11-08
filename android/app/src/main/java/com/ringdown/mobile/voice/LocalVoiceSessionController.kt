@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -50,8 +51,10 @@ open class LocalVoiceSessionController @Inject constructor(
     private val outgoingStates: MutableMap<String, OutgoingUtteranceState> = mutableMapOf()
     private var assistantDraft: AssistantDraft? = null
     private var currentSessionId: String? = null
+    private var activeAgent: String? = null
 
     private var activeJobs: MutableList<Job> = mutableListOf()
+    private var reconnectJob: Job? = null
 
     open fun start(agent: String?) {
         if (!sessionActive.compareAndSet(false, true)) {
@@ -74,6 +77,7 @@ open class LocalVoiceSessionController @Inject constructor(
                 registerCollectors()
 
                 val bootstrap = textSessionStarter.startTextSession(agent)
+                activeAgent = bootstrap.agent.ifBlank { agent }
                 textSessionClient.connect(bootstrap)
                 asrEngine.start()
             } catch (cancel: CancellationException) {
@@ -175,6 +179,9 @@ open class LocalVoiceSessionController @Inject constructor(
     private fun handleReady(event: TextSessionEvent.Ready) {
         Log.i(TAG, "Session ready (sessionId=${event.sessionId ?: "unknown"})")
         currentSessionId = event.sessionId
+        if (!event.agent.isNullOrBlank()) {
+            activeAgent = event.agent
+        }
         logStructured(
             level = "INFO",
             event = "local_voice.session_ready",
@@ -238,12 +245,16 @@ open class LocalVoiceSessionController @Inject constructor(
             )
             return
         }
-        terminateWithFailure(event.reason ?: "Session closed")
+        scheduleReconnect(event.reason ?: "Session closed")
     }
 
     private fun handleConnectionFailure(event: TextSessionEvent.ConnectionFailure) {
         Log.e(TAG, "Connection failure", event.error)
-        terminateWithFailure(event.error.message ?: "Connection failure")
+        if (!sessionActive.get()) {
+            terminateWithFailure(event.error.message ?: "Connection failure")
+            return
+        }
+        scheduleReconnect(event.error.message ?: "Connection failure")
     }
 
     private fun handleAsrPartial(event: AsrEvent.Partial) {
@@ -417,6 +428,8 @@ open class LocalVoiceSessionController @Inject constructor(
         outgoingStates.clear()
         assistantDraft = null
         currentSessionId = null
+        activeAgent = null
+        cancelReconnectJob()
     }
 
     private fun publishTranscripts() {
@@ -452,6 +465,71 @@ open class LocalVoiceSessionController @Inject constructor(
             _state.value = newState
         }
     }
+
+    private fun scheduleReconnect(reason: String) {
+        if (!sessionActive.get()) {
+            return
+        }
+        if (reconnectJob?.isActive == true) {
+            return
+        }
+        reconnectJob = sessionScope.launch {
+            logStructured(
+                level = "INFO",
+                event = "local_voice.reconnect_start",
+                fields = mapOf("reason" to reason),
+            )
+            postState(VoiceConnectionState.Connecting)
+            val deadline = nowMillis() + RECONNECT_WINDOW_MILLIS
+            var attempt = 0
+            while (sessionActive.get() && nowMillis() < deadline) {
+                if (attempt > 0) {
+                    delay(RECONNECT_BACKOFF_MILLIS)
+                }
+                attempt += 1
+                try {
+                    restartSession()
+                    logStructured(
+                        level = "INFO",
+                        event = "local_voice.reconnect_success",
+                        fields = mapOf("attempt" to attempt),
+                    )
+                    reconnectJob = null
+                    return@launch
+                } catch (error: Exception) {
+                    logStructured(
+                        level = "WARN",
+                        event = "local_voice.reconnect_failed",
+                        fields = mapOf(
+                            "attempt" to attempt,
+                            "message" to (error.message ?: "unknown"),
+                            "exceptionType" to error::class.java.simpleName,
+                        ),
+                    )
+                }
+            }
+            reconnectJob = null
+            terminateWithFailure("Unable to reconnect: $reason")
+        }
+    }
+
+    private suspend fun restartSession() {
+        val previousAgent = activeAgent
+        sessionLock.withLock {
+            runCatching { asrEngine.stop() }
+            val bootstrap = textSessionStarter.startTextSession(previousAgent)
+            activeAgent = bootstrap.agent.ifBlank { previousAgent }
+            textSessionClient.connect(bootstrap)
+            asrEngine.start()
+        }
+    }
+
+    private fun cancelReconnectJob() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+    }
+
+    private fun nowMillis(): Long = nowProvider.now().toEpochMilli()
 
     private fun createAssistantDraft(): AssistantDraft {
         val timestamp = nowProvider.now().toString()
@@ -514,5 +592,7 @@ open class LocalVoiceSessionController @Inject constructor(
         private const val MAX_TOKEN_LOG_LENGTH = 160
         private const val STOP_JOB_TIMEOUT_MILLIS = 5_000L
         private const val USER_MESSAGE_SOURCE = "android-local"
+        private const val RECONNECT_WINDOW_MILLIS = 60_000L
+        private const val RECONNECT_BACKOFF_MILLIS = 3_000L
     }
 }
