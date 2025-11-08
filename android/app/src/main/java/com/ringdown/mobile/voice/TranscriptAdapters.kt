@@ -7,6 +7,7 @@ import java.util.UUID
 fun TranscriptMessage.toChatMessage(): ChatMessage {
     val role = when (speaker.lowercase()) {
         "user" -> ChatMessageRole.USER
+        "tool" -> ChatMessageRole.TOOL
         else -> ChatMessageRole.ASSISTANT
     }
     return ChatMessage(
@@ -14,6 +15,8 @@ fun TranscriptMessage.toChatMessage(): ChatMessage {
         role = role,
         text = text,
         timestampIso = timestampIso,
+        messageType = messageType,
+        toolPayload = toolPayload,
     )
 }
 

@@ -17,4 +17,6 @@ data class TranscriptMessage(
     val speaker: String,
     val text: String,
     val timestampIso: String?,
+    val messageType: String? = null,
+    val toolPayload: Map<String, Any?>? = null,
 )

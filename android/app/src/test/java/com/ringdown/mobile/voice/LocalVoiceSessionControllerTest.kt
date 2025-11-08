@@ -85,6 +85,30 @@ class LocalVoiceSessionControllerTest {
     }
 
     @Test
+    fun toolEventsArePersistedWithPayload() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = createHistoryStore(dispatcher)
+        val controller = createController(dispatcher, store)
+        controller.start("assistant-b")
+        runCurrent()
+
+        val payload = mapOf("action" to "lookup", "status" to "complete")
+        invokeHandleToolEvent(
+            controller,
+            TextSessionEvent.ToolEvent(event = "tool.lookup", payload = payload),
+        )
+        runCurrent()
+
+        val history = store.history.value
+        assertThat(history).isNotEmpty()
+        val latest = history.last()
+        assertThat(latest.role).isEqualTo(ChatMessageRole.TOOL)
+        assertThat(latest.toolPayload).isNotNull()
+        assertThat(latest.toolPayload!!["status"]).isEqualTo("complete")
+        assertThat(latest.messageType).isEqualTo("tool.lookup")
+    }
+
+    @Test
     fun duplicateReadyEventsDoNotDuplicateGreeting() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val controller = createController(dispatcher)
@@ -408,6 +432,18 @@ class LocalVoiceSessionControllerTest {
         val method = LocalVoiceSessionController::class.java.getDeclaredMethod(
             "handleConnectionFailure",
             TextSessionEvent.ConnectionFailure::class.java,
+        )
+        method.isAccessible = true
+        method.invoke(controller, event)
+    }
+
+    private fun invokeHandleToolEvent(
+        controller: LocalVoiceSessionController,
+        event: TextSessionEvent.ToolEvent,
+    ) {
+        val method = LocalVoiceSessionController::class.java.getDeclaredMethod(
+            "handleToolEvent",
+            TextSessionEvent.ToolEvent::class.java,
         )
         method.isAccessible = true
         method.invoke(controller, event)

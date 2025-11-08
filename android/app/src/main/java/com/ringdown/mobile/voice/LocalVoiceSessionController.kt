@@ -155,7 +155,7 @@ open class LocalVoiceSessionController @Inject constructor(
                 when (event) {
                     is TextSessionEvent.Ready -> handleReady(event)
                     is TextSessionEvent.AssistantToken -> handleAssistantToken(event)
-                    is TextSessionEvent.ToolEvent -> Log.d(TAG, "Tool event: ${event.event}")
+                    is TextSessionEvent.ToolEvent -> handleToolEvent(event)
                     is TextSessionEvent.ServerError -> handleServerError(event)
                     is TextSessionEvent.ConnectionClosed -> handleConnectionClosed(event)
                     is TextSessionEvent.ConnectionFailure -> handleConnectionFailure(event)
@@ -468,6 +468,20 @@ open class LocalVoiceSessionController @Inject constructor(
             text = greeting,
             timestampIso = nowProvider.now().toString(),
         )
+        publishTranscripts()
+    }
+
+    private fun handleToolEvent(event: TextSessionEvent.ToolEvent) {
+        val summary = buildToolSummary(event)
+        val payload = event.payload.takeIf { it.isNotEmpty() }
+        transcripts += TranscriptMessage(
+            speaker = "tool",
+            text = summary,
+            timestampIso = nowProvider.now().toString(),
+            messageType = event.event,
+            toolPayload = payload,
+        )
+        publishTranscripts()
     }
 
     private fun postState(newState: VoiceConnectionState) {
@@ -600,6 +614,18 @@ open class LocalVoiceSessionController @Inject constructor(
             "DEBUG" -> Log.d(TAG, json)
             else -> Log.i(TAG, json)
         }
+    }
+
+    private fun buildToolSummary(event: TextSessionEvent.ToolEvent): String {
+        if (event.payload.isEmpty()) {
+            return event.event ?: "Tool event"
+        }
+        val summary = event.payload.entries.joinToString {
+            val key = it.key
+            val value = it.value ?: "null"
+            key + "=" + value.toString()
+        }
+        return if (event.event.isNullOrBlank()) summary else event.event + ": " + summary
     }
 
     companion object {
