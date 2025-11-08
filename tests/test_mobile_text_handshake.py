@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import contextlib
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -93,6 +94,7 @@ def test_text_session_handshake_creates_session() -> None:
     assert body["heartbeatTimeoutSeconds"] == 30
     assert body["tlsPins"] == ["pin-global", "pin-device"]
     assert body["authToken"] == "secret-token"
+    assert body["history"] == []
     store.create_session.assert_awaited_once()
 
 
@@ -120,7 +122,46 @@ def test_text_session_handshake_resumes_session() -> None:
     assert data["sessionToken"] == "new-session-token"
     assert data["resumeToken"] == state.resume_token
     assert data["authToken"] == "secret-token"
+    assert data["history"] == []
     store.resume_session.assert_awaited_once()
+
+
+def test_text_session_handshake_includes_history_snapshot() -> None:
+    state = _state()
+    state.messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": " Hi there "},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hello!"}]},
+        {
+            "role": "tool",
+            "tool_call_id": "tc-1",
+            "content": json.dumps({"action": "lookup", "status": "complete"}),
+        },
+        {"role": "assistant", "content": ""},
+    ]
+    store = MagicMock()
+    store.create_session = AsyncMock(return_value=(state, "session-token"))
+
+    patches = _patch_config(store)
+    with contextlib.ExitStack() as stack:
+        for item in patches:
+            stack.enter_context(item)
+        response = client.post(
+            "/v1/mobile/text/session",
+            json={"deviceId": "device-123", "authToken": "secret-token"},
+        )
+
+    assert response.status_code == 200
+    history = response.json()["history"]
+    assert len(history) == 3
+    assert history[0]["role"] == "user"
+    assert history[0]["text"] == "Hi there"
+    assert history[1]["role"] == "assistant"
+    assert history[1]["text"] == "Hello!"
+    assert history[2]["role"] == "tool"
+    assert history[2]["toolPayload"]["action"] == "lookup"
+    assert history[2]["toolPayload"]["status"] == "complete"
+    assert history[2]["toolPayload"]["tool_call_id"] == "tc-1"
 
 
 def test_text_session_handshake_backfills_missing_token() -> None:

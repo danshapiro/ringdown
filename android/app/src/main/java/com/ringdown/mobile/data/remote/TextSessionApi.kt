@@ -27,4 +27,14 @@ data class TextSessionResponse(
     @Json(name = "heartbeatTimeoutSeconds") val heartbeatTimeoutSeconds: Int?,
     @Json(name = "tlsPins") val tlsPins: List<String>?,
     @Json(name = "authToken") val authToken: String?,
+    @Json(name = "history") val history: List<TextSessionHistoryMessage>? = null,
+)
+
+data class TextSessionHistoryMessage(
+    @Json(name = "id") val id: String?,
+    @Json(name = "role") val role: String?,
+    @Json(name = "text") val text: String?,
+    @Json(name = "timestampIso") val timestampIso: String?,
+    @Json(name = "messageType") val messageType: String?,
+    @Json(name = "toolPayload") val toolPayload: Map<String, Any?>?,
 )

@@ -1,10 +1,14 @@
 package com.ringdown.mobile.data
 
+import com.ringdown.mobile.chat.ChatMessage
+import com.ringdown.mobile.chat.ChatMessageRole
 import com.ringdown.mobile.data.remote.TextSessionApi
+import com.ringdown.mobile.data.remote.TextSessionHistoryMessage
 import com.ringdown.mobile.data.remote.TextSessionRequest
 import com.ringdown.mobile.data.store.DeviceIdStore
 import com.ringdown.mobile.di.IoDispatcher
 import com.ringdown.mobile.domain.TextSessionBootstrap
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineDispatcher
@@ -73,6 +77,7 @@ class TextSessionRepository @Inject constructor(
                 heartbeatIntervalSeconds = response.heartbeatIntervalSeconds ?: DEFAULT_HEARTBEAT_INTERVAL,
                 heartbeatTimeoutSeconds = response.heartbeatTimeoutSeconds ?: DEFAULT_HEARTBEAT_TIMEOUT,
                 tlsPins = response.tlsPins.orEmpty(),
+                history = response.history.toChatMessages(),
             )
         }
         @Suppress("UNREACHABLE_CODE")
@@ -107,4 +112,33 @@ class TextSessionRepository @Inject constructor(
         private const val DEFAULT_HEARTBEAT_INTERVAL = 15
         private const val DEFAULT_HEARTBEAT_TIMEOUT = 45
     }
+}
+
+private fun List<TextSessionHistoryMessage>?.toChatMessages(): List<ChatMessage> {
+    return this.orEmpty().mapNotNull { it.toChatMessage() }
+}
+
+private fun TextSessionHistoryMessage.toChatMessage(): ChatMessage? {
+    val resolvedRole = when (role?.trim()?.lowercase()) {
+        "assistant" -> ChatMessageRole.ASSISTANT
+        "user" -> ChatMessageRole.USER
+        "tool" -> ChatMessageRole.TOOL
+        else -> return null
+    }
+    val trimmedText = text?.trim().orEmpty()
+    val payload = toolPayload?.takeIf { it.isNotEmpty() }
+    if (resolvedRole != ChatMessageRole.TOOL && trimmedText.isEmpty()) {
+        return null
+    }
+    if (resolvedRole == ChatMessageRole.TOOL && payload == null && trimmedText.isEmpty()) {
+        return null
+    }
+    return ChatMessage(
+        id = id?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString(),
+        role = resolvedRole,
+        text = trimmedText,
+        timestampIso = timestampIso?.takeIf { it.isNotBlank() },
+        messageType = messageType?.takeIf { it.isNotBlank() },
+        toolPayload = payload,
+    )
 }

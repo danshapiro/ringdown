@@ -2,6 +2,8 @@ package com.ringdown.mobile.voice
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import com.google.common.truth.Truth.assertThat
+import com.ringdown.mobile.chat.ChatMessage
+import com.ringdown.mobile.chat.ChatMessageRole
 import com.ringdown.mobile.conversation.ConversationHistoryStore
 import com.ringdown.mobile.data.BackendEnvironment
 import com.ringdown.mobile.data.TextSessionStarter
@@ -59,6 +61,27 @@ class LocalVoiceSessionControllerTest {
         assertThat(greeting.speaker).isEqualTo("assistant-b")
         assertThat(greeting.text).isEqualTo("Welcome aboard.")
         assertThat(greeting.timestampIso).isEqualTo("2025-11-02T00:00:00Z")
+    }
+
+    @Test
+    fun startSeedsConversationHistoryStoreFromBootstrap() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = createHistoryStore(dispatcher)
+        val bootstrapHistory = listOf(
+            ChatMessage(
+                id = "history-1",
+                role = ChatMessageRole.ASSISTANT,
+                text = "Synced greeting",
+                timestampIso = "2025-11-08T03:00:00Z",
+            ),
+        )
+        val controller = createController(dispatcher, store, bootstrapHistory)
+        controller.start("assistant-b")
+        runCurrent()
+
+        val history = store.history.value
+        assertThat(history).hasSize(1)
+        assertThat(history.first().text).isEqualTo("Synced greeting")
     }
 
     @Test
@@ -312,6 +335,8 @@ class LocalVoiceSessionControllerTest {
 
     private fun createController(
         dispatcher: CoroutineDispatcher,
+        store: ConversationHistoryStore = createHistoryStore(dispatcher),
+        bootstrapHistory: List<ChatMessage> = emptyList(),
     ): LocalVoiceSessionController {
         val backendEnvironment = object : BackendEnvironment() {
             override fun baseUrl(): String = "https://example.invalid"
@@ -332,6 +357,7 @@ class LocalVoiceSessionControllerTest {
                 heartbeatIntervalSeconds = 15,
                 heartbeatTimeoutSeconds = 45,
                 tlsPins = emptyList(),
+                history = bootstrapHistory,
             )
         }
         val asrEngine = object : LocalAsrEngine {
@@ -347,7 +373,7 @@ class LocalVoiceSessionControllerTest {
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
-            conversationHistoryStore = createHistoryStore(dispatcher),
+            conversationHistoryStore = store,
         )
     }
 

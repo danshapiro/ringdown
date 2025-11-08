@@ -81,6 +81,7 @@ open class LocalVoiceSessionController @Inject constructor(
                 registerCollectors()
 
                 val bootstrap = textSessionStarter.startTextSession(agent)
+                conversationHistoryStore.setFromChat(bootstrap.history)
                 activeAgent = bootstrap.agent.ifBlank { agent }
                 textSessionClient.connect(bootstrap)
                 asrEngine.start()

@@ -1,5 +1,7 @@
 package com.ringdown.mobile.domain
 
+import com.ringdown.mobile.chat.ChatMessage
+
 data class TextSessionBootstrap(
     val sessionId: String,
     val sessionToken: String,
@@ -10,4 +12,5 @@ data class TextSessionBootstrap(
     val heartbeatIntervalSeconds: Int,
     val heartbeatTimeoutSeconds: Int,
     val tlsPins: List<String>,
+    val history: List<ChatMessage> = emptyList(),
 )

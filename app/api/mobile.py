@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -77,6 +78,114 @@ class MobileTextSessionResponse(BaseModel):
     heartbeat_timeout_seconds: int = Field(..., alias="heartbeatTimeoutSeconds")
     tls_pins: list[str] = Field(default_factory=list, alias="tlsPins")
     auth_token: Optional[str] = Field(default=None, alias="authToken")
+    history: List["MobileConversationMessage"] = Field(default_factory=list, alias="history")
+
+
+class MobileConversationMessage(BaseModel):
+    """Serialised conversation entry shared with mobile clients."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    role: str
+    text: str = ""
+    timestamp_iso: Optional[str] = Field(default=None, alias="timestampIso")
+    message_type: Optional[str] = Field(default=None, alias="messageType")
+    tool_payload: Optional[Dict[str, Any]] = Field(default=None, alias="toolPayload")
+
+
+_HISTORY_LIMIT = 200
+
+
+def _serialise_history(messages: List[Dict[str, Any]] | None) -> List[MobileConversationMessage]:
+    """Convert stored conversation messages into a mobile-friendly format."""
+
+    if not messages:
+        return []
+
+    serialised: List[MobileConversationMessage] = []
+    for entry in messages:
+        role_value = str(entry.get("role") or "").strip().lower()
+        if role_value not in {"assistant", "user", "tool"}:
+            continue
+
+        text_value = _extract_text(entry.get("content"))
+        payload_value = _coerce_tool_payload(role_value, entry)
+        if role_value != "tool" and not text_value:
+            continue
+
+        msg_type = entry.get("messageType") or entry.get("message_type")
+        timestamp_iso = entry.get("timestampIso") or entry.get("timestamp_iso")
+        message_id = entry.get("id") or entry.get("message_id")
+
+        serialised.append(
+            MobileConversationMessage(
+                id=str(message_id or uuid.uuid4()),
+                role=role_value,
+                text=text_value or "",
+                timestamp_iso=str(timestamp_iso).strip() if isinstance(timestamp_iso, str) and timestamp_iso.strip() else None,
+                message_type=str(msg_type).strip() if isinstance(msg_type, str) and msg_type.strip() else None,
+                tool_payload=payload_value,
+            )
+        )
+
+    if len(serialised) > _HISTORY_LIMIT:
+        return serialised[-_HISTORY_LIMIT:]
+    return serialised
+
+
+def _extract_text(content: Any) -> str:
+    """Best-effort string extraction from LLM message content."""
+
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, dict):
+        for key in ("text", "content", "value"):
+            value = content.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    if isinstance(content, list):
+        parts: List[str] = []
+        for chunk in content:
+            if isinstance(chunk, str) and chunk.strip():
+                parts.append(chunk.strip())
+            elif isinstance(chunk, dict):
+                text = chunk.get("text") or chunk.get("content") or chunk.get("value")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        return "\n".join(parts).strip()
+
+    return ""
+
+
+def _coerce_tool_payload(role: str, entry: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Normalise tool payloads so the client can render structured pills."""
+
+    candidate = entry.get("toolPayload") or entry.get("tool_payload")
+    payload = dict(candidate) if isinstance(candidate, dict) else None
+
+    if role == "tool" and payload is None:
+        content = entry.get("content")
+        if isinstance(content, dict):
+            payload = dict(content)
+        elif isinstance(content, str):
+            try:
+                loaded = json.loads(content)
+            except json.JSONDecodeError:
+                loaded = None
+            if isinstance(loaded, dict):
+                payload = loaded
+
+    if payload is not None:
+        tool_call_id = entry.get("tool_call_id") or entry.get("toolCallId")
+        if isinstance(tool_call_id, str) and tool_call_id.strip():
+            payload = dict(payload)
+            payload.setdefault("tool_call_id", tool_call_id.strip())
+
+    return payload
 
 def _resolve_greeting(agent_cfg: Dict[str, Any]) -> Optional[str]:
     candidate = agent_cfg.get("welcome_greeting")
@@ -337,6 +446,8 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
 
     websocket_path = str(text_cfg.get("websocket_path") or "/v1/mobile/text/session")
 
+    history = _serialise_history(state.messages)
+
     logger.info(
         json.dumps(
             {
@@ -360,6 +471,7 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
         heartbeat_timeout_seconds=heartbeat_timeout,
         tls_pins=tls_pins,
         auth_token=configured_token or None,
+        history=history,
     )
 
 

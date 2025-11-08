@@ -1,7 +1,9 @@
 package com.ringdown.mobile.data
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import com.ringdown.mobile.chat.ChatMessageRole
 import com.ringdown.mobile.data.remote.TextSessionApi
+import com.ringdown.mobile.data.remote.TextSessionHistoryMessage
 import com.ringdown.mobile.data.remote.TextSessionRequest
 import com.ringdown.mobile.data.remote.TextSessionResponse
 import com.ringdown.mobile.data.store.DeviceIdStore
@@ -170,6 +172,56 @@ class TextSessionRepositoryTest {
         } catch (error: HttpException) {
             assertEquals(401, error.code())
         }
+    }
+
+    @Test
+    fun populatesConversationHistoryFromResponse() = runTest(dispatcher) {
+        val scope = TestScope(dispatcher)
+        val store = DeviceIdStore(testDataStore(scope))
+
+        val api = object : TextSessionApi {
+            override suspend fun createTextSession(payload: TextSessionRequest): TextSessionResponse {
+                return TextSessionResponse(
+                    sessionId = "session-history",
+                    sessionToken = "session-token",
+                    resumeToken = "resume-token",
+                    websocketPath = "/v1/mobile/text/session",
+                    agent = "Agent Alpha",
+                    expiresAt = "2025-11-02T00:00:00Z",
+                    heartbeatIntervalSeconds = 15,
+                    heartbeatTimeoutSeconds = 45,
+                    tlsPins = emptyList(),
+                    authToken = null,
+                    history = listOf(
+                        TextSessionHistoryMessage(
+                            id = "m1",
+                            role = "user",
+                            text = "Hello",
+                            timestampIso = "2025-11-08T00:00:00Z",
+                            messageType = null,
+                            toolPayload = null,
+                        ),
+                        TextSessionHistoryMessage(
+                            id = "m2",
+                            role = "tool",
+                            text = "",
+                            timestampIso = null,
+                            messageType = "lookup",
+                            toolPayload = mapOf("action" to "lookup"),
+                        ),
+                    ),
+                )
+            }
+        }
+
+        val repository = TextSessionRepository(api, store, dispatcher)
+        val bootstrap = repository.startTextSession(null)
+
+        assertEquals(2, bootstrap.history.size)
+        assertEquals(ChatMessageRole.USER, bootstrap.history.first().role)
+        assertEquals("Hello", bootstrap.history.first().text)
+        assertEquals(ChatMessageRole.TOOL, bootstrap.history.last().role)
+        assertEquals("lookup", bootstrap.history.last().messageType)
     }
 
     private fun unauthorized(): HttpException {
