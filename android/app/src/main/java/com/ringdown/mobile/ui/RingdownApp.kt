@@ -41,6 +41,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import com.ringdown.mobile.chat.ChatConnectionState
@@ -301,6 +302,7 @@ private fun VoiceSessionContent(
             val chatAsTranscripts = chatHistory.map { it.toTranscriptMessage() }
             (chatAsTranscripts + transcripts)
         }
+        val toolExpansionState = remember { mutableStateMapOf<String, Boolean>() }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -329,8 +331,19 @@ private fun VoiceSessionContent(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(combinedTranscripts) { transcript ->
-                        TranscriptBubble(transcript)
+                    itemsIndexed(
+                        items = combinedTranscripts,
+                        key = { index, message -> transcriptKey(message, index) },
+                    ) { index, transcript ->
+                        val key = transcriptKey(transcript, index)
+                        val expanded = toolExpansionState[key] ?: false
+                        TranscriptBubble(
+                            message = transcript,
+                            isExpanded = expanded,
+                            onToggleExpand = {
+                                toolExpansionState[key] = !(toolExpansionState[key] ?: false)
+                            },
+                        )
                     }
                 }
             }
@@ -553,19 +566,6 @@ private fun ChatComposer(
     }
 }
 
-private fun ChatMessage.toTranscriptMessage(): TranscriptMessage {
-    val speaker = when (role) {
-        ChatMessageRole.USER -> "user"
-        ChatMessageRole.ASSISTANT -> "assistant"
-        ChatMessageRole.TOOL -> messageType ?: "tool"
-    }
-    return TranscriptMessage(
-        speaker = speaker,
-        text = text,
-        timestampIso = timestampIso,
-    )
-}
-
 @Composable
 private fun ChatPlaceholder(text: String) {
     Column(
@@ -604,7 +604,25 @@ private fun ChatErrorState(message: String, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun TranscriptBubble(message: TranscriptMessage) {
+private fun TranscriptBubble(
+    message: TranscriptMessage,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
+) {
+    val isTool = message.speaker == "tool" || message.toolPayload.orEmpty().isNotEmpty()
+    if (isTool) {
+        VoiceToolMessageBubble(
+            message = message,
+            isExpanded = isExpanded,
+            onToggle = onToggleExpand,
+        )
+    } else {
+        StandardTranscriptBubble(message)
+    }
+}
+
+@Composable
+private fun StandardTranscriptBubble(message: TranscriptMessage) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -621,4 +639,61 @@ private fun TranscriptBubble(message: TranscriptMessage) {
             style = MaterialTheme.typography.bodyLarge,
         )
     }
+}
+
+@Composable
+private fun VoiceToolMessageBubble(
+    message: TranscriptMessage,
+    isExpanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    val payload = message.toolPayload.orEmpty()
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp)
+            .clickable(enabled = payload.isNotEmpty(), onClick = onToggle),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = stringResource(
+                    id = R.string.chat_tool_title,
+                    message.messageType ?: stringResource(id = R.string.chat_tool_generic),
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (message.text.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (payload.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                if (isExpanded) {
+                    payload.entries.sortedBy { it.key }.forEach { (key, value) ->
+                        Text(
+                            text = "$key: ${value ?: "—"}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                } else {
+                    Text(
+                        text = stringResource(id = R.string.chat_tool_expand_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun transcriptKey(message: TranscriptMessage, index: Int): String {
+    val timestamp = message.timestampIso ?: ""
+    val type = message.messageType ?: ""
+    return "$timestamp|${message.speaker}|$type|$index|${message.text.hashCode()}"
 }
