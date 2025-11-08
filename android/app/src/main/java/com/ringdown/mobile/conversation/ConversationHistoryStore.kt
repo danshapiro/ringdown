@@ -54,7 +54,7 @@ class ConversationHistoryStore @Inject constructor(
         persist(messages.toList())
     }
 
-    fun clear() {
+    fun reset() {
         persist(emptyList())
     }
 

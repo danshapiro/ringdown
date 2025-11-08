@@ -186,6 +186,58 @@ class MainViewModelTest {
     }
 
     @Test
+    fun resetConversationClearsHistoryAndRestartsChat() = runTest {
+        val statuses = ArrayDeque<RegistrationStatus>().apply {
+            add(RegistrationStatus.Approved(agentName = "tester", message = "Approved"))
+        }
+        val gateway = FakeRegistrationGateway(statuses)
+        val dispatcher = dispatcherRule.dispatcher
+        val historyStore = createHistoryStore(dispatcher)
+        val voiceController = RecordingVoiceController(dispatcher, historyStore)
+        val chatGateway = FakeChatGateway(historyStore)
+        val viewModel = MainViewModel(gateway, voiceController, chatGateway, historyStore)
+
+        advanceUntilIdle()
+        voiceController.emitTranscripts(
+            listOf(
+                TranscriptMessage("user", "Hi", "2025-11-08T00:00:00Z"),
+            ),
+        )
+        viewModel.openChatSession()
+        advanceUntilIdle()
+
+        viewModel.resetConversation()
+        advanceUntilIdle()
+
+        assertThat(historyStore.history.value).isEmpty()
+        assertThat(chatGateway.stopCount).isAtLeast(1)
+        assertThat(chatGateway.starts.size).isEqualTo(2)
+    }
+
+    @Test
+    fun resetConversationWhileVoiceActiveRestartsVoice() = runTest {
+        val statuses = ArrayDeque<RegistrationStatus>().apply {
+            add(RegistrationStatus.Approved(agentName = "tester", message = "Approved"))
+        }
+        val gateway = FakeRegistrationGateway(statuses)
+        val dispatcher = dispatcherRule.dispatcher
+        val historyStore = createHistoryStore(dispatcher)
+        val voiceController = RecordingVoiceController(dispatcher, historyStore)
+        val viewModel = MainViewModel(gateway, voiceController, FakeChatGateway(historyStore), historyStore)
+
+        advanceUntilIdle()
+        viewModel.onPermissionResult(true)
+        voiceController.emit(VoiceConnectionState.Connected(emptyList()))
+        advanceUntilIdle()
+
+        viewModel.resetConversation()
+        advanceUntilIdle()
+
+        assertThat(voiceController.stopCount).isAtLeast(1)
+        assertThat(voiceController.starts.size).isGreaterThan(0)
+    }
+
+    @Test
     fun openChatSeedsHistoryFromVoiceTranscripts() = runTest {
         val statuses = ArrayDeque<RegistrationStatus>().apply {
             add(RegistrationStatus.Approved(agentName = "tester", message = "Approved!"))
@@ -279,6 +331,7 @@ class MainViewModelTest {
         override val state: StateFlow<VoiceConnectionState> = _state
 
         val starts = mutableListOf<String?>()
+        var stopCount: Int = 0
 
         override fun start(agent: String?) {
             starts += agent
@@ -286,7 +339,12 @@ class MainViewModelTest {
         }
 
         override fun stop() {
+            stopCount += 1
             _state.value = VoiceConnectionState.Idle
+        }
+
+        fun emit(value: VoiceConnectionState) {
+            _state.value = value
         }
 
         fun emitTranscripts(transcripts: List<TranscriptMessage>) {

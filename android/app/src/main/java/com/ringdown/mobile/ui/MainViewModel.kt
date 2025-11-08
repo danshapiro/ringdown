@@ -294,6 +294,22 @@ class MainViewModel @Inject constructor(
         chatController.start(agent)
     }
 
+    fun resetConversation() {
+        val snapshot = _state.value
+        conversationHistoryStore.reset()
+        _state.update { it.copy(chatHistory = emptyList(), chatInput = "") }
+        if (snapshot.isChatVisible) {
+            chatController.stop()
+            val agent = resolvedAgentName()
+            if (agent != null) {
+                chatController.start(agent)
+            }
+        } else if (snapshot.voiceState is VoiceConnectionState.Connected || snapshot.voiceState is VoiceConnectionState.Connecting) {
+            voiceController.stop()
+            startVoiceSession()
+        }
+    }
+
     private fun maybeStartVoiceSession() {
         val current = _state.value
         val status = current.registrationStatus

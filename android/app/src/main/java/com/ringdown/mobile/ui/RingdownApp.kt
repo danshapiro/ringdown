@@ -63,6 +63,7 @@ fun RingdownApp(
     onSendChatMessage: () -> Unit,
     onChatVoiceSwitch: () -> Unit,
     onChatRetry: () -> Unit,
+    onResetConversation: () -> Unit,
     onCheckAgain: () -> Unit,
     onErrorDismissed: () -> Unit,
 ) {
@@ -106,6 +107,7 @@ fun RingdownApp(
                     onClose = onCloseChat,
                     onSwitchToVoice = onChatVoiceSwitch,
                     onRetry = onChatRetry,
+                    onReset = onResetConversation,
                 )
             } else {
                 when (val voiceState = state.voiceState) {
@@ -349,6 +351,7 @@ private fun ChatScreen(
     onClose: () -> Unit,
     onSwitchToVoice: () -> Unit,
     onRetry: () -> Unit,
+    onReset: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -364,6 +367,10 @@ private fun ChatScreen(
                 Text(text = stringResource(id = R.string.chat_close_button))
             }
             Spacer(modifier = Modifier.weight(1f))
+            TextButton(onClick = onReset) {
+                Text(text = stringResource(id = R.string.chat_reset_button))
+            }
+            Spacer(modifier = Modifier.width(8.dp))
             Button(onClick = onSwitchToVoice) {
                 Text(text = stringResource(id = R.string.chat_voice_button))
             }

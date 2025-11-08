@@ -79,6 +79,7 @@ class MainActivity : ComponentActivity() {
                     onChatVoiceSwitch = viewModel::switchChatToVoice,
                     onChatRetry = viewModel::retryChatSession,
                     onOpenChat = viewModel::openChatSession,
+                    onResetConversation = viewModel::resetConversation,
                 )
             }
         }
@@ -102,6 +103,7 @@ private fun MainScreenContent(
     onChatVoiceSwitch: () -> Unit,
     onChatRetry: () -> Unit,
     onOpenChat: () -> Unit,
+    onResetConversation: () -> Unit,
 ) {
     RingdownApp(
         state = state,
@@ -113,6 +115,7 @@ private fun MainScreenContent(
         onSendChatMessage = onSendChatMessage,
         onChatVoiceSwitch = onChatVoiceSwitch,
         onChatRetry = onChatRetry,
+        onResetConversation = onResetConversation,
         onCheckAgain = viewModel::onCheckAgainClicked,
         onErrorDismissed = viewModel::acknowledgeError,
     )

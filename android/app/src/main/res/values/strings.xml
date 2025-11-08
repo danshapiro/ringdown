@@ -24,6 +24,7 @@
     <string name="control_capture_notification_channel">Debug audio capture</string>
     <string name="chat_close_button">Close</string>
     <string name="chat_voice_button">Voice</string>
+    <string name="chat_reset_button">Reset</string>
     <string name="chat_input_placeholder">Type a message…</string>
     <string name="chat_send_button">Send</string>
     <string name="chat_connecting">Connecting to your assistant…</string>
