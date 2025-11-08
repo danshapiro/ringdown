@@ -38,6 +38,16 @@ def _structured_log(level: str, event: str, **fields: Any) -> None:
     log_method(message)
 
 
+def _normalise_source(value: Any | None) -> str | None:
+    """Return a trimmed source identifier if provided."""
+
+    if isinstance(value, str):
+        candidate = value.strip()
+        if candidate:
+            return candidate
+    return None
+
+
 async def _send_json(ws: WebSocket, payload: Dict[str, Any]) -> None:
     """Safely send JSON data if the connection remains open."""
 
@@ -185,20 +195,22 @@ async def mobile_text_session(ws: WebSocket) -> None:
                 )
 
     user_buffer: list[str] = []
+    buffer_source: str | None = None
     processing_lock = asyncio.Lock()
 
-    async def process_user_text(text: str, utterance_id: str | None) -> None:
+    async def process_user_text(text: str, utterance_id: str | None, source: str | None) -> None:
         if not text:
             return
 
         async with processing_lock:
+            resolved_source = source or _SESSION_SOURCE
             try:
                 METRIC_MESSAGES.labels(role="user").inc()
             except Exception:
                 _structured_log("warning", "mobile_text_session.metric_error", role="user")
 
             try:
-                await run_in_threadpool(log_turn, "user", text, source=_SESSION_SOURCE)
+                await run_in_threadpool(log_turn, "user", text, source=resolved_source)
             except Exception as exc:
                 _structured_log(
                     "warning",
@@ -223,6 +235,7 @@ async def mobile_text_session(ws: WebSocket) -> None:
                 "session_id": session_id,
                 "device_id": device_id,
                 "utterance_id": utterance_id,
+                "source": resolved_source,
             }
 
             assistant_full: list[str] = []
@@ -356,6 +369,10 @@ async def mobile_text_session(ws: WebSocket) -> None:
                     )
                     continue
 
+                message_source = _normalise_source(message.get("source"))
+                if message_source:
+                    buffer_source = message_source
+
                 user_buffer.append(token_value)
                 final_flag = bool(message.get("final", msg_type == "user_message"))
                 utterance_id = message.get("utteranceId") or message.get("utterance_id")
@@ -363,11 +380,14 @@ async def mobile_text_session(ws: WebSocket) -> None:
                 if final_flag:
                     user_text = "".join(user_buffer).strip()
                     user_buffer.clear()
-                    await process_user_text(user_text, utterance_id)
+                    source_for_turn = buffer_source
+                    buffer_source = None
+                    await process_user_text(user_text, utterance_id, source_for_turn)
                 continue
 
             if msg_type == "cancel":
                 user_buffer.clear()
+                buffer_source = None
                 await _send_json(ws, {"type": "ack", "event": "cancelled"})
                 continue
 

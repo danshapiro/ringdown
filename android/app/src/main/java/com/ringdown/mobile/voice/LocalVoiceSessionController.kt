@@ -282,7 +282,12 @@ open class LocalVoiceSessionController @Inject constructor(
 
         if (delta.isNotEmpty()) {
             sessionScope.launch {
-                textSessionClient.sendUserToken(delta, final = false, utteranceId = event.utteranceId)
+                textSessionClient.sendUserToken(
+                    delta,
+                    final = false,
+                    utteranceId = event.utteranceId,
+                    source = USER_MESSAGE_SOURCE,
+                )
             }
             outgoing.emitted += delta
             outgoing.hasSentTokens = true
@@ -317,9 +322,18 @@ open class LocalVoiceSessionController @Inject constructor(
 
         sessionScope.launch {
             if (outgoing?.hasSentTokens == true) {
-                textSessionClient.sendUserToken("", final = true, utteranceId = event.utteranceId)
+                textSessionClient.sendUserToken(
+                    "",
+                    final = true,
+                    utteranceId = event.utteranceId,
+                    source = USER_MESSAGE_SOURCE,
+                )
             } else {
-                textSessionClient.sendUserMessage(payload, utteranceId = event.utteranceId)
+                textSessionClient.sendUserMessage(
+                    payload,
+                    utteranceId = event.utteranceId,
+                    source = USER_MESSAGE_SOURCE,
+                )
             }
         }
     }
@@ -499,5 +513,6 @@ open class LocalVoiceSessionController @Inject constructor(
     companion object {
         private const val MAX_TOKEN_LOG_LENGTH = 160
         private const val STOP_JOB_TIMEOUT_MILLIS = 5_000L
+        private const val USER_MESSAGE_SOURCE = "android-local"
     }
 }

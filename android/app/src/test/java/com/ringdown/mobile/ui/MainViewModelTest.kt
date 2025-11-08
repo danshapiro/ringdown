@@ -184,8 +184,20 @@ class MainViewModelTest {
     ) {
         override suspend fun connect(bootstrap: TextSessionBootstrap) {}
         override suspend fun disconnect() {}
-        override suspend fun sendUserToken(token: String, final: Boolean, utteranceId: String?) {}
-        override suspend fun sendUserMessage(text: String, utteranceId: String?) {}
+        override suspend fun sendUserToken(
+            token: String,
+            final: Boolean,
+            utteranceId: String?,
+            source: String?,
+        ) {
+        }
+
+        override suspend fun sendUserMessage(
+            text: String,
+            utteranceId: String?,
+            source: String?,
+        ) {
+        }
         override suspend fun sendCancel() {}
     }
 }

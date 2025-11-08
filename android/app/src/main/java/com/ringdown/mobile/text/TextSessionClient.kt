@@ -125,7 +125,12 @@ open class TextSessionClient @Inject constructor(
         return true
     }
 
-    open suspend fun sendUserToken(token: String, final: Boolean, utteranceId: String?) {
+    open suspend fun sendUserToken(
+        token: String,
+        final: Boolean,
+        utteranceId: String?,
+        source: String? = null,
+    ) {
         sendMessage(
             JSONObject()
                 .put("type", "user_token")
@@ -135,11 +140,18 @@ open class TextSessionClient @Inject constructor(
                     if (!utteranceId.isNullOrBlank()) {
                         obj.put("utteranceId", utteranceId)
                     }
+                    if (!source.isNullOrBlank()) {
+                        obj.put("source", source)
+                    }
                 },
         )
     }
 
-    open suspend fun sendUserMessage(text: String, utteranceId: String?) {
+    open suspend fun sendUserMessage(
+        text: String,
+        utteranceId: String?,
+        source: String? = null,
+    ) {
         sendMessage(
             JSONObject()
                 .put("type", "user_message")
@@ -147,6 +159,9 @@ open class TextSessionClient @Inject constructor(
                 .also { obj ->
                     if (!utteranceId.isNullOrBlank()) {
                         obj.put("utteranceId", utteranceId)
+                    }
+                    if (!source.isNullOrBlank()) {
+                        obj.put("source", source)
                     }
                 },
         )

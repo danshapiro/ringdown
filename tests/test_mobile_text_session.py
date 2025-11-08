@@ -86,7 +86,9 @@ def test_mobile_text_session_streams_tokens(client: TestClient) -> None:
             assert greeting["final"] is True
             assert greeting["token"] == "Hi there!"
 
-            websocket.send_json({"type": "user_token", "token": "Hello", "final": True})
+            websocket.send_json(
+                {"type": "user_token", "token": "Hello", "final": True, "source": "android-local"}
+            )
             assistant = websocket.receive_json()
             assert assistant["type"] == "assistant_token"
             assert assistant["final"] is True
@@ -96,7 +98,7 @@ def test_mobile_text_session_streams_tokens(client: TestClient) -> None:
         store.update_messages.assert_awaited()
         store.mark_disconnected.assert_awaited_with("session-1")
         mock_log.assert_any_call("bot", "Hi there!", source="mobile-text")
-        mock_log.assert_any_call("user", "Hello", source="mobile-text")
+        mock_log.assert_any_call("user", "Hello", source="android-local")
         mock_log.assert_any_call("bot", "Response ready.", source="mobile-text")
 
 
@@ -140,6 +142,40 @@ def test_mobile_text_session_forwards_tool_markers(client: TestClient) -> None:
             assert assistant["token"] == "Finished."
 
 
+def test_mobile_text_session_defaults_source_when_not_provided(client: TestClient) -> None:
+    metric = _stub_metric()
+
+    async def fake_stream_response(*args, **kwargs):
+        yield "Response ready."
+
+    state = _build_state()
+    store = MagicMock()
+    store.consume_session_token = AsyncMock(return_value=state)
+    store.update_messages = AsyncMock()
+    store.mark_disconnected = AsyncMock()
+
+    with patch("app.api.mobile_text.get_text_session_store", return_value=store), patch(
+        "app.api.mobile_text.stream_response", fake_stream_response
+    ), patch(
+        "app.api.mobile_text.log_turn"
+    ) as mock_log, patch(
+        "app.api.mobile_text.litellm.token_counter", return_value=2
+    ), patch(
+        "app.api.mobile_text.METRIC_MESSAGES", metric
+    ):
+        with client.websocket_connect(
+            "/v1/mobile/text/session",
+            headers={"x-ringdown-session-token": "session-token"},
+        ) as websocket:
+            websocket.receive_json()  # ready
+            websocket.receive_json()  # greeting
+
+            websocket.send_json({"type": "user_message", "text": "Hello", "final": True})
+            websocket.receive_json()  # assistant
+
+    mock_log.assert_any_call("user", "Hello", source="mobile-text")
+
+
 def test_mobile_text_session_rejects_unknown_session_token(client: TestClient) -> None:
     store = MagicMock()
     store.consume_session_token = AsyncMock(side_effect=KeyError("missing"))
@@ -154,4 +190,3 @@ def test_mobile_text_session_rejects_unknown_session_token(client: TestClient) -
                 assert exc.value.code == status.WS_1008_POLICY_VIOLATION
         except WebSocketDisconnect as exc:
             assert exc.code == status.WS_1008_POLICY_VIOLATION
-
