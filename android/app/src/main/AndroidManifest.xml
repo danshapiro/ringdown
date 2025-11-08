@@ -29,6 +29,10 @@
             </intent-filter>
         </activity>
 
+        <receiver
+            android:name=".voice.VoiceSessionActionReceiver"
+            android:exported="false" />
+
     </application>
 
 </manifest>

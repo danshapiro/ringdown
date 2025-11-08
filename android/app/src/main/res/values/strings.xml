@@ -14,6 +14,11 @@
     <string name="voice_reconnecting_message">Reconnecting… hold tight.</string>
     <string name="voice_session_title">Live conversation</string>
     <string name="voice_transcript_empty">Waiting for the first response...</string>
+    <string name="voice_notification_channel">Live assistant</string>
+    <string name="voice_notification_title">Ringdown</string>
+    <string name="voice_notification_connected">Live assistant active</string>
+    <string name="voice_notification_connecting">Connecting to your assistant…</string>
+    <string name="voice_notification_reconnecting">Reconnecting to your assistant…</string>
     <string name="control_capture_notification_title">Harness capture active</string>
     <string name="control_capture_notification_text">Capturing playback audio for debugging.</string>
     <string name="control_capture_notification_channel">Debug audio capture</string>
