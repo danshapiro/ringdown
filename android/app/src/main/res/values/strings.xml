@@ -16,4 +16,11 @@
     <string name="control_capture_notification_title">Harness capture active</string>
     <string name="control_capture_notification_text">Capturing playback audio for debugging.</string>
     <string name="control_capture_notification_channel">Debug audio capture</string>
+    <string name="chat_close_button">Close</string>
+    <string name="chat_voice_button">Voice</string>
+    <string name="chat_input_placeholder">Type a message…</string>
+    <string name="chat_send_button">Send</string>
+    <string name="chat_connecting">Connecting to your assistant…</string>
+    <string name="chat_empty_state">Start typing to chat with your assistant.</string>
+    <string name="chat_retry_button">Retry</string>
 </resources>

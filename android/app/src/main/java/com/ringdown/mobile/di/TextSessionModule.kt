@@ -1,5 +1,7 @@
 package com.ringdown.mobile.di
 
+import com.ringdown.mobile.chat.ChatSessionController
+import com.ringdown.mobile.chat.ChatSessionGateway
 import com.ringdown.mobile.data.TextSessionRepository
 import com.ringdown.mobile.data.TextSessionStarter
 import dagger.Binds
@@ -17,4 +19,10 @@ abstract class TextSessionModule {
     abstract fun bindTextSessionStarter(
         repository: TextSessionRepository,
     ): TextSessionStarter
+
+    @Binds
+    @Singleton
+    abstract fun bindChatSessionGateway(
+        controller: ChatSessionController,
+    ): ChatSessionGateway
 }

@@ -11,11 +11,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
@@ -24,6 +26,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -32,9 +35,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import com.ringdown.mobile.chat.ChatConnectionState
+import com.ringdown.mobile.chat.ChatMessage
+import com.ringdown.mobile.chat.ChatMessageRole
 import com.ringdown.mobile.domain.RegistrationStatus
 import com.ringdown.mobile.R
 import com.ringdown.mobile.voice.TranscriptMessage
@@ -47,6 +56,11 @@ fun RingdownApp(
     onReconnect: () -> Unit,
     onHangUp: () -> Unit,
     onOpenChat: () -> Unit,
+    onCloseChat: () -> Unit,
+    onChatInputChanged: (String) -> Unit,
+    onSendChatMessage: () -> Unit,
+    onChatVoiceSwitch: () -> Unit,
+    onChatRetry: () -> Unit,
     onCheckAgain: () -> Unit,
     onErrorDismissed: () -> Unit,
 ) {
@@ -80,21 +94,33 @@ fun RingdownApp(
                 .padding(padding),
             color = MaterialTheme.colorScheme.background,
         ) {
-            when (val voiceState = state.voiceState) {
-                is VoiceConnectionState.Connected -> VoiceSessionContent(
-                    transcripts = voiceState.transcripts,
-                    onHangUp = onHangUp,
+            if (state.isChatVisible) {
+                ChatScreen(
+                    chatState = state.chatState,
+                    inputValue = state.chatInput,
+                    onInputChange = onChatInputChanged,
+                    onSend = onSendChatMessage,
+                    onClose = onCloseChat,
+                    onSwitchToVoice = onChatVoiceSwitch,
+                    onRetry = onChatRetry,
                 )
-
-                is VoiceConnectionState.Connecting -> VoiceSessionConnecting(onHangUp)
-
-                else -> when (val status = state.registrationStatus) {
-                    is RegistrationStatus.Denied -> DeniedContent(status.message)
-                    else -> IdleContent(
-                        state = state,
-                        onReconnect = onReconnect,
-                        onOpenChat = onOpenChat,
+            } else {
+                when (val voiceState = state.voiceState) {
+                    is VoiceConnectionState.Connected -> VoiceSessionContent(
+                        transcripts = voiceState.transcripts,
+                        onHangUp = onHangUp,
                     )
+
+                    is VoiceConnectionState.Connecting -> VoiceSessionConnecting(onHangUp)
+
+                    else -> when (val status = state.registrationStatus) {
+                        is RegistrationStatus.Denied -> DeniedContent(status.message)
+                        else -> IdleContent(
+                            state = state,
+                            onReconnect = onReconnect,
+                            onOpenChat = onOpenChat,
+                        )
+                    }
                 }
             }
 
@@ -120,6 +146,12 @@ private fun IdleContent(
     onReconnect: () -> Unit,
     onOpenChat: () -> Unit,
 ) {
+    val chatEnabled = state.registrationStatus is RegistrationStatus.Approved
+    val connectLabel = if (state.registrationStatus is RegistrationStatus.Approved) {
+        stringResource(id = R.string.reconnect_button)
+    } else {
+        stringResource(id = R.string.connect_button)
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -128,11 +160,11 @@ private fun IdleContent(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Button(onClick = onReconnect) {
-            Text(text = stringResource(id = R.string.reconnect_button))
+        Button(onClick = onReconnect, enabled = !state.isLoading) {
+            Text(text = connectLabel)
         }
         Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = onOpenChat, enabled = false) {
+        Button(onClick = onOpenChat, enabled = chatEnabled) {
             Text(text = stringResource(id = R.string.open_chat_button))
         }
         if (state.showMicrophoneReminder && !state.microphonePermissionGranted) {
@@ -286,6 +318,174 @@ private fun VoiceSessionContent(
         }
         Button(onClick = onHangUp, modifier = Modifier.align(Alignment.BottomCenter)) {
             Text(text = stringResource(id = R.string.hang_up_button))
+        }
+    }
+}
+
+@Composable
+private fun ChatScreen(
+    chatState: ChatConnectionState,
+    inputValue: String,
+    onInputChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onClose: () -> Unit,
+    onSwitchToVoice: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 24.dp)
+            .testTag("chat-screen"),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onClose) {
+                Text(text = stringResource(id = R.string.chat_close_button))
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            Button(onClick = onSwitchToVoice) {
+                Text(text = stringResource(id = R.string.chat_voice_button))
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        val composerEnabled = chatState is ChatConnectionState.Connected
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+        ) {
+            when (chatState) {
+                ChatConnectionState.Idle -> ChatPlaceholder(text = stringResource(id = R.string.chat_empty_state))
+                ChatConnectionState.Connecting -> ChatPlaceholder(text = stringResource(id = R.string.chat_connecting))
+                is ChatConnectionState.Failed -> ChatErrorState(message = chatState.reason, onRetry = onRetry)
+                is ChatConnectionState.Connected -> ChatTranscriptList(messages = chatState.messages)
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        ChatComposer(
+            value = inputValue,
+            enabled = composerEnabled,
+            onValueChange = onInputChange,
+            onSend = onSend,
+        )
+    }
+}
+
+@Composable
+private fun ChatTranscriptList(messages: List<ChatMessage>) {
+    if (messages.isEmpty()) {
+        ChatPlaceholder(text = stringResource(id = R.string.chat_empty_state))
+        return
+    }
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("chat-list"),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(messages, key = { it.id }) { message ->
+            ChatMessageBubble(message)
+        }
+    }
+}
+
+@Composable
+private fun ChatMessageBubble(message: ChatMessage) {
+    val isUser = message.role == ChatMessageRole.USER
+    val background = if (isUser) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    val contentColor = if (isUser) {
+        MaterialTheme.colorScheme.onPrimary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
+    ) {
+        Surface(
+            color = background,
+            contentColor = contentColor,
+            shape = MaterialTheme.shapes.medium,
+        ) {
+            Text(
+                text = message.text,
+                modifier = Modifier.padding(12.dp),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatComposer(
+    value: String,
+    enabled: Boolean,
+    onValueChange: (String) -> Unit,
+    onSend: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            modifier = Modifier.weight(1f),
+            value = value,
+            onValueChange = onValueChange,
+            enabled = enabled,
+            placeholder = { Text(text = stringResource(id = R.string.chat_input_placeholder)) },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { onSend() }),
+            singleLine = true,
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Button(
+            onClick = onSend,
+            enabled = enabled && value.isNotBlank(),
+        ) {
+            Text(text = stringResource(id = R.string.chat_send_button))
+        }
+    }
+}
+
+@Composable
+private fun ChatPlaceholder(text: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun ChatErrorState(message: String, onRetry: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.error,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Button(onClick = onRetry) {
+            Text(text = stringResource(id = R.string.chat_retry_button))
         }
     }
 }

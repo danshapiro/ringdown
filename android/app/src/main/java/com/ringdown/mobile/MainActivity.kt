@@ -73,6 +73,12 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onHangUp = viewModel::stopVoiceSession,
+                    onCloseChat = viewModel::closeChatSession,
+                    onChatInputChanged = viewModel::onChatInputChanged,
+                    onSendChatMessage = viewModel::sendChatMessage,
+                    onChatVoiceSwitch = viewModel::switchChatToVoice,
+                    onChatRetry = viewModel::retryChatSession,
+                    onOpenChat = viewModel::openChatSession,
                 )
             }
         }
@@ -90,12 +96,23 @@ private fun MainScreenContent(
     state: MainUiState,
     onReconnect: () -> Unit,
     onHangUp: () -> Unit,
+    onCloseChat: () -> Unit,
+    onChatInputChanged: (String) -> Unit,
+    onSendChatMessage: () -> Unit,
+    onChatVoiceSwitch: () -> Unit,
+    onChatRetry: () -> Unit,
+    onOpenChat: () -> Unit,
 ) {
     RingdownApp(
         state = state,
         onReconnect = onReconnect,
         onHangUp = onHangUp,
-        onOpenChat = { /* Chat flow to follow in ringdown-11 */ },
+        onOpenChat = onOpenChat,
+        onCloseChat = onCloseChat,
+        onChatInputChanged = onChatInputChanged,
+        onSendChatMessage = onSendChatMessage,
+        onChatVoiceSwitch = onChatVoiceSwitch,
+        onChatRetry = onChatRetry,
         onCheckAgain = viewModel::onCheckAgainClicked,
         onErrorDismissed = viewModel::acknowledgeError,
     )

@@ -1,6 +1,8 @@
 package com.ringdown.mobile.ui
 
 import com.google.common.truth.Truth.assertThat
+import com.ringdown.mobile.chat.ChatConnectionState
+import com.ringdown.mobile.chat.ChatSessionGateway
 import com.ringdown.mobile.data.BackendEnvironment
 import com.ringdown.mobile.data.DeviceDescriptor
 import com.ringdown.mobile.data.RegistrationGateway
@@ -43,7 +45,7 @@ class MainViewModelVoiceTest {
     fun voiceStateUpdatesPropagateToUiState() = runTest {
         val dispatcher = dispatcherRule.dispatcher
         val voiceController = RecordingVoiceController(dispatcher)
-        val viewModel = MainViewModel(registrationGateway, voiceController)
+        val viewModel = MainViewModel(registrationGateway, voiceController, FakeChatGateway())
 
         voiceController.emit(VoiceConnectionState.Connecting)
         advanceUntilIdle()
@@ -56,7 +58,7 @@ class MainViewModelVoiceTest {
     fun voiceFailureSurfacesError() = runTest {
         val dispatcher = dispatcherRule.dispatcher
         val voiceController = RecordingVoiceController(dispatcher)
-        val viewModel = MainViewModel(registrationGateway, voiceController)
+        val viewModel = MainViewModel(registrationGateway, voiceController, FakeChatGateway())
 
         voiceController.emit(VoiceConnectionState.Failed("failure"))
         advanceUntilIdle()
@@ -134,5 +136,13 @@ class MainViewModelVoiceTest {
         ) {
         }
         override suspend fun sendCancel() {}
+    }
+
+    private class FakeChatGateway : ChatSessionGateway {
+        private val _state = MutableStateFlow<ChatConnectionState>(ChatConnectionState.Idle)
+        override val state: StateFlow<ChatConnectionState> = _state
+        override fun start(agent: String?) {}
+        override fun stop() {}
+        override fun sendMessage(text: String) {}
     }
 }

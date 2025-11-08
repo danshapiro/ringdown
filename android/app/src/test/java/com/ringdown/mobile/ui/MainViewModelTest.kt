@@ -1,6 +1,8 @@
 package com.ringdown.mobile.ui
 
 import com.google.common.truth.Truth.assertThat
+import com.ringdown.mobile.chat.ChatConnectionState
+import com.ringdown.mobile.chat.ChatSessionGateway
 import com.ringdown.mobile.data.BackendEnvironment
 import com.ringdown.mobile.data.DeviceDescriptor
 import com.ringdown.mobile.data.RegistrationGateway
@@ -53,7 +55,7 @@ class MainViewModelTest {
 
         val dispatcher = dispatcherRule.dispatcher
         val voiceController = RecordingVoiceController(dispatcher)
-        val viewModel = MainViewModel(gateway, voiceController)
+        val viewModel = MainViewModel(gateway, voiceController, FakeChatGateway())
 
         viewModel.onPermissionResult(true)
 
@@ -92,7 +94,7 @@ class MainViewModelTest {
 
         val dispatcher = dispatcherRule.dispatcher
         val voiceController = RecordingVoiceController(dispatcher)
-        val viewModel = MainViewModel(gateway, voiceController)
+        val viewModel = MainViewModel(gateway, voiceController, FakeChatGateway())
 
         viewModel.onPermissionResult(false)
 
@@ -199,5 +201,13 @@ class MainViewModelTest {
         ) {
         }
         override suspend fun sendCancel() {}
+    }
+
+    private class FakeChatGateway : ChatSessionGateway {
+        private val _state = MutableStateFlow<ChatConnectionState>(ChatConnectionState.Idle)
+        override val state: StateFlow<ChatConnectionState> = _state
+        override fun start(agent: String?) {}
+        override fun stop() {}
+        override fun sendMessage(text: String) {}
     }
 }

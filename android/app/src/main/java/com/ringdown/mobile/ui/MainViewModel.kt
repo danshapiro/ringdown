@@ -2,6 +2,8 @@ package com.ringdown.mobile.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.ringdown.mobile.chat.ChatConnectionState
+import com.ringdown.mobile.chat.ChatSessionGateway
 import com.ringdown.mobile.data.DeviceDescriptor
 import com.ringdown.mobile.data.RegistrationException
 import com.ringdown.mobile.data.RegistrationGateway
@@ -30,12 +32,16 @@ data class MainUiState(
     val pendingAutoConnect: Boolean = false,
     val permissionRequestVersion: Int = 0,
     val voiceState: VoiceConnectionState = VoiceConnectionState.Idle,
+    val isChatVisible: Boolean = false,
+    val chatState: ChatConnectionState = ChatConnectionState.Idle,
+    val chatInput: String = "",
 )
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val registrationGateway: RegistrationGateway,
     private val voiceController: LocalVoiceSessionController,
+    private val chatController: ChatSessionGateway,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MainUiState())
@@ -59,6 +65,17 @@ class MainViewModel @Inject constructor(
 
                         else -> current.copy(voiceState = voiceState)
                     }
+                }
+            }
+        }
+        viewModelScope.launch {
+            chatController.state.collect { chatState ->
+                _state.update { current ->
+                    var next = current.copy(chatState = chatState)
+                    if (chatState is ChatConnectionState.Failed && current.isChatVisible) {
+                        next = next.copy(errorMessage = chatState.reason)
+                    }
+                    next
                 }
             }
         }
@@ -186,11 +203,14 @@ class MainViewModel @Inject constructor(
         }
 
         val agent = status.agentName ?: current.lastApprovedAgent
+        chatController.stop()
         _state.update {
             it.copy(
                 showMicrophoneReminder = false,
                 pendingAutoConnect = false,
                 permissionRequestVersion = it.permissionRequestVersion,
+                isChatVisible = false,
+                chatInput = "",
             )
         }
         voiceController.start(agent)
@@ -205,6 +225,60 @@ class MainViewModel @Inject constructor(
         voiceController.stop()
     }
 
+    fun openChatSession() {
+        val status = _state.value.registrationStatus
+        if (status !is RegistrationStatus.Approved) {
+            _state.update { it.copy(errorMessage = "Device pending approval.") }
+            return
+        }
+        val agent = resolvedAgentName() ?: run {
+            _state.update { it.copy(errorMessage = "No agent configured for this device.") }
+            return
+        }
+        voiceController.stop()
+        chatController.start(agent)
+        _state.update {
+            it.copy(
+                isChatVisible = true,
+                chatInput = "",
+                pendingAutoConnect = false,
+                showMicrophoneReminder = false,
+            )
+        }
+    }
+
+    fun closeChatSession() {
+        chatController.stop()
+        _state.update { it.copy(isChatVisible = false, chatInput = "") }
+    }
+
+    fun onChatInputChanged(value: String) {
+        _state.update { it.copy(chatInput = value) }
+    }
+
+    fun sendChatMessage() {
+        val text = _state.value.chatInput.trim()
+        if (text.isEmpty()) {
+            return
+        }
+        chatController.sendMessage(text)
+        _state.update { it.copy(chatInput = "") }
+    }
+
+    fun switchChatToVoice() {
+        closeChatSession()
+        startVoiceSession()
+    }
+
+    fun retryChatSession() {
+        val agent = resolvedAgentName() ?: return
+        if (!_state.value.isChatVisible) {
+            openChatSession()
+            return
+        }
+        chatController.start(agent)
+    }
+
     private fun maybeStartVoiceSession() {
         val current = _state.value
         val status = current.registrationStatus
@@ -213,9 +287,18 @@ class MainViewModel @Inject constructor(
         startVoiceSession()
     }
 
+    private fun resolvedAgentName(): String? {
+        val status = _state.value.registrationStatus
+        return when (status) {
+            is RegistrationStatus.Approved -> status.agentName ?: _state.value.lastApprovedAgent
+            else -> _state.value.lastApprovedAgent
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         voiceController.stop()
+        chatController.stop()
     }
 
     companion object {
