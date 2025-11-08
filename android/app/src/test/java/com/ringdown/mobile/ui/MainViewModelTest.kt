@@ -112,6 +112,68 @@ class MainViewModelTest {
         assertThat(state.permissionRequestVersion).isGreaterThan(0)
     }
 
+    @Test
+    fun openChatStartsSessionAndAllowsSend() = runTest {
+        val statuses = ArrayDeque<RegistrationStatus>().apply {
+            add(
+                RegistrationStatus.Approved(
+                    agentName = "tester",
+                    message = "Approved!",
+                ),
+            )
+        }
+        val gateway = FakeRegistrationGateway(statuses)
+        val dispatcher = dispatcherRule.dispatcher
+        val voiceController = RecordingVoiceController(dispatcher)
+        val chatGateway = FakeChatGateway()
+        val viewModel = MainViewModel(gateway, voiceController, chatGateway)
+
+        advanceUntilIdle()
+
+        viewModel.openChatSession()
+        advanceUntilIdle()
+
+        var state = viewModel.state.value
+        assertThat(state.isChatVisible).isTrue()
+        assertThat(chatGateway.starts).containsExactly("tester")
+        assertThat(state.chatState).isInstanceOf(ChatConnectionState.Connected::class.java)
+
+        viewModel.onChatInputChanged("Hello world")
+        viewModel.sendChatMessage()
+        advanceUntilIdle()
+
+        state = viewModel.state.value
+        assertThat(state.chatInput).isEmpty()
+        assertThat(chatGateway.sentMessages).containsExactly("Hello world")
+    }
+
+    @Test
+    fun switchChatToVoiceClosesChat() = runTest {
+        val statuses = ArrayDeque<RegistrationStatus>().apply {
+            add(RegistrationStatus.Approved(agentName = "tester", message = "Approved"))
+        }
+        val gateway = FakeRegistrationGateway(statuses)
+        val dispatcher = dispatcherRule.dispatcher
+        val voiceController = RecordingVoiceController(dispatcher)
+        val chatGateway = FakeChatGateway()
+        val viewModel = MainViewModel(gateway, voiceController, chatGateway)
+
+        advanceUntilIdle()
+        viewModel.openChatSession()
+        advanceUntilIdle()
+
+        viewModel.onPermissionResult(true)
+        advanceUntilIdle()
+
+        viewModel.switchChatToVoice()
+        advanceUntilIdle()
+
+        val state = viewModel.state.value
+        assertThat(state.isChatVisible).isFalse()
+        assertThat(voiceController.starts.last()).isEqualTo("tester")
+        assertThat(chatGateway.stopCount).isAtLeast(1)
+    }
+
     private class FakeRegistrationGateway(
         private val statuses: ArrayDeque<RegistrationStatus>,
     ) : RegistrationGateway {
@@ -206,8 +268,22 @@ class MainViewModelTest {
     private class FakeChatGateway : ChatSessionGateway {
         private val _state = MutableStateFlow<ChatConnectionState>(ChatConnectionState.Idle)
         override val state: StateFlow<ChatConnectionState> = _state
-        override fun start(agent: String?) {}
-        override fun stop() {}
-        override fun sendMessage(text: String) {}
+        val starts = mutableListOf<String?>()
+        val sentMessages = mutableListOf<String>()
+        var stopCount: Int = 0
+
+        override fun start(agent: String?) {
+            starts += agent
+            _state.value = ChatConnectionState.Connected(agent, emptyList())
+        }
+
+        override fun stop() {
+            stopCount += 1
+            _state.value = ChatConnectionState.Idle
+        }
+
+        override fun sendMessage(text: String) {
+            sentMessages += text
+        }
     }
 }
