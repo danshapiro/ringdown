@@ -33,6 +33,11 @@
             android:name=".voice.VoiceSessionActionReceiver"
             android:exported="false" />
 
+        <service
+            android:name=".voice.VoiceSessionForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
     </application>
 
 </manifest>
