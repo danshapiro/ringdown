@@ -111,6 +111,47 @@ class TextSessionRepositoryTest {
     }
 
     @Test
+    fun clearsResumeTokenWhenSessionAlreadyActive() = runTest(dispatcher) {
+        val scope = TestScope(dispatcher)
+        val store = DeviceIdStore(testDataStore(scope))
+        store.updateAuthToken("valid-token")
+        store.updateResumeToken("resume-old")
+
+        val captures = mutableListOf<TextSessionRequest>()
+        val api = object : TextSessionApi {
+            private var attempts = 0
+            override suspend fun createTextSession(payload: TextSessionRequest): TextSessionResponse {
+                captures += payload
+                attempts += 1
+                return if (attempts == 1) {
+                    throw sessionAlreadyActive()
+                } else {
+                    TextSessionResponse(
+                        sessionId = "session-retry",
+                        sessionToken = "session-token",
+                        resumeToken = "resume-fresh",
+                        websocketPath = "/v1/mobile/text/session",
+                        agent = "Agent Alpha",
+                        expiresAt = "2025-11-02T00:00:00Z",
+                        heartbeatIntervalSeconds = 15,
+                        heartbeatTimeoutSeconds = 45,
+                        tlsPins = emptyList(),
+                        authToken = "valid-token",
+                    )
+                }
+            }
+        }
+
+        val repository = TextSessionRepository(api, store, dispatcher)
+        val bootstrap = repository.startTextSession(null)
+
+        assertEquals("session-retry", bootstrap.sessionId)
+        assertEquals("resume-old", captures.first().resumeToken)
+        assertNull(captures.last().resumeToken)
+        assertEquals("resume-fresh", store.currentResumeToken())
+    }
+
+    @Test
     fun propagatesErrorWhenRetryAlsoFails() = runTest(dispatcher) {
         val scope = TestScope(dispatcher)
         val store = DeviceIdStore(testDataStore(scope))
@@ -143,6 +184,15 @@ class TextSessionRepositoryTest {
             {"detail":{"code":"resume_token_not_recognised","message":"Resume token not recognised or expired."}}
             """.trimIndent().toResponseBody("application/json".toMediaType())
         val response = Response.error<TextSessionResponse>(404, body)
+        return HttpException(response)
+    }
+
+    private fun sessionAlreadyActive(): HttpException {
+        val body =
+            """
+            {"detail":{"code":"session_already_active","message":"Session already active on another connection."}}
+            """.trimIndent().toResponseBody("application/json".toMediaType())
+        val response = Response.error<TextSessionResponse>(409, body)
         return HttpException(response)
     }
 

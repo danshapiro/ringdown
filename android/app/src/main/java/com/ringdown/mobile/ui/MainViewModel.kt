@@ -200,7 +200,6 @@ class MainViewModel @Inject constructor(
         _state.update {
             it.copy(
                 pendingAutoConnect = false,
-                voiceState = VoiceConnectionState.Idle,
             )
         }
         voiceController.stop()

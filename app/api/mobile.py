@@ -14,7 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from app import settings
 from app.chat import stream_response
 from app.logging_utils import logger
-from app.mobile.config_store import ensure_device_entry, ensure_device_security_fields
+from app.mobile.config_store import (
+    approve_device,
+    ensure_device_entry,
+    ensure_device_security_fields,
+)
 from app.mobile.text_session_store import get_text_session_store
 from app.memory import log_turn
 from app.settings import get_agent_config
@@ -128,6 +132,25 @@ async def register_device(payload: MobileRegisterRequest) -> MobileRegisterRespo
 
     device_cfg = settings.get_mobile_device(device_id) or entry
     device_cfg = _normalise_device_entry(device_cfg)
+
+    env_settings = settings.get_env()
+    auto_device_id = (env_settings.live_test_mobile_device_id or "").strip()
+    if auto_device_id and device_id == auto_device_id and not device_cfg.get("enabled"):
+        desired_agent = (
+            device_cfg.get("agent")
+            or payload.label
+            or settings.get_default_bot_name()
+        )
+        try:
+            updated_entry = approve_device(device_id, agent=desired_agent)
+            device_cfg = _normalise_device_entry(updated_entry)
+            logger.info(
+                "Auto-approved live test device %s (agent=%s)",
+                device_id,
+                device_cfg.get("agent"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to auto-approve live test device %s: %s", device_id, exc)
 
     enabled = bool(device_cfg.get("enabled"))
     blocked_reason = device_cfg.get("blocked_reason")

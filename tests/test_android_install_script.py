@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 import pytest
 
@@ -13,9 +13,23 @@ class CallRecorder:
     def __init__(self) -> None:
         self.calls: List[List[str]] = []
 
-    def __call__(self, cmd: List[str], check: bool, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    def __call__(
+        self,
+        cmd: List[str],
+        check: bool,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> subprocess.CompletedProcess[str]:
         self.calls.append(cmd)
         return subprocess.CompletedProcess(cmd, returncode=0)
+
+
+def _patch_repo_paths(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    monkeypatch.setattr(install_script, "REPO_ROOT", root)
+    android_dir = root / "android"
+    monkeypatch.setattr(install_script, "ANDROID_DIR", android_dir)
+    monkeypatch.setattr(install_script, "LOCAL_PROPERTIES", android_dir / "local.properties")
 
 
 def test_install_runs_build_and_adb(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -25,12 +39,16 @@ def test_install_runs_build_and_adb(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     apk_path.write_bytes(b"fake")
 
     recorder = CallRecorder()
-    monkeypatch.setattr(install_script, "REPO_ROOT", tmp_path)
+    _patch_repo_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(install_script, "IS_WINDOWS", False)
+    monkeypatch.setattr(install_script, "IS_WSL", False)
+    monkeypatch.setattr(install_script, "IS_NATIVE_POSIX", True)
     monkeypatch.setattr(subprocess, "run", recorder)  # type: ignore[arg-type]
 
     install_script.main(["--device", "emulator-5554", "--skip-tests"])
 
-    expected_gradle = ["bash", "android/scripts/gradle.sh", "./gradlew", ":app:assembleDebug"]
+    gradle_wrapper = str((tmp_path / "android" / "gradlew"))
+    expected_gradle = [gradle_wrapper, ":app:assembleDebug"]
     expected_adb = ["adb", "-s", "emulator-5554", "install", "-r", str(apk_path)]
 
     assert expected_gradle in recorder.calls
@@ -40,3 +58,31 @@ def test_install_runs_build_and_adb(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 def test_install_requires_device_argument() -> None:
     with pytest.raises(SystemExit):
         install_script.main([])
+
+
+def test_install_wsl_invokes_cmd_wrapper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    apk_dir = tmp_path / "android" / "app" / "build" / "outputs" / "apk" / "debug"
+    apk_dir.mkdir(parents=True)
+    apk_path = apk_dir / "app-debug.apk"
+    apk_path.write_bytes(b"fake")
+
+    recorder = CallRecorder()
+    _patch_repo_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(install_script, "IS_WINDOWS", False)
+    monkeypatch.setattr(install_script, "IS_WSL", True)
+    monkeypatch.setattr(install_script, "IS_NATIVE_POSIX", False)
+
+    def fake_wsl_path(path: Path) -> str:  # pragma: no cover - deterministic mapping for tests
+        return f"C:\\fake\\{path.name}"
+
+    monkeypatch.setattr(install_script, "_wsl_to_windows_path", fake_wsl_path)
+    monkeypatch.setattr(subprocess, "run", recorder)  # type: ignore[arg-type]
+
+    install_script.main(["--device", "emulator-5554", "--skip-tests"])
+
+    cmd_calls = [cmd for cmd in recorder.calls if cmd and cmd[0].lower().startswith("cmd")]
+    assert cmd_calls, "expected cmd.exe invocation on WSL"
+    gradle_call = cmd_calls[0]
+    assert gradle_call[1:] == ["/c", 'cd /d "C:\\fake\\android" && gradlew.bat :app:assembleDebug']
+    expected_adb = ["adb", "-s", "emulator-5554", "install", "-r", str(apk_path)]
+    assert expected_adb in recorder.calls

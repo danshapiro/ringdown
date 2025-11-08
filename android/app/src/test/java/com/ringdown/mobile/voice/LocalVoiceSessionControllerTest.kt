@@ -9,6 +9,7 @@ import com.ringdown.mobile.text.TextSessionEvent
 import com.ringdown.mobile.voice.asr.AsrEvent
 import com.ringdown.mobile.voice.asr.LocalAsrEngine
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.CoroutineDispatcher
@@ -167,6 +168,67 @@ class LocalVoiceSessionControllerTest {
 
         val state = controller.state.value
         assertThat(state).isInstanceOf(VoiceConnectionState.Failed::class.java)
+    }
+
+    @Test
+    fun reconnectAfterStopStartsNewSession() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connectCalls = mutableListOf<TextSessionBootstrap>()
+        val disconnectCalls = AtomicInteger(0)
+
+        val backendEnvironment = object : BackendEnvironment() {
+            override fun baseUrl(): String = "https://example.invalid"
+        }
+        val textSessionClient = object : TextSessionClient(
+            backendEnvironment,
+            OkHttpClient(),
+            dispatcher,
+        ) {
+            override suspend fun connect(bootstrap: TextSessionBootstrap) {
+                connectCalls += bootstrap
+            }
+
+            override suspend fun disconnect() {
+                disconnectCalls.incrementAndGet()
+            }
+        }
+        val starter = TextSessionStarter { agent ->
+            TextSessionBootstrap(
+                sessionId = "session-${connectCalls.size + 1}",
+                sessionToken = "token-${connectCalls.size + 1}",
+                resumeToken = "resume-${connectCalls.size + 1}",
+                websocketPath = "/ws",
+                agent = agent ?: "assistant-b",
+                expiresAtIso = "2025-11-02T00:10:00Z",
+                heartbeatIntervalSeconds = 15,
+                heartbeatTimeoutSeconds = 45,
+                tlsPins = emptyList(),
+            )
+        }
+        val asrEngine = object : LocalAsrEngine {
+            override val events: MutableSharedFlow<AsrEvent> = MutableSharedFlow(extraBufferCapacity = 1)
+            override suspend fun start() {}
+            override suspend fun stop() {}
+        }
+
+        val controller = LocalVoiceSessionController(
+            textSessionStarter = starter,
+            textSessionClient = textSessionClient,
+            asrEngine = asrEngine,
+            dispatcher = dispatcher,
+            mainDispatcher = dispatcher,
+            nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
+        )
+
+        controller.start("assistant-b")
+        runCurrent()
+        controller.stop()
+        runCurrent()
+        controller.start("assistant-b")
+        runCurrent()
+
+        assertThat(connectCalls).hasSize(2)
+        assertThat(disconnectCalls.get()).isEqualTo(1)
     }
 
     private fun createController(

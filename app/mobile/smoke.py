@@ -137,6 +137,7 @@ def run_smoke_test(
         resume_token = body.get("resumeToken")
         websocket_path = body.get("websocketPath")
         agent = body.get("agent")
+        auth_token = body.get("authToken")
 
         _require(
             isinstance(session_id, str) and session_id,
@@ -214,6 +215,52 @@ def run_smoke_test(
                 # Any other event types (e.g., additional ready) should not terminate the loop.
 
     assistant_text = "".join(assistant_parts).strip()
+
+    resume_payload: Dict[str, Any] = {
+        "deviceId": device_id,
+        "resumeToken": resume_token,
+    }
+    if isinstance(auth_token, str) and auth_token.strip():
+        resume_payload["authToken"] = auth_token
+
+    resume_resp = client.post(
+        "/v1/mobile/text/session",
+        json=resume_payload,
+    )
+    _require(
+        resume_resp.status_code == 200,
+        f"Resume handshake failed ({resume_resp.status_code}): {resume_resp.text}",
+        events=events,
+        logs=log_records,
+    )
+    resume_body = resume_resp.json()
+    new_session_token = resume_body.get("sessionToken")
+    _require(
+        isinstance(new_session_token, str) and new_session_token,
+        "Resume handshake missing sessionToken",
+        events=events,
+        logs=log_records,
+    )
+    new_resume_token = resume_body.get("resumeToken")
+    _require(
+        isinstance(new_resume_token, str) and new_resume_token,
+        "Resume handshake missing resumeToken",
+        events=events,
+        logs=log_records,
+    )
+    resume_token = new_resume_token
+    with client.websocket_connect(
+        websocket_path,
+        headers={"x-ringdown-session-token": new_session_token},
+    ) as resume_ws:
+        resume_ready = resume_ws.receive_json()
+        events.append(resume_ready)
+        _assert_message_type(resume_ready, "ready", events=events, logs=log_records)
+        resume_ws.send_json({"type": "heartbeat"})
+        heartbeat = resume_ws.receive_json()
+        events.append(heartbeat)
+        _assert_message_type(heartbeat, "heartbeat", events=events, logs=log_records)
+
     return SmokeResult(
         success=bool(assistant_text),
         session_id=session_id,

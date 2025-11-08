@@ -65,6 +65,7 @@ class EnvSettings(BaseSettings):
     live_test_to_number: str | None = Field(default=None, alias="LIVE_TEST_TO_NUMBER")
     sqlite_path: str = "/data/memory.db"
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
+    live_test_mobile_device_id: str | None = Field(default=None, alias="LIVE_TEST_MOBILE_DEVICE_ID")
 
     # Pydantic v2: redact sensitive fields from __repr__, pick env file.
     model_config = SettingsConfigDict(

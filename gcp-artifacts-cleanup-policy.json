@@ -1,0 +1,23 @@
+[
+  {
+    "name": "projects/danbot-twilio/locations/us-west1/repositories/danbot-twilio/cleanupPolicies/delete-all-after-keep",
+    "id": "delete-all-after-keep",
+    "action": {
+      "type": "Delete"
+    },
+    "condition": {
+      "tagState": "ANY",
+      "olderThan": "0s"
+    }
+  },
+  {
+    "name": "projects/danbot-twilio/locations/us-west1/repositories/danbot-twilio/cleanupPolicies/keep-last-20",
+    "id": "keep-last-20",
+    "action": {
+      "type": "Keep"
+    },
+    "mostRecentVersions": {
+      "keepCount": 20
+    }
+  }
+]

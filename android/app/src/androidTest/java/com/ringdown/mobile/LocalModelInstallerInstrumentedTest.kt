@@ -1,5 +1,6 @@
 package com.ringdown.mobile
 
+import android.content.ContextWrapper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
@@ -10,15 +11,25 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class LocalModelInstallerInstrumentedTest {
 
     private lateinit var installer: LocalModelInstaller
+    private lateinit var tempFilesDir: File
 
     @Before
     fun setUp() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val baseContext = InstrumentationRegistry.getInstrumentation().targetContext
+        tempFilesDir = File(baseContext.cacheDir, "local-model-installer-test")
+        if (tempFilesDir.exists()) {
+            tempFilesDir.deleteRecursively()
+        }
+        tempFilesDir.mkdirs()
+        val context = object : ContextWrapper(baseContext) {
+            override fun getFilesDir(): File = tempFilesDir
+        }
         installer = LocalModelInstaller(context)
         installer.clearAllInstalledModels()
     }
@@ -29,6 +40,9 @@ class LocalModelInstallerInstrumentedTest {
             return
         }
         installer.clearAllInstalledModels()
+        if (this::tempFilesDir.isInitialized && tempFilesDir.exists()) {
+            tempFilesDir.deleteRecursively()
+        }
     }
 
     @Test
@@ -44,7 +58,7 @@ class LocalModelInstallerInstrumentedTest {
     }
 
     @Test
-    fun ensureSherpaStreamingModelCopiesAssets() = runBlocking {
+    fun ensureSherpaStreamingModelCopiesAssets() = runBlocking<Unit> {
         val modelDir = installer.ensureSherpaStreamingAsrModel()
         val sentinel = modelDir.resolve("encoder-epoch-99-avg-1.int8.onnx")
         assertThat(sentinel.exists()).isTrue()
@@ -52,12 +66,14 @@ class LocalModelInstallerInstrumentedTest {
 
         val metadata = installer.installedMetadata(LocalModelId.SHERPA_STREAMING_EN_20M)
         assertThat(metadata).isNotNull()
-        assertThat(metadata!!.payloads.map { it.relativePath })
-            .containsAtLeast(
-                "encoder-epoch-99-avg-1.int8.onnx",
-                "decoder-epoch-99-avg-1.int8.onnx",
-                "joiner-epoch-99-avg-1.int8.onnx",
-            )
+        val payloadPaths = metadata!!.payloads.map { it.relativePath }.toSet()
+        val expected = setOf(
+            "encoder-epoch-99-avg-1.int8.onnx",
+            "decoder-epoch-99-avg-1.int8.onnx",
+            "joiner-epoch-99-avg-1.int8.onnx",
+        )
+        assertThat(payloadPaths).containsAtLeastElementsIn(expected)
+        Unit
     }
 
     @Test

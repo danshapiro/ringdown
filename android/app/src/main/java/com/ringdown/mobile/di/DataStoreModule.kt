@@ -17,13 +17,23 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object DataStoreModule {
 
+    @Volatile
+    private var deviceDataStore: DataStore<Preferences>? = null
+
     @Provides
     @Singleton
     fun provideDeviceDataStore(
         @ApplicationContext context: Context,
     ): DataStore<Preferences> {
-        return PreferenceDataStoreFactory.create {
-            context.filesDir.resolve("datastore").also { it.mkdirs() }.resolve("ringdown_device.preferences_pb")
+        val appContext = context.applicationContext
+        return deviceDataStore ?: synchronized(this) {
+            deviceDataStore ?: PreferenceDataStoreFactory.create {
+                appContext.filesDir.resolve("datastore")
+                    .also { it.mkdirs() }
+                    .resolve("ringdown_device.preferences_pb")
+            }.also { created ->
+                deviceDataStore = created
+            }
         }
     }
 }

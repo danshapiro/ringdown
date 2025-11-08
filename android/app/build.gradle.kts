@@ -77,7 +77,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.ringdown.mobile.HiltTestRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -182,6 +182,8 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("com.google.truth:truth:1.4.4")
+    androidTestImplementation("com.google.dagger:hilt-android-testing:2.51.1")
+    kaptAndroidTest("com.google.dagger:hilt-android-compiler:2.51.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
@@ -336,7 +338,11 @@ tasks.register("connectedVoiceMvpAndroidTest") {
         instrumentationArgs.forEach { (name, value) ->
             instrumentationCommand += listOf("-e", name, value)
         }
-        instrumentationCommand += "com.ringdown.mobile.test/androidx.test.runner.AndroidJUnitRunner"
+        val testRunner = android.defaultConfig.testInstrumentationRunner
+            ?: "androidx.test.runner.AndroidJUnitRunner"
+        val testApplicationId = android.defaultConfig.testApplicationId
+            ?: "${android.defaultConfig.applicationId}.test"
+        instrumentationCommand += "$testApplicationId/$testRunner"
 
         execAdb(*instrumentationCommand.toTypedArray())
     }

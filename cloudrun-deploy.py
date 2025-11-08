@@ -64,7 +64,7 @@ DEFAULT_PROJECT_ID: str = _env_default(
     "GOOGLE_CLOUD_PROJECT",
     "GCLOUD_PROJECT",
 )
-DEFAULT_ALWAYS_WARM: bool = True  # keep one instance warm
+DEFAULT_ALWAYS_WARM: bool = True  # keep one instance warm to dodge Twilio cold-start timeouts
 DEFAULT_CPU: str = "1"
 DEFAULT_MEMORY: str = "1Gi"
 DEFAULT_PORT: int = 8000

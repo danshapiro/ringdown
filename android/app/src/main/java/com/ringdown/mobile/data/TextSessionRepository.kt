@@ -49,6 +49,10 @@ class TextSessionRepository @Inject constructor(
                         deviceIdStore.updateResumeToken(null)
                         continue
                     }
+                    if (error.code() == 409 && attempt == 1 && errorCode == "session_already_active") {
+                        deviceIdStore.updateResumeToken(null)
+                        continue
+                    }
                 }
                 throw error
             }
@@ -96,6 +100,7 @@ class TextSessionRepository @Inject constructor(
 
         return fromJson
             ?: body.takeIf { it.contains("resume_token_not_recognised") }?.let { "resume_token_not_recognised" }
+            ?: body.takeIf { it.contains("session_already_active") }?.let { "session_already_active" }
     }
 
     companion object {

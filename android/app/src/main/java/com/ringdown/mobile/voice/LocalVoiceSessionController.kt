@@ -14,6 +14,7 @@ import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -21,6 +22,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 private const val TAG = "LocalVoiceSession"
@@ -58,6 +60,11 @@ open class LocalVoiceSessionController @Inject constructor(
         }
 
         sessionScope.launch {
+            logStructured(
+                level = "INFO",
+                event = "local_voice.start_requested",
+                fields = mapOf("agent" to agent),
+            )
             try {
                 postState(VoiceConnectionState.Connecting)
                 sessionLock.withLock {
@@ -92,26 +99,48 @@ open class LocalVoiceSessionController @Inject constructor(
     }
 
     open fun stop() {
+        val wasActive = sessionActive.getAndSet(false)
+        postState(VoiceConnectionState.Idle)
+        if (!wasActive) {
+            logStructured(
+                level = "INFO",
+                event = "local_voice.stop_noop",
+                fields = emptyMap(),
+            )
+            return
+        }
         sessionScope.launch {
-            val wasActive = sessionActive.getAndSet(false)
+            logStructured(
+                level = "INFO",
+                event = "local_voice.stop_started",
+                fields = emptyMap(),
+            )
             try {
                 teardownSession()
             } finally {
                 postState(VoiceConnectionState.Idle)
-                if (!wasActive) {
-                    logStructured(
-                        level = "INFO",
-                        event = "local_voice.stop_noop",
-                        fields = emptyMap(),
-                    )
-                }
+                logStructured(
+                    level = "INFO",
+                    event = "local_voice.stop_completed",
+                    fields = emptyMap(),
+                )
             }
         }
     }
 
     private suspend fun registerCollectors() {
-        val textEventsJob = sessionScope.launch {
+        val textEventsJob = sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            logStructured(
+                level = "INFO",
+                event = "local_voice.events_attached",
+                fields = emptyMap(),
+            )
             textSessionClient.events.collect { event ->
+                logStructured(
+                    level = "DEBUG",
+                    event = "local_voice.event_received",
+                    fields = mapOf("type" to event::class.java.simpleName),
+                )
                 when (event) {
                     is TextSessionEvent.Ready -> handleReady(event)
                     is TextSessionEvent.AssistantToken -> handleAssistantToken(event)
@@ -125,7 +154,12 @@ open class LocalVoiceSessionController @Inject constructor(
             }
         }
 
-        val asrEventsJob = sessionScope.launch {
+        val asrEventsJob = sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            logStructured(
+                level = "INFO",
+                event = "local_voice.asr_attached",
+                fields = emptyMap(),
+            )
             asrEngine.events.collect { event ->
                 when (event) {
                     is AsrEvent.Partial -> handleAsrPartial(event)
@@ -193,6 +227,17 @@ open class LocalVoiceSessionController @Inject constructor(
     private fun handleConnectionClosed(event: TextSessionEvent.ConnectionClosed) {
         val message = "Connection closed (${event.code}) ${event.reason.orEmpty()}"
         Log.i(TAG, message)
+        if (!sessionActive.get() || event.reason == "client_shutdown") {
+            logStructured(
+                level = "INFO",
+                event = "local_voice.connection_closed",
+                fields = mapOf(
+                    "code" to event.code,
+                    "reason" to event.reason,
+                ),
+            )
+            return
+        }
         terminateWithFailure(event.reason ?: "Session closed")
     }
 
@@ -297,19 +342,57 @@ open class LocalVoiceSessionController @Inject constructor(
 
     private suspend fun teardownSession() {
         sessionLock.withLock {
+            activeJobs.forEach { job -> job.cancel() }
             activeJobs.forEach { job ->
-                job.cancel()
-            }
-            activeJobs.forEach { job ->
-                try {
-                    job.join()
-                } catch (_: CancellationException) {
-                    // ignore
+                val completed = withTimeoutOrNull(STOP_JOB_TIMEOUT_MILLIS) { job.join() }
+                if (completed == null) {
+                    logStructured(
+                        level = "WARN",
+                        event = "local_voice.stop_job_timeout",
+                        fields = mapOf(
+                            "job" to job::class.java.simpleName,
+                            "active" to job.isActive,
+                        ),
+                    )
                 }
             }
             activeJobs.clear()
-            runCatching { asrEngine.stop() }
-            runCatching { textSessionClient.disconnect() }
+            val asrResult = runCatching {
+                withTimeoutOrNull(STOP_JOB_TIMEOUT_MILLIS) {
+                    asrEngine.stop()
+                    true
+                }
+            }
+            when {
+                asrResult.isFailure -> logStructured(
+                    level = "ERROR",
+                    event = "local_voice.stop_asr_error",
+                    fields = mapOf("message" to (asrResult.exceptionOrNull()?.message ?: "unknown")),
+                )
+                asrResult.getOrNull() != true -> logStructured(
+                    level = "WARN",
+                    event = "local_voice.stop_asr_timeout",
+                    fields = mapOf("timeoutMillis" to STOP_JOB_TIMEOUT_MILLIS),
+                )
+            }
+            val disconnectResult = runCatching {
+                withTimeoutOrNull(STOP_JOB_TIMEOUT_MILLIS) {
+                    textSessionClient.disconnect()
+                    true
+                }
+            }
+            when {
+                disconnectResult.isFailure -> logStructured(
+                    level = "ERROR",
+                    event = "local_voice.stop_disconnect_error",
+                    fields = mapOf("message" to (disconnectResult.exceptionOrNull()?.message ?: "unknown")),
+                )
+                disconnectResult.getOrNull() != true -> logStructured(
+                    level = "WARN",
+                    event = "local_voice.stop_disconnect_timeout",
+                    fields = mapOf("timeoutMillis" to STOP_JOB_TIMEOUT_MILLIS),
+                )
+            }
             cleanupSessionStateLocked()
         }
     }
@@ -415,5 +498,6 @@ open class LocalVoiceSessionController @Inject constructor(
 
     companion object {
         private const val MAX_TOKEN_LOG_LENGTH = 160
+        private const val STOP_JOB_TIMEOUT_MILLIS = 5_000L
     }
 }

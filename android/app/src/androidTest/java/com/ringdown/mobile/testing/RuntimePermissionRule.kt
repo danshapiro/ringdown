@@ -248,6 +248,14 @@ class RuntimePermissionRule private constructor(
                 restoreOriginalState = restoreOriginalState
             )
         }
+
+        fun bluetoothConnectGranted(restoreOriginalState: Boolean = true): RuntimePermissionRule {
+            return RuntimePermissionRule(
+                Manifest.permission.BLUETOOTH_CONNECT,
+                DesiredState.GRANTED,
+                restoreOriginalState = restoreOriginalState
+            )
+        }
     }
 }
 
