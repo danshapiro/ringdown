@@ -1,3 +1,4 @@
+import json
 import sys
 from argparse import ArgumentTypeError
 from pathlib import Path
@@ -45,6 +46,8 @@ def test_launch_harness_includes_expected_flags(tmp_path, monkeypatch):
         fail_event = ["fail"]
         success_event = ["ok"]
         extra_harness_arg = ["--foo", "bar"]
+        reconnect_delay = 1.0
+        hangup_delay = 1.0
 
     cmd = mod._launch_harness(Args())
     assert cmd[0] == sys.executable
@@ -53,3 +56,64 @@ def test_launch_harness_includes_expected_flags(tmp_path, monkeypatch):
     assert "--fail-event" in cmd
     assert "--success-event" in cmd
     assert cmd[-2:] == ["--foo", "bar"]
+
+
+def test_apply_profile_sets_missing_fields(tmp_path, monkeypatch):
+    mod = load_module()
+    profile = tmp_path / "pixel.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "device": "ABC",
+                "activity": "pkg/.Activity",
+                "duration": 90,
+                "logOutput": str(tmp_path / "out.log"),
+                "reconnectTap": [10, 20],
+                "reconnectDelay": 2,
+                "hangupTap": "30,40",
+                "hangupDelay": 1,
+                "failEvents": ["x"],
+                "successEvents": ["y"],
+                "extraHarnessArgs": ["--foo", "bar"],
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    args = types.SimpleNamespace(
+        profile=profile,
+        device=None,
+        activity=None,
+        duration=None,
+        log_output=None,
+        reconnect_tap=None,
+        reconnect_delay=None,
+        hangup_tap=None,
+        hangup_delay=None,
+        fail_event=None,
+        success_event=None,
+        extra_harness_arg=None,
+    )
+
+    mod._apply_profile(args)
+
+    assert args.device == "ABC"
+    assert args.activity == "pkg/.Activity"
+    assert args.duration == 90
+    assert args.reconnect_tap == (10, 20)
+    assert args.hangup_tap == (30, 40)
+    assert args.fail_event == ["x"]
+    assert args.success_event == ["y"]
+    assert args.extra_harness_arg == ["--foo", "bar"]
+
+
+def test_resolve_profile_uses_default_dir(tmp_path, monkeypatch):
+    mod = load_module()
+    default_dir = tmp_path / "profiles"
+    default_dir.mkdir()
+    profile_file = default_dir / "pixel9.json"
+    profile_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(mod, "DEFAULT_PROFILE_DIR", default_dir)
+
+    resolved = mod._resolve_profile_path(Path("pixel9"))
+    assert resolved == profile_file

@@ -14,10 +14,13 @@ import subprocess
 import sys
 import threading
 import time
+import json
 from pathlib import Path
 from typing import Optional, Sequence
 
 HARNESS_PATH = Path(__file__).resolve().with_name("manual_voice_harness.py")
+DEFAULT_PROFILE_DIR = Path(__file__).resolve().parent / "voice_smoke_profiles"
+DEFAULT_ACTIVITY = "com.ringdown.mobile.debug/com.ringdown.mobile.MainActivity"
 DEFAULT_DURATION = 180
 DEFAULT_RECONNECT_DELAY = 5.0
 DEFAULT_HANGUP_DELAY = 3.0
@@ -47,14 +50,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Automated local voice smoke harness")
     parser.add_argument("--device", help="ADB device serial (optional)")
     parser.add_argument(
+        "--profile",
+        type=Path,
+        help="Optional profile JSON providing default coordinates/delays.",
+    )
+    parser.add_argument(
         "--activity",
-        default="com.ringdown.mobile.debug/com.ringdown.mobile.MainActivity",
-        help="Activity component launched before harness (default: %(default)s)",
+        default=None,
+        help=f"Activity component launched before harness (default: {DEFAULT_ACTIVITY})",
     )
     parser.add_argument(
         "--duration",
         type=int,
-        default=DEFAULT_DURATION,
+        default=None,
         help=f"Harness runtime in seconds (default: {DEFAULT_DURATION})",
     )
     parser.add_argument(
@@ -70,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reconnect-delay",
         type=float,
-        default=DEFAULT_RECONNECT_DELAY,
+        default=None,
         help=f"Seconds to wait before tapping reconnect (default: {DEFAULT_RECONNECT_DELAY})",
     )
     parser.add_argument(
@@ -81,28 +89,86 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hangup-delay",
         type=float,
-        default=DEFAULT_HANGUP_DELAY,
+        default=None,
         help=f"Seconds to wait before hangup tap once the harness exits (default: {DEFAULT_HANGUP_DELAY})",
     )
     parser.add_argument(
         "--success-event",
         action="append",
-        default=[],
+        default=None,
         help="Additional success log substrings (repeatable)",
     )
     parser.add_argument(
         "--fail-event",
         action="append",
-        default=[],
+        default=None,
         help="Additional failure log substrings (repeatable)",
     )
     parser.add_argument(
         "--extra-harness-arg",
         action="append",
-        default=[],
+        default=None,
         help="Pass-through argument for manual_voice_harness (repeatable)",
     )
     return parser.parse_args()
+
+
+def _resolve_profile_path(path: Path) -> Path:
+    candidate = path.expanduser()
+    if candidate.exists():
+        return candidate
+    suffix = candidate.suffix or ".json"
+    lookup = DEFAULT_PROFILE_DIR / (candidate.name if candidate.suffix else f"{candidate.name}{suffix}")
+    if lookup.exists():
+        return lookup
+    raise SystemExit(f"Profile file '{path}' not found (also checked {lookup}).")
+
+
+def _to_coord(value) -> tuple[int, int]:
+    if isinstance(value, str):
+        return _parse_coord(value)
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        try:
+            return int(value[0]), int(value[1])
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(f"Invalid coordinate values: {value}") from exc
+    raise SystemExit(f"Coordinate value must be 'x,y' or [x, y], got {value!r}")
+
+
+def _apply_profile(args: argparse.Namespace) -> None:
+    if not args.profile:
+        return
+    profile_path = _resolve_profile_path(args.profile)
+    try:
+        data = json.loads(profile_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+        raise SystemExit(f"Profile '{profile_path}' is not valid JSON: {exc}") from exc
+
+    def assign(attr: str, key: str, transform=None) -> None:
+        if getattr(args, attr) is not None:
+            return
+        if key not in data:
+            return
+        value = data[key]
+        if transform is not None and value is not None:
+            value = transform(value)
+        setattr(args, attr, value)
+
+    assign("device", "device")
+    assign("activity", "activity")
+    assign("duration", "duration")
+    assign("log_output", "logOutput", lambda v: Path(v).expanduser())
+    assign("reconnect_tap", "reconnectTap", _to_coord)
+    assign("reconnect_delay", "reconnectDelay", float)
+    assign("hangup_tap", "hangupTap", _to_coord)
+    assign("hangup_delay", "hangupDelay", float)
+
+    if args.fail_event is None and isinstance(data.get("failEvents"), list):
+        args.fail_event = [str(item) for item in data["failEvents"] if item]
+    if args.success_event is None and isinstance(data.get("successEvents"), list):
+        args.success_event = [str(item) for item in data["successEvents"] if item]
+    if args.extra_harness_arg is None and isinstance(data.get("extraHarnessArgs"), list):
+        args.extra_harness_arg = [str(item) for item in data["extraHarnessArgs"] if item]
 
 
 def _tap(device: Optional[str], coord: tuple[int, int]) -> None:
@@ -180,6 +246,22 @@ def main() -> int:
         return 2
 
     args = parse_args()
+    _apply_profile(args)
+    if args.activity is None:
+        args.activity = DEFAULT_ACTIVITY
+    if args.duration is None:
+        args.duration = DEFAULT_DURATION
+    if args.reconnect_delay is None:
+        args.reconnect_delay = DEFAULT_RECONNECT_DELAY
+    if args.hangup_delay is None:
+        args.hangup_delay = DEFAULT_HANGUP_DELAY
+    if args.fail_event is None:
+        args.fail_event = []
+    if args.success_event is None:
+        args.success_event = []
+    if args.extra_harness_arg is None:
+        args.extra_harness_arg = []
+
     return_code = _run_with_taps(args)
     if return_code != 0:
         print(f"Harness exited with status {return_code}", file=sys.stderr)
