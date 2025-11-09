@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -70,3 +71,39 @@ def test_normalize_content_handles_json_string():
     assert "\n" in normalized
     assert '"foo"' in normalized
     assert '1' in normalized
+
+
+def test_main_end_to_end(tmp_path, monkeypatch):
+    log_path = tmp_path / "litellm_log.json"
+    entries = [
+        {
+            "timestamp": "2025-11-09T00:00:00Z",
+            "textPayload": "Message array content: [{\"role\": \"user\", \"content\": \"Hi\"}]",
+        },
+        {
+            "timestamp": "2025-11-09T00:01:00Z",
+            "textPayload": "Message array content: [{'role': 'assistant', 'content': 'Partial'}",
+        },
+    ]
+    log_path.write_text(json.dumps(entries), encoding="utf-8")
+    output_path = tmp_path / "out.txt"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "reformat_litellm_log.py",
+            str(log_path),
+            "-o",
+            str(output_path),
+            "--width",
+            "40",
+        ],
+    )
+
+    formatter.main()
+
+    text = output_path.read_text(encoding="utf-8")
+    assert "=== Entry 1" in text
+    assert "Hi" in text
+    assert "[TRUNCATED]" in text
