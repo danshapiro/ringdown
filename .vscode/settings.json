@@ -1,0 +1,10 @@
+{
+    "python.terminal.activateEnvironment": false,
+    "terminal.integrated.env.windows": {
+        "UV_PROJECT_ENVIRONMENT": ".venv"
+    },
+    "terminal.integrated.env.linux": {
+        "UV_PROJECT_ENVIRONMENT": ".venv-wsl",
+        "PATH": "/.wsl/bin:"
+    }
+}

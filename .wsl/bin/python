@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v python3 >/dev/null 2>&1; then
+    exec python3 "$@"
+fi
+
+if command -v python >/dev/null 2>&1; then
+    exec python "$@"
+fi
+
+echo "python3 is required but not installed" >&2
+exit 127
