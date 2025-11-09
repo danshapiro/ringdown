@@ -299,8 +299,7 @@ private fun VoiceSessionContent(
             .testTag("voice-active"),
     ) {
         val combinedTranscripts = remember(transcripts, chatHistory) {
-            val chatAsTranscripts = chatHistory.map { it.toTranscriptMessage() }
-            (chatAsTranscripts + transcripts)
+            combineTranscriptHistory(chatHistory, transcripts)
         }
         val toolExpansionState = remember { mutableStateMapOf<String, Boolean>() }
         Column(
