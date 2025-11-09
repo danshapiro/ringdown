@@ -24,6 +24,10 @@ DEFAULT_FAIL_EVENTS = (
     "local_voice.reconnect_failure",
     "chat_session.start_failed",
 )
+DEFAULT_SUCCESS_EVENTS = (
+    "local_voice.start_requested",
+    "local_voice.stop_success",
+)
 
 
 def _run_adb(device: Optional[str], *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -97,8 +101,10 @@ def _forward_logs(
     process: subprocess.Popen[str],
     log_fp: Optional[TextIO],
     stop_event: threading.Event,
+    success_event: threading.Event,
     fail_on_error: bool,
     fail_events: Sequence[str],
+    success_events: Sequence[str],
 ) -> threading.Thread:
     def _reader() -> None:
         assert process.stdout is not None
@@ -112,6 +118,11 @@ def _forward_logs(
                 print(f"Detected failure event in logcat: {text}", file=sys.stderr)
                 stop_event.set()
                 break
+            if success_events and any(token in text for token in success_events):
+                success_event.set()
+                if not fail_on_error:
+                    # continue streaming in case user wants full session
+                    continue
 
     thread = threading.Thread(target=_reader, daemon=True)
     thread.start()
@@ -146,6 +157,12 @@ def parse_args() -> argparse.Namespace:
         "--no-fail-on-error",
         action="store_true",
         help="Do not stop the harness when failure events are observed.",
+    )
+    parser.add_argument(
+        "--success-event",
+        action="append",
+        default=[],
+        help="Log substrings that mark success; harness stops once observed (repeatable).",
     )
     return parser.parse_args()
 
@@ -184,14 +201,19 @@ def main() -> int:
 
     process = _tail_logcat(device)
     stop_event = threading.Event()
+    success_event = threading.Event()
     fail_events: list[str] = list(DEFAULT_FAIL_EVENTS)
     fail_events.extend(args.fail_event or [])
+    success_events: list[str] = list(DEFAULT_SUCCESS_EVENTS)
+    success_events.extend(args.success_event or [])
     thread = _forward_logs(
         process,
         log_fp,
         stop_event,
+        success_event,
         fail_on_error=not args.no_fail_on_error,
         fail_events=fail_events,
+        success_events=success_events,
     )
 
     try:
@@ -200,7 +222,7 @@ def main() -> int:
             deadline = time.monotonic() + args.duration
             while thread.is_alive():
                 remaining = deadline - time.monotonic()
-                if remaining <= 0 or stop_event.is_set():
+                if remaining <= 0 or stop_event.is_set() or success_event.is_set():
                     print("\nDuration elapsed; stopping harness...")
                     break
                 thread.join(timeout=min(remaining, 1.0))
@@ -209,6 +231,9 @@ def main() -> int:
                 thread.join(timeout=1.0)
                 if stop_event.is_set():
                     print("\nFailure event detected; stopping harness...")
+                    break
+                if success_event.is_set():
+                    print("\nSuccess event detected; stopping harness...")
                     break
     except KeyboardInterrupt:
         print("\nStopping harness...")
