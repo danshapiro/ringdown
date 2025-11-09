@@ -20,6 +20,7 @@ from typing import Optional, Sequence
 HARNESS_PATH = Path(__file__).resolve().with_name("manual_voice_harness.py")
 DEFAULT_DURATION = 180
 DEFAULT_RECONNECT_DELAY = 5.0
+DEFAULT_HANGUP_DELAY = 3.0
 
 
 def _run_adb(device: Optional[str], *args: str) -> None:
@@ -71,6 +72,17 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_RECONNECT_DELAY,
         help=f"Seconds to wait before tapping reconnect (default: {DEFAULT_RECONNECT_DELAY})",
+    )
+    parser.add_argument(
+        "--hangup-tap",
+        type=_parse_coord,
+        help="Screen coordinate to tap Hang Up after the run (format: x,y)",
+    )
+    parser.add_argument(
+        "--hangup-delay",
+        type=float,
+        default=DEFAULT_HANGUP_DELAY,
+        help=f"Seconds to wait before hangup tap once the harness exits (default: {DEFAULT_HANGUP_DELAY})",
     )
     parser.add_argument(
         "--success-event",
@@ -148,6 +160,16 @@ def _run_with_taps(args: argparse.Namespace) -> int:
     finally:
         for thread in tap_threads:
             thread.join(timeout=1.0)
+
+    if args.hangup_tap:
+        delay = max(0.0, args.hangup_delay)
+        if delay:
+            time.sleep(delay)
+        print("Tapping hangup at", args.hangup_tap)
+        try:
+            _tap(args.device, args.hangup_tap)
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - hardware dependent
+            print(f"Failed to tap hangup: {exc}", file=sys.stderr)
 
     return return_code
 
