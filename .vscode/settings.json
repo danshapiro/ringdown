@@ -5,6 +5,6 @@
     },
     "terminal.integrated.env.linux": {
         "UV_PROJECT_ENVIRONMENT": ".venv-wsl",
-        "PATH": "/.wsl/bin:"
+        "PATH": "${workspaceFolder}/.wsl/bin:${env:PATH}"
     }
 }
