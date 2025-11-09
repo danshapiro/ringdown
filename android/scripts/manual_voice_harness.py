@@ -14,10 +14,16 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import Optional, Sequence, TextIO
 
 
 DEFAULT_ACTIVITY = "com.ringdown.mobile.debug/com.ringdown.mobile.MainActivity"
+DEFAULT_FAIL_EVENTS = (
+    "local_voice.start_failed",
+    "local_voice.stop_job_timeout",
+    "local_voice.reconnect_failure",
+    "chat_session.start_failed",
+)
 
 
 def _run_adb(device: Optional[str], *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -87,7 +93,13 @@ def _tail_logcat(device: str) -> subprocess.Popen[str]:
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
-def _forward_logs(process: subprocess.Popen[str], log_fp: Optional[TextIO]) -> threading.Thread:
+def _forward_logs(
+    process: subprocess.Popen[str],
+    log_fp: Optional[TextIO],
+    stop_event: threading.Event,
+    fail_on_error: bool,
+    fail_events: Sequence[str],
+) -> threading.Thread:
     def _reader() -> None:
         assert process.stdout is not None
         for line in process.stdout:
@@ -96,6 +108,10 @@ def _forward_logs(process: subprocess.Popen[str], log_fp: Optional[TextIO]) -> t
             if log_fp is not None:
                 log_fp.write(text + "\n")
                 log_fp.flush()
+            if fail_on_error and any(token in text for token in fail_events):
+                print(f"Detected failure event in logcat: {text}", file=sys.stderr)
+                stop_event.set()
+                break
 
     thread = threading.Thread(target=_reader, daemon=True)
     thread.start()
@@ -119,6 +135,17 @@ def parse_args() -> argparse.Namespace:
         "--duration",
         type=int,
         help="Automatically stop after N seconds (default: run until Ctrl+C)",
+    )
+    parser.add_argument(
+        "--fail-event",
+        action="append",
+        default=[],
+        help="Additional log substrings that should stop the harness (repeatable).",
+    )
+    parser.add_argument(
+        "--no-fail-on-error",
+        action="store_true",
+        help="Do not stop the harness when failure events are observed.",
     )
     return parser.parse_args()
 
@@ -156,7 +183,16 @@ def main() -> int:
         print(f"Writing logcat output to {log_path}")
 
     process = _tail_logcat(device)
-    thread = _forward_logs(process, log_fp)
+    stop_event = threading.Event()
+    fail_events: list[str] = list(DEFAULT_FAIL_EVENTS)
+    fail_events.extend(args.fail_event or [])
+    thread = _forward_logs(
+        process,
+        log_fp,
+        stop_event,
+        fail_on_error=not args.no_fail_on_error,
+        fail_events=fail_events,
+    )
 
     try:
         if args.duration and args.duration > 0:
@@ -164,12 +200,16 @@ def main() -> int:
             deadline = time.monotonic() + args.duration
             while thread.is_alive():
                 remaining = deadline - time.monotonic()
-                if remaining <= 0:
+                if remaining <= 0 or stop_event.is_set():
                     print("\nDuration elapsed; stopping harness...")
                     break
                 thread.join(timeout=min(remaining, 1.0))
         else:
-            thread.join()
+            while thread.is_alive():
+                thread.join(timeout=1.0)
+                if stop_event.is_set():
+                    print("\nFailure event detected; stopping harness...")
+                    break
     except KeyboardInterrupt:
         print("\nStopping harness...")
     finally:
