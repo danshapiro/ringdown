@@ -65,7 +65,11 @@ class TextSessionRepository @Inject constructor(
                 deviceIdStore.updateAuthToken(response.authToken)
             }
 
-            deviceIdStore.updateResumeToken(response.resumeToken)
+            if (response.resumeToken.isNullOrBlank()) {
+                deviceIdStore.updateResumeToken(null)
+            } else {
+                deviceIdStore.updateResumeToken(response.resumeToken)
+            }
 
             return@withContext TextSessionBootstrap(
                 sessionId = response.sessionId,

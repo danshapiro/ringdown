@@ -224,6 +224,35 @@ class TextSessionRepositoryTest {
         assertEquals("lookup", bootstrap.history.last().messageType)
     }
 
+    @Test
+    fun clearsStoredResumeTokenWhenServerOmitsResumeToken() = runTest(dispatcher) {
+        val scope = TestScope(dispatcher)
+        val store = DeviceIdStore(testDataStore(scope))
+        store.updateResumeToken("resume-old")
+
+        val api = object : TextSessionApi {
+            override suspend fun createTextSession(payload: TextSessionRequest): TextSessionResponse {
+                return TextSessionResponse(
+                    sessionId = "session-clean",
+                    sessionToken = "session-token",
+                    resumeToken = null,
+                    websocketPath = "/v1/mobile/text/session",
+                    agent = "Agent Alpha",
+                    expiresAt = "2025-11-02T00:00:00Z",
+                    heartbeatIntervalSeconds = 15,
+                    heartbeatTimeoutSeconds = 45,
+                    tlsPins = emptyList(),
+                    authToken = null,
+                )
+            }
+        }
+
+        val repository = TextSessionRepository(api, store, dispatcher)
+        repository.startTextSession(null)
+
+        assertNull(store.currentResumeToken())
+    }
+
     private fun unauthorized(): HttpException {
         val body = "{\"error\":\"unauthorized\"}".toResponseBody("application/json".toMediaType())
         val response = Response.error<TextSessionResponse>(401, body)
