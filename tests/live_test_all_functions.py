@@ -27,8 +27,9 @@ instead of many short calls.
 
 from __future__ import annotations
 
-import sys
+import json
 import os
+import sys
 from pathlib import Path
 from typing import List
 
@@ -66,6 +67,15 @@ PROMPTS: List[str] = [
     "Have I mentioned a parsnip in this conversation?",
     "Hang up this call.",
 ]
+
+
+def _format_tail(records) -> str:
+    if not records:
+        return "[]"
+    try:
+        return json.dumps(records[-3:], default=str)
+    except Exception:  # noqa: BLE001 - defensive serialization fallback
+        return repr(records[-3:])
 
 @click.command()
 @click.option("--to", "to_number", default=DEFAULT_TO_NUMBER, help="Phone number to call")
@@ -154,6 +164,7 @@ def main(
 
     resolved_device_id = mobile_device_id or os.environ.get("LIVE_TEST_MOBILE_DEVICE_ID")
     if resolved_device_id:
+        base_url = None
         try:
             base_url = os.environ.get("LIVE_TEST_BASE_URL")
             if not base_url:
@@ -187,8 +198,20 @@ def main(
                 click.echo(
                     f">> Mobile text smoke test succeeded (session {result.session_id}, response '{preview}...')."
                 )
-        except (SmokeTestError, Exception) as exc:  # noqa: BLE001
-            raise click.ClickException(f"Mobile text smoke test failed: {exc}") from exc
+        except SmokeTestError as exc:
+            event_tail = _format_tail(getattr(exc, "events", None))
+            log_tail = _format_tail(getattr(exc, "logs", None))
+            raise click.ClickException(
+                "Mobile text smoke test failed: "
+                f"{exc or exc.__class__.__name__}; "
+                f"events_tail={event_tail}; logs_tail={log_tail}; "
+                f"base_url={base_url or 'unknown'}; device_id={resolved_device_id}"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise click.ClickException(
+                "Mobile text smoke test failed "
+                f"(unexpected {exc.__class__.__name__}): {exc}"
+            ) from exc
     else:
         click.echo("!! Skipping mobile text smoke test: LIVE_TEST_MOBILE_DEVICE_ID not provided.")
 
