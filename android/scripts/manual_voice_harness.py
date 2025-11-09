@@ -12,8 +12,9 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TextIO
 
 
 DEFAULT_ACTIVITY = "com.ringdown.mobile.debug/com.ringdown.mobile.MainActivity"
@@ -86,11 +87,15 @@ def _tail_logcat(device: str) -> subprocess.Popen[str]:
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
-def _forward_logs(process: subprocess.Popen[str]) -> threading.Thread:
+def _forward_logs(process: subprocess.Popen[str], log_fp: Optional[TextIO]) -> threading.Thread:
     def _reader() -> None:
         assert process.stdout is not None
         for line in process.stdout:
-            print(line.rstrip())
+            text = line.rstrip()
+            print(text)
+            if log_fp is not None:
+                log_fp.write(text + "\n")
+                log_fp.flush()
 
     thread = threading.Thread(target=_reader, daemon=True)
     thread.start()
@@ -104,6 +109,16 @@ def parse_args() -> argparse.Namespace:
         "--activity",
         default=DEFAULT_ACTIVITY,
         help=f"Activity component to launch (default: {DEFAULT_ACTIVITY})",
+    )
+    parser.add_argument(
+        "--log-output",
+        type=Path,
+        help="Optional path to write captured logcat lines (overwrites if exists)",
+    )
+    parser.add_argument(
+        "--duration",
+        type=int,
+        help="Automatically stop after N seconds (default: run until Ctrl+C)",
     )
     return parser.parse_args()
 
@@ -133,11 +148,28 @@ def main() -> int:
     print("4. Press Hang up on the device or Ctrl+C here to stop.")
     print()
 
+    log_fp: Optional[TextIO] = None
+    if args.log_output:
+        log_path = args.log_output.expanduser()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fp = log_path.open("w", encoding="utf-8")
+        print(f"Writing logcat output to {log_path}")
+
     process = _tail_logcat(device)
-    thread = _forward_logs(process)
+    thread = _forward_logs(process, log_fp)
 
     try:
-        thread.join()
+        if args.duration and args.duration > 0:
+            print(f"Harness will stop automatically after {args.duration} seconds...")
+            deadline = time.monotonic() + args.duration
+            while thread.is_alive():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    print("\nDuration elapsed; stopping harness...")
+                    break
+                thread.join(timeout=min(remaining, 1.0))
+        else:
+            thread.join()
     except KeyboardInterrupt:
         print("\nStopping harness...")
     finally:
@@ -146,6 +178,8 @@ def main() -> int:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:  # pragma: no cover - defensive cleanup
             process.kill()
+        if log_fp is not None:
+            log_fp.close()
 
     return 0
 
