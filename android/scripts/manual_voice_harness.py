@@ -100,7 +100,7 @@ def _tail_logcat(device: str) -> subprocess.Popen[str]:
 def _forward_logs(
     process: subprocess.Popen[str],
     log_fp: Optional[TextIO],
-    stop_event: threading.Event,
+    failure_event: threading.Event,
     success_event: threading.Event,
     fail_on_error: bool,
     fail_events: Sequence[str],
@@ -116,7 +116,7 @@ def _forward_logs(
                 log_fp.flush()
             if fail_on_error and any(token in text for token in fail_events):
                 print(f"Detected failure event in logcat: {text}", file=sys.stderr)
-                stop_event.set()
+                failure_event.set()
                 break
             if success_events and any(token in text for token in success_events):
                 success_event.set()
@@ -200,7 +200,7 @@ def main() -> int:
         print(f"Writing logcat output to {log_path}")
 
     process = _tail_logcat(device)
-    stop_event = threading.Event()
+    failure_event = threading.Event()
     success_event = threading.Event()
     fail_events: list[str] = list(DEFAULT_FAIL_EVENTS)
     fail_events.extend(args.fail_event or [])
@@ -209,7 +209,7 @@ def main() -> int:
     thread = _forward_logs(
         process,
         log_fp,
-        stop_event,
+        failure_event,
         success_event,
         fail_on_error=not args.no_fail_on_error,
         fail_events=fail_events,
@@ -222,14 +222,14 @@ def main() -> int:
             deadline = time.monotonic() + args.duration
             while thread.is_alive():
                 remaining = deadline - time.monotonic()
-                if remaining <= 0 or stop_event.is_set() or success_event.is_set():
+                if remaining <= 0 or failure_event.is_set() or success_event.is_set():
                     print("\nDuration elapsed; stopping harness...")
                     break
                 thread.join(timeout=min(remaining, 1.0))
         else:
             while thread.is_alive():
                 thread.join(timeout=1.0)
-                if stop_event.is_set():
+                if failure_event.is_set():
                     print("\nFailure event detected; stopping harness...")
                     break
                 if success_event.is_set():
@@ -245,6 +245,15 @@ def main() -> int:
             process.kill()
         if log_fp is not None:
             log_fp.close()
+
+    if failure_event.is_set() and not args.no_fail_on_error:
+        print("Harness exiting with failure status due to detected error.", file=sys.stderr)
+        return 1
+
+    if success_event.is_set():
+        print("Harness observed success event; exiting cleanly.")
+    else:
+        print("Harness completed without observing a success event.")
 
     return 0
 
