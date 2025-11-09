@@ -7,8 +7,10 @@ import com.ringdown.mobile.di.IoDispatcher
 import com.ringdown.mobile.domain.TextSessionBootstrap
 import java.time.Instant
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.jvm.Volatile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -62,6 +64,12 @@ open class TextSessionClient @Inject constructor(
     private val lock = Mutex()
     private var activeWebSocket: WebSocket? = null
     private var heartbeatJob: Job? = null
+    private var heartbeatTimeoutJob: Job? = null
+    private var heartbeatTimeoutMillis: Long = 0L
+    @Volatile
+    private var heartbeatTimeoutTriggered = false
+    @Volatile
+    private var heartbeatTimeoutNotified = false
     private var sessionInfo: SessionInfo? = null
     private var readyAcknowledged = false
 
@@ -188,6 +196,11 @@ open class TextSessionClient @Inject constructor(
     private fun disconnectLocked() {
         heartbeatJob?.cancel()
         heartbeatJob = null
+        heartbeatTimeoutJob?.cancel()
+        heartbeatTimeoutJob = null
+        heartbeatTimeoutMillis = 0L
+        heartbeatTimeoutTriggered = false
+        heartbeatTimeoutNotified = false
 
         activeWebSocket?.let { socket ->
             try {
@@ -223,12 +236,22 @@ open class TextSessionClient @Inject constructor(
         )
     }
 
-    private fun startHeartbeat(intervalSeconds: Int) {
+    private fun startHeartbeatTasks(intervalSeconds: Int, timeoutSeconds: Int) {
         heartbeatJob?.cancel()
+        heartbeatTimeoutJob?.cancel()
+
         val intervalMillis = intervalSeconds
-            .coerceAtLeast(5)
-            .coerceAtMost(120)
+            .coerceAtLeast(MIN_HEARTBEAT_INTERVAL_SECONDS)
+            .coerceAtMost(MAX_HEARTBEAT_INTERVAL_SECONDS)
             .times(1000L)
+
+        heartbeatTimeoutMillis = timeoutSeconds
+            .coerceAtLeast(intervalSeconds + MIN_TIMEOUT_HEADROOM_SECONDS)
+            .coerceAtMost(MAX_HEARTBEAT_TIMEOUT_SECONDS)
+            .times(1000L)
+
+        heartbeatTimeoutTriggered = false
+        heartbeatTimeoutNotified = false
 
         heartbeatJob = scope.launch {
             delay(intervalMillis / 2)
@@ -242,6 +265,8 @@ open class TextSessionClient @Inject constructor(
                 delay(intervalMillis)
             }
         }
+
+        rescheduleHeartbeatTimeout()
     }
 
     internal fun handleInboundMessage(raw: String) {
@@ -275,6 +300,8 @@ open class TextSessionClient @Inject constructor(
                 )
             }
         }
+
+        rescheduleHeartbeatTimeout()
     }
 
     private fun handleReady(message: JSONObject) {
@@ -305,9 +332,7 @@ open class TextSessionClient @Inject constructor(
                 ),
             )
         }
-        if (activeWebSocket != null) {
-            startHeartbeat(intervalSeconds)
-        }
+        startHeartbeatTasks(intervalSeconds, timeoutSeconds)
         readyAcknowledged = true
 
         sessionInfo = sessionInfo?.copy(
@@ -434,6 +459,11 @@ open class TextSessionClient @Inject constructor(
             lock.withLock {
                 heartbeatJob?.cancel()
                 heartbeatJob = null
+                heartbeatTimeoutJob?.cancel()
+                heartbeatTimeoutJob = null
+                heartbeatTimeoutMillis = 0L
+                heartbeatTimeoutTriggered = false
+                heartbeatTimeoutNotified = false
                 activeWebSocket = null
                 readyAcknowledged = false
             }
@@ -442,20 +472,33 @@ open class TextSessionClient @Inject constructor(
 
     private fun onSocketFailure(error: Throwable) {
         if (error is CancellationException) return
-        Log.e(TAG, "WebSocket failure", error)
+        val failureError = if (heartbeatTimeoutTriggered) {
+            TimeoutException("Server heartbeat timeout")
+        } else {
+            error
+        }
+        Log.e(TAG, "WebSocket failure", failureError)
         logStructured(
             level = "ERROR",
             event = "text_session.socket_failure",
-            fields = mapOf("message" to (error.message ?: "unknown")),
+            fields = mapOf("message" to (failureError.message ?: "unknown")),
         )
-        scope.launch {
-            _events.emit(TextSessionEvent.ConnectionFailure(error))
+        val skipEmit = heartbeatTimeoutTriggered && heartbeatTimeoutNotified
+        if (!skipEmit) {
+            scope.launch {
+                _events.emit(TextSessionEvent.ConnectionFailure(failureError))
+            }
+            _state.value = TextSessionConnectionState.Failed(failureError.message ?: "WebSocket failure")
         }
-        _state.value = TextSessionConnectionState.Failed(error.message ?: "WebSocket failure")
         scope.launch {
             lock.withLock {
                 heartbeatJob?.cancel()
                 heartbeatJob = null
+                heartbeatTimeoutJob?.cancel()
+                heartbeatTimeoutJob = null
+                heartbeatTimeoutMillis = 0L
+                heartbeatTimeoutTriggered = false
+                heartbeatTimeoutNotified = false
                 activeWebSocket = null
                 readyAcknowledged = false
             }
@@ -519,11 +562,62 @@ open class TextSessionClient @Inject constructor(
         }
     }
 
+    private fun rescheduleHeartbeatTimeout() {
+        val timeoutMillis = heartbeatTimeoutMillis
+        if (timeoutMillis <= 0L) {
+            return
+        }
+        heartbeatTimeoutJob?.cancel()
+        heartbeatTimeoutJob = scope.launch {
+            delay(timeoutMillis)
+            heartbeatTimeoutJob = null
+            handleHeartbeatTimeout()
+        }
+    }
+
+    private suspend fun handleHeartbeatTimeout() {
+        if (heartbeatTimeoutTriggered) {
+            return
+        }
+        heartbeatTimeoutTriggered = true
+        logStructured(
+            level = "WARN",
+            event = "text_session.heartbeat_timeout",
+            fields = emptyMap(),
+        )
+
+        val hadSocket = lock.withLock {
+            val socket = activeWebSocket
+            if (socket != null) {
+                runCatching { socket.cancel() }
+                true
+            } else {
+                false
+            }
+        }
+
+        _events.emit(
+            TextSessionEvent.ConnectionFailure(TimeoutException("Server heartbeat timeout")),
+        )
+        _state.value = TextSessionConnectionState.Failed("Server heartbeat timeout")
+        heartbeatTimeoutNotified = true
+
+        if (!hadSocket) {
+            lock.withLock {
+                disconnectLocked()
+            }
+        }
+    }
+
     companion object {
         private const val TAG = "TextSessionClient"
         private const val SESSION_TOKEN_HEADER = "x-ringdown-session-token"
         private const val MAX_ERROR_DETAIL = 256
         private const val FAKE_GREETING = "Connected to instrumentation stub."
+        private const val MIN_HEARTBEAT_INTERVAL_SECONDS = 5
+        private const val MAX_HEARTBEAT_INTERVAL_SECONDS = 120
+        private const val MAX_HEARTBEAT_TIMEOUT_SECONDS = 300
+        private const val MIN_TIMEOUT_HEADROOM_SECONDS = 5
 
         internal fun computeWebSocketEndpoint(
             baseUrl: String,
