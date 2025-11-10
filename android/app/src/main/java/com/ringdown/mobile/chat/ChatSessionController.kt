@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -45,6 +46,7 @@ class ChatSessionController @Inject constructor(
     private val transcripts: MutableList<ChatMessage> = mutableListOf()
     private var assistantDraft: AssistantDraft? = null
     private var eventsJob: Job? = null
+    private var reconnectJob: Job? = null
     private val stateMutex = Mutex()
     private var currentAgent: String? = null
 
@@ -120,25 +122,30 @@ class ChatSessionController @Inject constructor(
         eventsJob?.cancel()
         eventsJob = sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
             textSessionClient.events.collect { event ->
-                when (event) {
-                    is TextSessionEvent.Ready -> handleReady(event)
-                    is TextSessionEvent.AssistantToken -> handleAssistantToken(event)
-                    is TextSessionEvent.ToolEvent -> handleToolEvent(event)
-                    is TextSessionEvent.ServerError -> handleServerError(event)
-                    is TextSessionEvent.ConnectionClosed -> handleConnectionClosed(event)
-                    is TextSessionEvent.ConnectionFailure -> handleConnectionFailure(event)
-                    is TextSessionEvent.ProtocolError -> logStructured(
-                        "WARN",
-                        "chat_session.protocol_error",
-                        mapOf("reason" to event.reason, "detail" to event.detail),
-                    )
-                    is TextSessionEvent.SendFailed -> logStructured(
-                        "WARN",
-                        "chat_session.send_failed_event",
-                        mapOf("payload" to event.payload.take(64)),
-                    )
-                }
+                handleEvent(event)
             }
+        }
+    }
+
+    @VisibleForTesting
+    internal suspend fun handleEvent(event: TextSessionEvent) {
+        when (event) {
+            is TextSessionEvent.Ready -> handleReady(event)
+            is TextSessionEvent.AssistantToken -> handleAssistantToken(event)
+            is TextSessionEvent.ToolEvent -> handleToolEvent(event)
+            is TextSessionEvent.ServerError -> handleServerError(event)
+            is TextSessionEvent.ConnectionClosed -> handleConnectionClosed(event)
+            is TextSessionEvent.ConnectionFailure -> handleConnectionFailure(event)
+            is TextSessionEvent.ProtocolError -> logStructured(
+                "WARN",
+                "chat_session.protocol_error",
+                mapOf("reason" to event.reason, "detail" to event.detail),
+            )
+            is TextSessionEvent.SendFailed -> logStructured(
+                "WARN",
+                "chat_session.send_failed_event",
+                mapOf("payload" to event.payload.take(64)),
+            )
         }
     }
 
@@ -193,11 +200,20 @@ class ChatSessionController @Inject constructor(
 
     private suspend fun handleConnectionClosed(event: TextSessionEvent.ConnectionClosed) {
         val reason = event.reason?.ifBlank { null } ?: "Connection closed"
-        failSession(reason)
+        if (sessionActive.get()) {
+            scheduleReconnect(reason)
+        } else {
+            failSession(reason)
+        }
     }
 
     private suspend fun handleConnectionFailure(event: TextSessionEvent.ConnectionFailure) {
-        failSession(event.error.message ?: "Connection failure")
+        val reason = event.error.message ?: "Connection failure"
+        if (sessionActive.get()) {
+            scheduleReconnect(reason)
+        } else {
+            failSession(reason)
+        }
     }
 
     private fun seedPersistedHistoryLocked() {
@@ -225,6 +241,7 @@ class ChatSessionController @Inject constructor(
     private suspend fun failSession(reason: String) {
         logStructured("ERROR", "chat_session.failed", mapOf("reason" to reason))
         sessionActive.set(false)
+        cancelReconnectJob()
         teardownSession()
         emitState(ChatConnectionState.Failed(reason))
     }
@@ -232,6 +249,7 @@ class ChatSessionController @Inject constructor(
     private suspend fun teardownSession() {
         eventsJob?.cancel()
         eventsJob = null
+        cancelReconnectJob()
         runCatching {
             withTimeoutOrNull(STOP_TIMEOUT_MILLIS) {
                 textSessionClient.disconnect()
@@ -299,6 +317,74 @@ class ChatSessionController @Inject constructor(
     @VisibleForTesting
     internal suspend fun snapshotTranscripts(): List<ChatMessage> = stateMutex.withLock { transcripts.toList() }
 
+    private fun scheduleReconnect(reason: String) {
+        if (!sessionActive.get()) {
+            return
+        }
+        if (reconnectJob?.isActive == true) {
+            return
+        }
+        reconnectJob = sessionScope.launch {
+            logStructured(
+                "WARN",
+                "chat_session.reconnect_start",
+                mapOf("reason" to reason),
+            )
+            emitState(ChatConnectionState.Connecting)
+            val deadline = nowMillis() + RECONNECT_WINDOW_MILLIS
+            var attempt = 0
+            while (sessionActive.get() && nowMillis() < deadline) {
+                if (attempt > 0) {
+                    delay(RECONNECT_BACKOFF_MILLIS)
+                }
+                attempt += 1
+                try {
+                    restartSession()
+                    logStructured(
+                        "INFO",
+                        "chat_session.reconnect_success",
+                        mapOf("attempt" to attempt),
+                    )
+                    emitState(ChatConnectionState.Connected(currentAgent, transcriptsSnapshot()))
+                    reconnectJob = null
+                    return@launch
+                } catch (error: Exception) {
+                    logStructured(
+                        "WARN",
+                        "chat_session.reconnect_failed",
+                        mapOf(
+                            "attempt" to attempt,
+                            "message" to (error.message ?: "unknown"),
+                            "exceptionType" to error::class.java.simpleName,
+                        ),
+                    )
+                }
+            }
+            logStructured(
+                "ERROR",
+                "chat_session.reconnect_exhausted",
+                mapOf("reason" to reason),
+            )
+            reconnectJob = null
+            failSession("Unable to reconnect: $reason")
+        }
+    }
+
+    private suspend fun restartSession() {
+        val previousAgent = currentAgent
+        val bootstrap = textSessionStarter.startTextSession(previousAgent)
+        currentAgent = bootstrap.agent.ifBlank { previousAgent }
+        applyBootstrapHistory(bootstrap.history)
+        textSessionClient.connect(bootstrap)
+    }
+
+    private fun cancelReconnectJob() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+    }
+
+    private fun nowMillis(): Long = nowProvider.now().toEpochMilli()
+
     private fun buildToolSummary(event: TextSessionEvent.ToolEvent): String {
         if (event.payload.isEmpty()) {
             return event.event ?: "Tool event"
@@ -340,5 +426,7 @@ class ChatSessionController @Inject constructor(
         private const val TAG = "ChatSessionController"
         private const val CHAT_MESSAGE_SOURCE = "android-chat"
         private const val STOP_TIMEOUT_MILLIS = 5_000L
+        private const val RECONNECT_WINDOW_MILLIS = 60_000L
+        private const val RECONNECT_BACKOFF_MILLIS = 2_000L
     }
 }

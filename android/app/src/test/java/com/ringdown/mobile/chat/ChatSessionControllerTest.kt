@@ -6,6 +6,7 @@ import com.ringdown.mobile.conversation.ConversationHistoryStore
 import com.ringdown.mobile.data.TextSessionStarter
 import com.ringdown.mobile.domain.TextSessionBootstrap
 import com.ringdown.mobile.text.TextSessionClient
+import com.ringdown.mobile.text.TextSessionEvent
 import com.ringdown.mobile.voice.InstantProvider
 import java.nio.file.Files
 import java.time.Instant
@@ -78,6 +79,80 @@ class ChatSessionControllerTest {
     }
 
     @Test
+    fun reconnectsAutomaticallyAfterConnectionFailure() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = createStore(dispatcher)
+        val starterCalls = mutableListOf<String>()
+        val starter = TextSessionStarter { agent ->
+            val sessionId = "session-${starterCalls.size + 1}"
+            starterCalls += sessionId
+            TextSessionBootstrap(
+                sessionId = sessionId,
+                sessionToken = "token-$sessionId",
+                resumeToken = null,
+                websocketPath = "/ws",
+                agent = agent ?: "tester",
+                expiresAtIso = Instant.now().toString(),
+                heartbeatIntervalSeconds = 15,
+                heartbeatTimeoutSeconds = 45,
+                tlsPins = emptyList(),
+                history = emptyList(),
+            )
+        }
+        val client = RecordingTextSessionClient(dispatcher)
+        val controller = createController(dispatcher, store, starterOverride = starter, clientOverride = client)
+
+        controller.start("tester")
+        advanceUntilIdle()
+        assertThat(starterCalls).hasSize(1)
+        assertThat(client.connectInvocations).isEqualTo(1)
+
+        controller.handleEvent(TextSessionEvent.ConnectionFailure(RuntimeException("boom")))
+        advanceUntilIdle()
+
+        assertThat(starterCalls).hasSize(2)
+        assertThat(client.connectInvocations).isEqualTo(2)
+        assertThat(controller.state.value).isInstanceOf(ChatConnectionState.Connected::class.java)
+    }
+
+    @Test
+    fun doesNotReconnectWhenSessionStopped() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = createStore(dispatcher)
+        val starterCalls = mutableListOf<String>()
+        val starter = TextSessionStarter { agent ->
+            val sessionId = "session-${starterCalls.size + 1}"
+            starterCalls += sessionId
+            TextSessionBootstrap(
+                sessionId = sessionId,
+                sessionToken = "token-$sessionId",
+                resumeToken = null,
+                websocketPath = "/ws",
+                agent = agent ?: "tester",
+                expiresAtIso = Instant.now().toString(),
+                heartbeatIntervalSeconds = 15,
+                heartbeatTimeoutSeconds = 45,
+                tlsPins = emptyList(),
+                history = emptyList(),
+            )
+        }
+        val client = RecordingTextSessionClient(dispatcher)
+        val controller = createController(dispatcher, store, starterOverride = starter, clientOverride = client)
+
+        controller.start("tester")
+        advanceUntilIdle()
+        controller.stop()
+        advanceUntilIdle()
+
+        controller.handleEvent(TextSessionEvent.ConnectionFailure(RuntimeException("boom")))
+        advanceUntilIdle()
+
+        assertThat(starterCalls).hasSize(1)
+        assertThat(client.connectInvocations).isEqualTo(1)
+        assertThat(controller.state.value).isInstanceOf(ChatConnectionState.Idle::class.java)
+    }
+
+    @Test
     fun startOverwritesHistoryWithBootstrapSnapshot() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val store = createStore(dispatcher)
@@ -138,6 +213,7 @@ class ChatSessionControllerTest {
         store: ConversationHistoryStore,
         bootstrapHistory: List<ChatMessage> = emptyList(),
         starterOverride: TextSessionStarter? = null,
+        clientOverride: TextSessionClient? = null,
     ): ChatSessionController {
         val starter = starterOverride ?: TextSessionStarter { agent ->
             TextSessionBootstrap(
@@ -153,7 +229,7 @@ class ChatSessionControllerTest {
                 history = bootstrapHistory,
             )
         }
-        val client = object : TextSessionClient(
+        val client = clientOverride ?: object : TextSessionClient(
             backendEnvironment = object : com.ringdown.mobile.data.BackendEnvironment() {
                 override fun baseUrl(): String = "https://example.invalid"
             },
@@ -171,6 +247,27 @@ class ChatSessionControllerTest {
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-08T00:00:00Z") },
         )
+    }
+
+    private class RecordingTextSessionClient(
+        dispatcher: CoroutineDispatcher,
+    ) : TextSessionClient(
+        backendEnvironment = object : com.ringdown.mobile.data.BackendEnvironment() {
+            override fun baseUrl(): String = "https://example.invalid"
+        },
+        baseClient = OkHttpClient(),
+        dispatcher = dispatcher,
+    ) {
+        var connectInvocations: Int = 0
+            private set
+
+        override suspend fun connect(bootstrap: TextSessionBootstrap) {
+            connectInvocations += 1
+        }
+
+        override suspend fun disconnect() {
+            // no-op
+        }
     }
 
     private fun createStore(dispatcher: CoroutineDispatcher): ConversationHistoryStore {
