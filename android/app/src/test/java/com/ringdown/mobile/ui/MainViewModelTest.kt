@@ -278,6 +278,31 @@ class MainViewModelTest {
         assertThat(history.last().text).isEqualTo("Hi there")
     }
 
+    @Test
+    fun chatReconnectingFlagReflectsState() = runTest {
+        val statuses = ArrayDeque<RegistrationStatus>().apply {
+            add(RegistrationStatus.Approved(agentName = "tester", message = "Approved"))
+        }
+        val gateway = FakeRegistrationGateway(statuses)
+        val dispatcher = dispatcherRule.dispatcher
+        val historyStore = createHistoryStore(dispatcher)
+        val voiceController = RecordingVoiceController(dispatcher, historyStore)
+        val chatGateway = FakeChatGateway(historyStore)
+        val viewModel = MainViewModel(gateway, voiceController, chatGateway, historyStore)
+
+        advanceUntilIdle()
+        viewModel.openChatSession()
+        advanceUntilIdle()
+
+        chatGateway.emit(ChatConnectionState.Connecting)
+        advanceUntilIdle()
+        assertThat(viewModel.state.value.isChatReconnecting).isTrue()
+
+        chatGateway.emit(ChatConnectionState.Connected("tester", emptyList()))
+        advanceUntilIdle()
+        assertThat(viewModel.state.value.isChatReconnecting).isFalse()
+    }
+
     private class FakeRegistrationGateway(
         private val statuses: ArrayDeque<RegistrationStatus>,
     ) : RegistrationGateway {
@@ -407,6 +432,10 @@ class MainViewModelTest {
 
         override fun sendMessage(text: String) {
             sentMessages += text
+        }
+
+        fun emit(state: ChatConnectionState) {
+            _state.value = state
         }
     }
 

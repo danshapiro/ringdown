@@ -103,6 +103,7 @@ fun RingdownApp(
                     chatState = state.chatState,
                     chatHistory = state.chatHistory,
                     inputValue = state.chatInput,
+                    isReconnecting = state.isChatReconnecting,
                     onInputChange = onChatInputChanged,
                     onSend = onSendChatMessage,
                     onClose = onCloseChat,
@@ -358,6 +359,7 @@ private fun ChatScreen(
     chatState: ChatConnectionState,
     chatHistory: List<ChatMessage>,
     inputValue: String,
+    isReconnecting: Boolean,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onClose: () -> Unit,
@@ -402,7 +404,14 @@ private fun ChatScreen(
                         ChatTranscriptList(messages = chatHistory)
                     }
                 }
-                ChatConnectionState.Connecting -> ChatPlaceholder(text = stringResource(id = R.string.chat_connecting))
+                ChatConnectionState.Connecting -> {
+                    val text = if (isReconnecting) {
+                        stringResource(id = R.string.chat_reconnecting)
+                    } else {
+                        stringResource(id = R.string.chat_connecting)
+                    }
+                    ChatPlaceholder(text = text)
+                }
                 is ChatConnectionState.Failed -> ChatErrorState(message = chatState.reason, onRetry = onRetry)
                 is ChatConnectionState.Connected -> ChatTranscriptList(messages = chatState.messages)
             }

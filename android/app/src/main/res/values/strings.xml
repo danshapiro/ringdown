@@ -28,6 +28,7 @@
     <string name="chat_input_placeholder">Type a message…</string>
     <string name="chat_send_button">Send</string>
     <string name="chat_connecting">Connecting to your assistant…</string>
+    <string name="chat_reconnecting">Reconnecting… we’ll restore your chat shortly.</string>
     <string name="chat_empty_state">Start typing to chat with your assistant.</string>
     <string name="chat_retry_button">Retry</string>
     <string name="chat_tool_title">Tool: %1$s</string>

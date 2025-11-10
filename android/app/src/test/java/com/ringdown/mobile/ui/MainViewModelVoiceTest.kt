@@ -162,6 +162,9 @@ class MainViewModelVoiceTest {
         override fun start(agent: String?) {}
         override fun stop() {}
         override fun sendMessage(text: String) {}
+        fun emit(state: ChatConnectionState) {
+            _state.value = state
+        }
     }
 
     private fun createHistoryStore(dispatcher: CoroutineDispatcher): ConversationHistoryStore {
