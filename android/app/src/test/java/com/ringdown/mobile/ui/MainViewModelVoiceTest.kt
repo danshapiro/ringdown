@@ -12,6 +12,8 @@ import com.ringdown.mobile.data.TextSessionStarter
 import com.ringdown.mobile.domain.RegistrationStatus
 import com.ringdown.mobile.domain.TextSessionBootstrap
 import com.ringdown.mobile.util.MainDispatcherRule
+import com.ringdown.mobile.voice.GreetingSpeechGateway
+import com.ringdown.mobile.voice.GreetingSpeechGateway
 import com.ringdown.mobile.voice.InstantProvider
 import com.ringdown.mobile.voice.LocalVoiceSessionController
 import com.ringdown.mobile.voice.VoiceConnectionState
@@ -98,6 +100,10 @@ class MainViewModelVoiceTest {
             override val events = MutableSharedFlow<AsrEvent>()
             override suspend fun start() {}
             override suspend fun stop() {}
+        },
+        greetingSpeechPlayer = object : GreetingSpeechGateway {
+            override fun speak(text: String) {}
+            override fun stop() {}
         },
         dispatcher = dispatcher,
         mainDispatcher = dispatcher,

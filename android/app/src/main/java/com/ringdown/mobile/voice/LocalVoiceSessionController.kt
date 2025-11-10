@@ -34,6 +34,7 @@ open class LocalVoiceSessionController @Inject constructor(
     private val textSessionStarter: TextSessionStarter,
     private val textSessionClient: TextSessionClient,
     private val asrEngine: LocalAsrEngine,
+    private val greetingSpeechPlayer: GreetingSpeechGateway,
     @IoDispatcher dispatcher: CoroutineDispatcher,
     @MainDispatcher private val mainDispatcher: CoroutineDispatcher,
     private val nowProvider: InstantProvider,
@@ -439,6 +440,7 @@ open class LocalVoiceSessionController @Inject constructor(
         currentSessionId = null
         activeAgent = null
         cancelReconnectJob()
+        greetingSpeechPlayer.stop()
     }
 
     private fun publishTranscripts() {
@@ -469,6 +471,7 @@ open class LocalVoiceSessionController @Inject constructor(
             timestampIso = nowProvider.now().toString(),
         )
         publishTranscripts()
+        greetingSpeechPlayer.speak(greeting)
     }
 
     private fun handleToolEvent(event: TextSessionEvent.ToolEvent) {

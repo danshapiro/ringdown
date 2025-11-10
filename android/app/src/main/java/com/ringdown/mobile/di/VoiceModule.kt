@@ -1,5 +1,7 @@
 package com.ringdown.mobile.di
 
+import com.ringdown.mobile.voice.GreetingSpeechGateway
+import com.ringdown.mobile.voice.GreetingSpeechPlayer
 import com.ringdown.mobile.voice.asr.AudioInputSource
 import com.ringdown.mobile.voice.asr.LocalAsrEngine
 import com.ringdown.mobile.voice.asr.MicrophoneAudioInputSource
@@ -25,4 +27,10 @@ abstract class VoiceModule {
     abstract fun bindAudioInputSource(
         source: MicrophoneAudioInputSource,
     ): AudioInputSource
+
+    @Binds
+    @Singleton
+    abstract fun bindGreetingSpeechGateway(
+        player: GreetingSpeechPlayer,
+    ): GreetingSpeechGateway
 }

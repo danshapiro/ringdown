@@ -1,5 +1,6 @@
 package com.ringdown.mobile.voice
 
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.ringdown.mobile.data.BackendEnvironment
 import com.ringdown.mobile.data.TextSessionStarter
@@ -53,6 +54,7 @@ class LocalVoiceSessionControllerInstrumentedTest {
                 override suspend fun start() {}
                 override suspend fun stop() {}
             },
+            greetingSpeechPlayer = GreetingSpeechPlayer(ApplicationProvider.getApplicationContext()),
             dispatcher = Dispatchers.Unconfined,
             mainDispatcher = Dispatchers.Unconfined,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },

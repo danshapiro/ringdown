@@ -40,7 +40,8 @@ class LocalVoiceSessionControllerTest {
     @Test
     fun greetingSeededOnReadyEvent() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        val controller = createController(dispatcher)
+        val greetingPlayer = TestGreetingSpeechGateway()
+        val controller = createController(dispatcher, greetingSpeechGateway = greetingPlayer)
 
         invokeHandleReady(
             controller,
@@ -61,6 +62,7 @@ class LocalVoiceSessionControllerTest {
         assertThat(greeting.speaker).isEqualTo("assistant-b")
         assertThat(greeting.text).isEqualTo("Welcome aboard.")
         assertThat(greeting.timestampIso).isEqualTo("2025-11-02T00:00:00Z")
+        assertThat(greetingPlayer.spoken).containsExactly("Welcome aboard.")
     }
 
     @Test
@@ -205,6 +207,7 @@ class LocalVoiceSessionControllerTest {
                 override suspend fun start() {}
                 override suspend fun stop() {}
             },
+            greetingSpeechPlayer = TestGreetingSpeechGateway(),
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
@@ -270,6 +273,7 @@ class LocalVoiceSessionControllerTest {
             textSessionStarter = starter,
             textSessionClient = textSessionClient,
             asrEngine = asrEngine,
+            greetingSpeechPlayer = TestGreetingSpeechGateway(),
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
@@ -327,6 +331,7 @@ class LocalVoiceSessionControllerTest {
             textSessionStarter = starter,
             textSessionClient = textSessionClient,
             asrEngine = asrEngine,
+            greetingSpeechPlayer = TestGreetingSpeechGateway(),
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
@@ -361,6 +366,7 @@ class LocalVoiceSessionControllerTest {
         dispatcher: CoroutineDispatcher,
         store: ConversationHistoryStore = createHistoryStore(dispatcher),
         bootstrapHistory: List<ChatMessage> = emptyList(),
+        greetingSpeechGateway: GreetingSpeechGateway = TestGreetingSpeechGateway(),
     ): LocalVoiceSessionController {
         val backendEnvironment = object : BackendEnvironment() {
             override fun baseUrl(): String = "https://example.invalid"
@@ -394,11 +400,25 @@ class LocalVoiceSessionControllerTest {
             textSessionStarter = textSessionStarter,
             textSessionClient = textSessionClient,
             asrEngine = asrEngine,
+            greetingSpeechPlayer = greetingSpeechGateway,
             dispatcher = dispatcher,
             mainDispatcher = dispatcher,
             nowProvider = InstantProvider { Instant.parse("2025-11-02T00:00:00Z") },
             conversationHistoryStore = store,
         )
+    }
+
+    private class TestGreetingSpeechGateway : GreetingSpeechGateway {
+        val spoken: MutableList<String> = mutableListOf()
+        var stopCount: Int = 0
+
+        override fun speak(text: String) {
+            spoken += text
+        }
+
+        override fun stop() {
+            stopCount += 1
+        }
     }
 
     private fun invokeHandleReady(
