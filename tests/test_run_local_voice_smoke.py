@@ -6,6 +6,8 @@ from pathlib import Path
 import importlib.util
 import types
 
+import pytest
+
 
 def load_module() -> types.ModuleType:
     module_path = Path("android/scripts/run_local_voice_smoke.py").resolve()
@@ -117,3 +119,23 @@ def test_resolve_profile_uses_default_dir(tmp_path, monkeypatch):
 
     resolved = mod._resolve_profile_path(Path("pixel9"))
     assert resolved == profile_file
+
+
+def test_resolve_adb_binary_raises(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(mod.shutil, "which", lambda _: None)
+    with pytest.raises(SystemExit):
+        mod._resolve_adb_binary("missing-adb")
+
+
+def test_verify_device_online_failure(monkeypatch):
+    mod = load_module()
+
+    class Result:
+        returncode = 0
+        stdout = "offline"
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: Result())
+    with pytest.raises(SystemExit):
+        mod._verify_device_online("adb", "SER123")

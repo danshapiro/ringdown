@@ -9,12 +9,12 @@ with the harness status so it can be used in automation.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
 import threading
 import time
-import json
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -24,14 +24,49 @@ DEFAULT_ACTIVITY = "com.ringdown.mobile.debug/com.ringdown.mobile.MainActivity"
 DEFAULT_DURATION = 180
 DEFAULT_RECONNECT_DELAY = 5.0
 DEFAULT_HANGUP_DELAY = 3.0
+_ADB_BIN: str | None = None
 
 
 def _run_adb(device: Optional[str], *args: str) -> None:
-    cmd = ["adb"]
+    if _ADB_BIN is None:
+        raise SystemExit("ADB binary not initialised; call _set_adb_binary first.")
+    cmd = [_ADB_BIN]
     if device:
         cmd.extend(["-s", device])
     cmd.extend(args)
     subprocess.run(cmd, check=True)
+
+
+def _set_adb_binary(path: str) -> None:
+    global _ADB_BIN
+    _ADB_BIN = path
+
+
+def _resolve_adb_binary(candidate: Optional[str]) -> str:
+    resolved = shutil.which(candidate or "adb")
+    if resolved is None:
+        raise SystemExit(
+            f"Unable to locate adb binary for '{candidate or 'adb'}'. "
+            "Install Android platform-tools or supply --adb-bin.",
+        )
+    return resolved
+
+
+def _verify_device_online(adb_bin: str, device: Optional[str]) -> None:
+    if not device:
+        return
+    result = subprocess.run(
+        [adb_bin, "-s", device, "get-state"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            f"Failed to query device '{device}': {result.stderr.strip() or result.stdout.strip()}",
+        )
+    if result.stdout.strip() != "device":
+        raise SystemExit(f"Device '{device}' is not online (state={result.stdout.strip()}).")
 
 
 def _parse_coord(value: str) -> tuple[int, int]:
@@ -110,6 +145,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Pass-through argument for manual_voice_harness (repeatable)",
     )
+    parser.add_argument(
+        "--adb-bin",
+        default=None,
+        help="Path to adb executable (default: search PATH for 'adb')",
+    )
+    parser.add_argument(
+        "--skip-device-check",
+        action="store_true",
+        help="Skip verifying that the specified --device is online",
+    )
     return parser.parse_args()
 
 
@@ -145,7 +190,7 @@ def _apply_profile(args: argparse.Namespace) -> None:
         raise SystemExit(f"Profile '{profile_path}' is not valid JSON: {exc}") from exc
 
     def assign(attr: str, key: str, transform=None) -> None:
-        if getattr(args, attr) is not None:
+        if getattr(args, attr, None) is not None:
             return
         if key not in data:
             return
@@ -162,6 +207,7 @@ def _apply_profile(args: argparse.Namespace) -> None:
     assign("reconnect_delay", "reconnectDelay", float)
     assign("hangup_tap", "hangupTap", _to_coord)
     assign("hangup_delay", "hangupDelay", float)
+    assign("adb_bin", "adbBin", str)
 
     if args.fail_event is None and isinstance(data.get("failEvents"), list):
         args.fail_event = [str(item) for item in data["failEvents"] if item]
@@ -197,6 +243,11 @@ def _launch_harness(args: argparse.Namespace) -> list[str]:
 
 
 def _run_with_taps(args: argparse.Namespace) -> int:
+    adb_bin = _resolve_adb_binary(args.adb_bin)
+    _set_adb_binary(adb_bin)
+    if not args.skip_device_check:
+        _verify_device_online(adb_bin, args.device)
+
     cmd = _launch_harness(args)
     print("Launching harness:", " ".join(cmd))
     process = subprocess.Popen(cmd)
@@ -241,10 +292,6 @@ def _run_with_taps(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    if shutil.which("adb") is None:
-        print("adb not found on PATH.", file=sys.stderr)
-        return 2
-
     args = parse_args()
     _apply_profile(args)
     if args.activity is None:
