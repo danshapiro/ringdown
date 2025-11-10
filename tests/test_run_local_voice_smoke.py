@@ -139,3 +139,13 @@ def test_verify_device_online_failure(monkeypatch):
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **kw: Result())
     with pytest.raises(SystemExit):
         mod._verify_device_online("adb", "SER123")
+
+
+def test_write_result_json(tmp_path):
+    mod = load_module()
+    output = tmp_path / "result.json"
+    mod._write_result_json(output, "success", 0)
+    data = json.loads(output.read_text(encoding="utf-8"))
+    assert data["status"] == "success"
+    assert data["returnCode"] == 0
+    assert "timestamp" in data

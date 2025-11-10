@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 import shutil
 import subprocess
 import sys
@@ -155,6 +156,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip verifying that the specified --device is online",
     )
+    parser.add_argument(
+        "--result-json",
+        type=Path,
+        help="Optional path to write a JSON summary of the run status",
+    )
     return parser.parse_args()
 
 
@@ -291,6 +297,16 @@ def _run_with_taps(args: argparse.Namespace) -> int:
     return return_code
 
 
+def _write_result_json(path: Path, status: str, return_code: int) -> None:
+    payload = {
+        "status": status,
+        "returnCode": return_code,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def main() -> int:
     args = parse_args()
     _apply_profile(args)
@@ -310,6 +326,9 @@ def main() -> int:
         args.extra_harness_arg = []
 
     return_code = _run_with_taps(args)
+    status = "success" if return_code == 0 else "failure"
+    if args.result_json:
+        _write_result_json(args.result_json.expanduser(), status, return_code)
     if return_code != 0:
         print(f"Harness exited with status {return_code}", file=sys.stderr)
     else:
