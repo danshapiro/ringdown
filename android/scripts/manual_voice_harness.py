@@ -129,7 +129,7 @@ def _forward_logs(
     return thread
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Manual realtime voice harness")
     parser.add_argument("--device", help="ADB device serial (optional)")
     parser.add_argument(
@@ -164,7 +164,7 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Log substrings that mark success; harness stops once observed (repeatable).",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:
