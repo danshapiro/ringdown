@@ -141,11 +141,17 @@ def test_verify_device_online_failure(monkeypatch):
         mod._verify_device_online("adb", "SER123")
 
 
-def test_write_result_json(tmp_path):
+def test_resolve_log_output_path_prefers_explicit(tmp_path):
     mod = load_module()
-    output = tmp_path / "result.json"
-    mod._write_result_json(output, "success", 0)
-    data = json.loads(output.read_text(encoding="utf-8"))
-    assert data["status"] == "success"
-    assert data["returnCode"] == 0
-    assert "timestamp" in data
+    log_path = tmp_path / "custom.log"
+    args = types.SimpleNamespace(log_output=log_path, result_json=None)
+    resolved = mod._resolve_log_output_path(args)
+    assert resolved == log_path
+
+
+def test_resolve_log_output_path_defaults_to_result_json(tmp_path):
+    mod = load_module()
+    result_path = tmp_path / "result.json"
+    args = types.SimpleNamespace(log_output=None, result_json=result_path)
+    resolved = mod._resolve_log_output_path(args)
+    assert resolved == result_path.with_suffix(".json.log")

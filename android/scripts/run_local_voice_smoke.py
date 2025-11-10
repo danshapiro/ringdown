@@ -157,6 +157,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip verifying that the specified --device is online",
     )
     parser.add_argument(
+        "--log-output",
+        type=Path,
+        help="Optional path to capture harness stdout (defaults to result_json.log when --result-json is set)",
+    )
+    parser.add_argument(
         "--result-json",
         type=Path,
         help="Optional path to write a JSON summary of the run status",
@@ -256,7 +261,21 @@ def _run_with_taps(args: argparse.Namespace) -> int:
 
     cmd = _launch_harness(args)
     print("Launching harness:", " ".join(cmd))
-    process = subprocess.Popen(cmd)
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    log_path = _resolve_log_output_path(args)
+    log_file = log_path.open("w", encoding="utf-8") if log_path else None
+
+    def _stream_output() -> None:
+        if process.stdout is None:
+            return
+        for line in process.stdout:
+            sys.stdout.write(line)
+            if log_file:
+                log_file.write(line)
+                log_file.flush()
+
+    output_thread = threading.Thread(target=_stream_output, daemon=True)
+    output_thread.start()
 
     tap_threads: list[threading.Thread] = []
 
@@ -281,6 +300,9 @@ def _run_with_taps(args: argparse.Namespace) -> int:
         process.terminate()
         return_code = process.wait()
     finally:
+        output_thread.join(timeout=1.0)
+        if log_file:
+            log_file.close()
         for thread in tap_threads:
             thread.join(timeout=1.0)
 
@@ -297,14 +319,13 @@ def _run_with_taps(args: argparse.Namespace) -> int:
     return return_code
 
 
-def _write_result_json(path: Path, status: str, return_code: int) -> None:
-    payload = {
-        "status": status,
-        "returnCode": return_code,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+def _resolve_log_output_path(args: argparse.Namespace) -> Optional[Path]:
+    if args.log_output:
+        return args.log_output.expanduser()
+    if args.result_json:
+        target = args.result_json.with_suffix(args.result_json.suffix + ".log") if args.result_json.suffix else Path(str(args.result_json) + ".log")
+        return target.expanduser()
+    return None
 
 
 def main() -> int:
@@ -325,10 +346,23 @@ def main() -> int:
     if args.extra_harness_arg is None:
         args.extra_harness_arg = []
 
+    log_path = _resolve_log_output_path(args)
+    args.log_output = log_path
+
     return_code = _run_with_taps(args)
     status = "success" if return_code == 0 else "failure"
     if args.result_json:
-        _write_result_json(args.result_json.expanduser(), status, return_code)
+        payload_path = args.result_json.expanduser()
+        data_path = payload_path
+        info = {
+            "status": status,
+            "returnCode": return_code,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        if log_path:
+            info["logPath"] = str(log_path)
+        payload_path.parent.mkdir(parents=True, exist_ok=True)
+        payload_path.write_text(json.dumps(info, indent=2), encoding="utf-8")
     if return_code != 0:
         print(f"Harness exited with status {return_code}", file=sys.stderr)
     else:
