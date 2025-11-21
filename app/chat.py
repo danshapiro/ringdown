@@ -138,6 +138,47 @@ def _safe_json_dumps(payload: Any) -> str:
         fallback = {"error": "serialization_failed", "repr": repr(payload)}
         return json.dumps(fallback, ensure_ascii=True)
 
+
+def _preview_text(text: str, limit: int = 160) -> str:
+    """Collapse whitespace and trim long strings for logging."""
+
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    if limit <= 3:
+        return collapsed[:limit]
+    return collapsed[: limit - 3] + "..."
+
+
+def _preview_payload(payload: Any, limit: int = 160) -> str:
+    """Return a string preview suitable for logging markers."""
+
+    if isinstance(payload, str):
+        return _preview_text(payload, limit=limit)
+    return _preview_text(_safe_json_dumps(payload), limit=limit)
+
+
+def _context_label(ctx: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Extract a stable identifier from *ctx* for log correlation."""
+
+    if not ctx:
+        return None
+    for key in ("conversation_id", "call_sid", "session_id", "request_id"):
+        value = ctx.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _log_marker(event: str, **fields: Any) -> None:
+    """Emit a structured log line that downstream tooling can detect."""
+
+    payload = {"event": event}
+    for key, value in fields.items():
+        if value is not None:
+            payload[key] = value
+    logger.info("RD_MARKER %s", _safe_json_dumps(payload))
+
 # ---------------------------------------------------------------------------
 # ToolRunner configuration (status + thinking sounds) – sourced from config.yaml
 # ---------------------------------------------------------------------------
@@ -256,11 +297,34 @@ async def stream_response(
         # Legacy single-turn usage – build a fresh list each time.
         messages = [{"role": "system", "content": agent["prompt"]}]
 
+    context_label = _context_label(call_context)
+    existing_user_turns = sum(1 for m in messages if m.get("role") == "user")
+    turn_number = existing_user_turns + 1
+    system_prompt_logged = False
+    turn_finalised = False
+
     if messages and messages[0]["role"] == "system" and "_system_prompt_template" not in agent:
         agent["_system_prompt_template"] = agent.get("prompt") or messages[0]["content"]
 
     # Append current user turn (mutates caller-supplied list too)
     messages.append({"role": "user", "content": user_text})
+    _log_marker(
+        "TURN_START",
+        turn=turn_number,
+        role="user",
+        preview=_preview_text(user_text),
+        message_count=len(messages),
+        context_id=context_label,
+    )
+
+    def _mark_turn_end(role: str, **fields: Any) -> None:
+        nonlocal turn_finalised
+        if turn_finalised:
+            return
+        payload = {"turn": turn_number, "role": role, "context_id": context_label}
+        payload.update(fields)
+        _log_marker("TURN_END", **payload)
+        turn_finalised = True
 
     # Helper to refresh dynamic placeholders in the system prompt each time we
     # send a request to the LLM.  We mutate messages[0]['content'] in-place so
@@ -441,9 +505,17 @@ async def stream_response(
                             result = tf.get_async_result(async_id)
                             if result is not None:
                                 # Update the message with the actual result
-                                messages[i]["content"] = _safe_json_dumps(result)
-                                logger.info(
-                                    f"Updated pending async result for tool {content_data.get('tool_name')} at message {i}"
+                                serialised_result = _safe_json_dumps(result)
+                                messages[i]["content"] = serialised_result
+                                _log_marker(
+                                    "ASYNC_RESULT_POLLED",
+                                    turn=turn_number,
+                                    tool=content_data.get("tool_name"),
+                                    tool_call_id=msg.get("tool_call_id"),
+                                    async_id=async_id,
+                                    message_index=i,
+                                    preview=_preview_text(serialised_result),
+                                    context_id=context_label,
                                 )
                 except (json.JSONDecodeError, Exception):
                     # Not JSON or other issue, skip
@@ -465,6 +537,16 @@ async def stream_response(
 
         # Recompute dynamic placeholders just before each LLM call
         _refresh_dynamic_prompt()
+
+        if not system_prompt_logged and messages and messages[0].get("role") == "system":
+            _log_marker(
+                "TURN_CONTEXT",
+                turn=turn_number,
+                role="system",
+                preview=_preview_text(str(messages[0].get("content", ""))),
+                context_id=context_label,
+            )
+            system_prompt_logged = True
 
         # ---------------------- STREAMING ROUND ---------------------------
 
@@ -502,6 +584,7 @@ async def stream_response(
             # No fallback or already failed backup – surface the error downstream
             thinking_audio.stop()
             yield f"{type(exc).__name__}: {exc}"
+            _mark_turn_end("assistant", reason="llm_exception", error=str(exc))
             return
 
         # Diagnostics ----------------------------------------------------
@@ -602,6 +685,7 @@ async def stream_response(
             # No fallback or already failed backup – surface the error downstream
             thinking_audio.stop()
             yield f"{type(exc).__name__}: {exc}"
+            _mark_turn_end("assistant", reason="stream_exception", error=str(exc))
             return
 
         # ---------------- Finished streaming this round ------------------
@@ -635,6 +719,7 @@ async def stream_response(
             # Even the backup model failed (or none configured) – notify caller.
             thinking_audio.stop()
             yield f"No tokens were produced by {agent['model']}"
+            _mark_turn_end("assistant", reason="no_tokens", model=agent["model"])
             return
 
         if tool_call_parts:
@@ -658,12 +743,14 @@ async def stream_response(
                 thinking_audio.stop()
                 logger.warning("Tool usage limits reached: %s", ", ".join(limit_issues))
                 yield f" [System: Reached {' and '.join(limit_issues)}. Unable to complete the request.]"
+                _mark_turn_end("system", reason="tool_limit", detail=", ".join(limit_issues))
                 return
 
             if tool_loops >= max_tool_loops:
                 logger.warning("Reached max tool iterations (%d); aborting tool loop", max_tool_loops)
                 thinking_audio.stop()
                 yield f" [System: Reached maximum of {max_tool_loops} tool uses. Unable to complete the request.]"
+                _mark_turn_end("system", reason="max_tool_iterations", detail=str(max_tool_loops))
                 return  # give up
 
             tool_loops += 1
@@ -693,8 +780,18 @@ async def stream_response(
                 except json.JSONDecodeError:
                     logger.error("Malformed tool args: %s", args_json)
                     args = {}
-
-                logger.info(f"⚙️⚙️⚙️ Tool call requested: {name}({args})")
+                call_id = tc.get("id")
+                classification = _classify_tool(name)
+                _log_marker(
+                    "TOOL_QUEUED",
+                    turn=turn_number,
+                    tool=name,
+                    call_id=call_id,
+                    classification=classification,
+                    args_preview=_preview_payload(args),
+                    context_id=context_label,
+                )
+                logger.info("Tool call requested: %s args=%s", name, args)
 
                 # Tool announcement is handled by ToolRunner as first thinking event
 
@@ -704,7 +801,14 @@ async def stream_response(
 
                 first_event = True
                 _tool_start = time.perf_counter()
-                async for ev in runner.run(name, tc.get("id", ""), args, _exec_tool):
+                _log_marker(
+                    "TOOL_EXEC_START",
+                    turn=turn_number,
+                    tool=name,
+                    call_id=call_id,
+                    context_id=context_label,
+                )
+                async for ev in runner.run(name, call_id or "", args, _exec_tool):
                     if ev.kind == "thinking":
                         if first_event:
                             start_payload = thinking_audio.start_payload()
@@ -725,6 +829,16 @@ async def stream_response(
                         except Exception as _exc:
                             logger.error("Failed to serialise tool result for logging: %s", _exc)
 
+                        _log_marker(
+                            "TOOL_RESULT",
+                            turn=turn_number,
+                            tool=name,
+                            call_id=call_id,
+                            elapsed_seconds=round(_tool_elapsed, 3),
+                            preview=_preview_payload(ev.data, limit=200),
+                            context_id=context_label,
+                        )
+
                         # Special handling for reset tool
                         if (name == "reset" and isinstance(ev.data, dict) 
                             and ev.data.get("action") == "reset_conversation"):
@@ -741,8 +855,9 @@ async def stream_response(
                             # The WebSocket handler will send the reset message as the new conversation's greeting
                             thinking_audio.stop()
                             yield {"type": "reset_conversation", "message": ev.data["message"]}
-                            
+
                             # End this conversation turn - the old conversation is complete
+                            _mark_turn_end("system", reason="reset_conversation")
                             return
                             
                         # Special handling for change_llm tool
@@ -768,7 +883,14 @@ async def stream_response(
                             
                             # Return the confirmation message directly 
                             thinking_audio.stop()
-                            yield ev.data.get("message", "Changed to %s" % ev.data.get("new_model"))
+                            confirmation = ev.data.get("message", "Changed to %s" % ev.data.get("new_model"))
+                            yield confirmation
+                            _mark_turn_end(
+                                "assistant",
+                                reason="change_llm_confirmation",
+                                preview=_preview_text(confirmation),
+                                detail=ev.data.get("new_model"),
+                            )
                             return  # End the conversation turn with the confirmation message
 
                         if (name == "hang_up" and isinstance(ev.data, dict)
@@ -790,6 +912,12 @@ async def stream_response(
                                 "message": ev.data.get("message"),
                                 "reason": ev.data.get("status"),
                             }
+                            _mark_turn_end(
+                                "system",
+                                reason="hang_up",
+                                preview=_preview_text(say_text or ""),
+                                detail=ev.data.get("status"),
+                            )
                             return
                         
                         # Normal tool result handling
@@ -805,27 +933,57 @@ async def stream_response(
                             if async_id:
                                 # Find the message we just added
                                 msg_index = len(messages) - 1
-                                
+                                _log_marker(
+                                    "ASYNC_PENDING",
+                                    turn=turn_number,
+                                    tool=name,
+                                    call_id=call_id,
+                                    async_id=async_id,
+                                    message_index=msg_index,
+                                    preview=_preview_payload(ev.data),
+                                    context_id=context_label,
+                                )
+
                                 # Define callback to update the message when async completes
-                                def update_message(aid: str, result: Dict[str, Any], idx: int = msg_index) -> None:
+                                def update_message(
+                                    aid: str,
+                                    result: Dict[str, Any],
+                                    idx: int = msg_index,
+                                    _call_id: str | None = call_id,
+                                    _tool_name: str = name,
+                                ) -> None:
                                     """Update the message at index with the async result."""
-                                    logger.info(f"Async tool completed, updating message at index {idx}")
                                     try:
                                         if idx < len(messages):
                                             # Update the content with the actual result
                                             serialised_result = _safe_json_dumps(result)
                                             messages[idx]["content"] = serialised_result
-                                            logger.debug(
-                                                f"Updated message {idx} with async result: {serialised_result[:200]}"
+                                            _log_marker(
+                                                "ASYNC_COMPLETE",
+                                                turn=turn_number,
+                                                tool=_tool_name,
+                                                call_id=_call_id,
+                                                async_id=aid,
+                                                message_index=idx,
+                                                preview=_preview_text(serialised_result),
+                                                context_id=context_label,
                                             )
                                         else:
                                             logger.error(f"Message index {idx} out of range (len={len(messages)})")
                                     except Exception as e:
                                         logger.error(f"Failed to update async message: {e}")
-                                
+
                                 # Register the callback
                                 tf.register_async_callback(async_id, update_message)
-                                logger.debug(f"Registered callback for async tool {name} with id {async_id}")
+                                _log_marker(
+                                    "ASYNC_REGISTERED",
+                                    turn=turn_number,
+                                    tool=name,
+                                    call_id=call_id,
+                                    async_id=async_id,
+                                    message_index=msg_index,
+                                    context_id=context_label,
+                                )
                 # end for ev
             # Loop again to let the LLM generate a textual response
             continue
@@ -837,5 +995,11 @@ async def stream_response(
             logger.info("Assistant reply: %s", assistant_content)
 
         messages.append({"role": "assistant", "content": assistant_content})
+        _mark_turn_end(
+            "assistant",
+            preview=_preview_text(assistant_content),
+            tokens=len(assistant_tokens),
+            tool_iterations=tool_loops,
+        )
         thinking_audio.stop()
         return  # done

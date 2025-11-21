@@ -118,5 +118,7 @@ Listen for the greeting and ensure the call summary appears in your logs.
 - Testing: `pytest`, `pytest -m integration`, and the WebSocket smoke helper keep regressions away before you push changes.
 - Release workflow: bump `app.__version__`, update `pyproject.toml`, log changes in `CHANGELOG.md`, and tag (`v0.x.y`) when you publish a new build.
 
+## Log Formatting (litellm transcripts)
+- If you're exploring logs, use `scripts/reformat_litellm_log.py` to turn a raw Cloud Run JSON export (e.g., `logs/litellm_call_YYYYMMDDThhmmZ_full.json`) into a human-readable transcript for the human.
 ## License
 Ringdown ships under the MIT License (see `LICENSE`).
