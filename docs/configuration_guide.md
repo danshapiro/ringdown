@@ -37,7 +37,7 @@ The `defaults` section configures shared behaviour:
 
 ```yaml
 defaults:
-  model: claude-sonnet-4-20250514
+  model: claude-opus-4-6
   backup_model: gemini/gemini-2.5-flash
   voice: en-US-Chirp3-HD-Aoede
   max_disconnect_seconds: 120
