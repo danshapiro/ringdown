@@ -12,7 +12,7 @@
 # ---------------------------------------------------------------------------
 defaults:
   timezone: America/Los_Angeles     # IANA timezone used for scheduling output.
-  model: claude-sonnet-4-20250514    # Primary LLM model identifier.
+  model: claude-opus-4-6             # Primary LLM model identifier.
   temperature: 1.0                  # Creativity / randomness of LLM calls.
   max_tokens: 20000                 # Maximum output tokens for the primary model.
   language: en-US                   # Locale code for speech synthesis.
