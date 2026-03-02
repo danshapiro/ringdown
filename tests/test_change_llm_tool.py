@@ -27,7 +27,7 @@ class TestChangeLLMTool:
 
         assert isinstance(result, dict), "Should return a dict"
         assert result["action"] == "model_changed"
-        assert result["new_model"] == "openai/gpt-5"
+        assert result["new_model"] == "openai/gpt-5.2"
         assert result["model_label"] == "gpt-5"
         assert result["settings"]["temperature"] == 1.0
         assert result["settings"]["max_tokens"] == 16000
@@ -37,7 +37,7 @@ class TestChangeLLMTool:
         """Support gpt-5-high-thinking synonym for elevated reasoning."""
         result = execute_tool("change_llm", {"model_choice": "gpt-5-high-thinking"})
 
-        assert result["new_model"] == "openai/gpt-5"
+        assert result["new_model"] == "openai/gpt-5.2"
         assert result["model_label"] == "gpt-5-high"
         assert result["settings"]["thinking_level"] == "high"
 

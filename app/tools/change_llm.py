@@ -38,6 +38,9 @@ def _get_agent_context() -> dict[str, Any] | None:
 _ALIAS_MAP: dict[str, str] = {
     "gpt-5": "gpt-5",
     "gpt5": "gpt-5",
+    "gpt-5.2": "gpt-5",
+    "gpt5.2": "gpt-5",
+    "openai/gpt-5.2": "gpt-5",
     "openai/gpt-5": "gpt-5",
     "gpt-5-mini": "gpt-5-mini",
     "gpt5-mini": "gpt-5-mini",
@@ -75,14 +78,14 @@ _ALIAS_MAP: dict[str, str] = {
 
 _MODEL_CONFIGS: dict[str, dict[str, Any]] = {
     "gpt-5": {
-        "model_id": "openai/gpt-5",
+        "model_id": "openai/gpt-5.2",
         "label": "gpt-5",
         "temperature": 1.0,
         "max_tokens": 16000,
         "thinking_level": "medium",
     },
     "gpt-5-high": {
-        "model_id": "openai/gpt-5",
+        "model_id": "openai/gpt-5.2",
         "label": "gpt-5-high",
         "temperature": 1.0,
         "max_tokens": 16000,
