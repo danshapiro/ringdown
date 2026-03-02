@@ -1,10 +1,9 @@
 """Tests for the change_llm tool functionality."""
 
 import pytest
-from unittest.mock import patch
 
-from app.tool_framework import execute_tool, list_tools, TOOL_REGISTRY
 from app.settings import get_agent_config
+from app.tool_framework import TOOL_REGISTRY, execute_tool, list_tools
 
 
 class TestChangeLLMTool:
@@ -56,14 +55,14 @@ class TestChangeLLMTool:
 
         assert isinstance(result, dict), "Should return a dict"
         assert result["action"] == "model_changed"
-        assert result["new_model"] == "gemini/gemini-2.5-flash"
+        assert result["new_model"] == "gemini/gemini-3-flash-preview"
         assert result["model_label"] == "gemini-flash"
 
     def test_gemini_pro_model_change(self):
         """Test changing to Gemini Pro."""
         result = execute_tool("change_llm", {"model_choice": "Gemini Pro"})
 
-        assert result["new_model"] == "gemini/gemini-2.5-pro"
+        assert result["new_model"] == "gemini/gemini-3.1-pro-preview"
         assert result["model_label"] == "gemini-pro"
 
     def test_claude_haiku_model_change(self):
@@ -80,8 +79,16 @@ class TestChangeLLMTool:
         """Test changing to Claude Sonnet model."""
         result = execute_tool("change_llm", {"model_choice": "Sonnet"})
 
-        assert result["new_model"] == "claude-sonnet-4-20250514"
+        assert result["new_model"] == "claude-sonnet-4-6"
         assert result["model_label"] == "sonnet"
+
+    def test_opus_model_change(self):
+        """Test changing to Claude Opus model."""
+        result = execute_tool("change_llm", {"model_choice": "Opus"})
+
+        assert result["new_model"] == "claude-opus-4-6"
+        assert result["model_label"] == "opus"
+        assert result["settings"]["thinking_level"] == "high"
 
     def test_custom_parameters(self):
         """Test change_llm with custom temperature and max_tokens."""
@@ -166,6 +173,7 @@ class TestChangeLLMTool:
             "Gemini Pro",
             "Haiku",
             "Sonnet",
+            "Opus",
         ]
 
         for model in valid_models:

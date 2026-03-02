@@ -38,7 +38,7 @@ The `defaults` section configures shared behaviour:
 ```yaml
 defaults:
   model: claude-opus-4-6
-  backup_model: gemini/gemini-2.5-flash
+  backup_model: gemini/gemini-3-flash-preview
   voice: en-US-Chirp3-HD-Aoede
   max_disconnect_seconds: 120
   max_tool_iterations: 6

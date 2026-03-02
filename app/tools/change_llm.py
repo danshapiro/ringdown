@@ -47,10 +47,27 @@ _ALIAS_MAP: dict[str, str] = {
     "gpt-5-high-thinking": "gpt-5-high",
     "gemini-pro": "gemini-pro",
     "geminipro": "gemini-pro",
+    "gemini-3-pro": "gemini-pro",
+    "gemini-3.1-pro": "gemini-pro",
+    "gemini-3-pro-preview": "gemini-pro",
+    "gemini-3.1-pro-preview": "gemini-pro",
+    "gemini-2.5-pro": "gemini-pro",
     "gemini": "gemini-flash",
     "gemini-flash": "gemini-flash",
+    "gemini-3-flash": "gemini-flash",
+    "gemini-3-flash-preview": "gemini-flash",
+    "gemini-2.5-flash": "gemini-flash",
     "haiku": "haiku",
     "sonnet": "sonnet",
+    "claude-sonnet-4-6": "sonnet",
+    "claude-sonnet-4-6-20260219": "sonnet",
+    "anthropic.claude-sonnet-4-6": "sonnet",
+    "claude-sonnet-4-20250514": "sonnet",
+    "opus": "opus",
+    "claude-opus-4-6": "opus",
+    "claude-opus-4-6-20260219": "opus",
+    "anthropic.claude-opus-4-6-v1": "opus",
+    "claude-opus-4-5-20251101": "opus",
 }
 
 _MODEL_CONFIGS: dict[str, dict[str, Any]] = {
@@ -82,16 +99,16 @@ _MODEL_CONFIGS: dict[str, dict[str, Any]] = {
         "thinking_level": "low",
     },
     "gemini-pro": {
-        "model_id": "gemini/gemini-2.5-pro",
+        "model_id": "gemini/gemini-3.1-pro-preview",
         "label": "gemini-pro",
         "temperature": 1.0,
-        "max_tokens": 8192,
+        "max_tokens": 16384,
     },
     "gemini-flash": {
-        "model_id": "gemini/gemini-2.5-flash",
+        "model_id": "gemini/gemini-3-flash-preview",
         "label": "gemini-flash",
         "temperature": 1.0,
-        "max_tokens": 8192,
+        "max_tokens": 12000,
     },
     "haiku": {
         "model_id": "claude-haiku-4-5",
@@ -100,10 +117,17 @@ _MODEL_CONFIGS: dict[str, dict[str, Any]] = {
         "max_tokens": 8000,
     },
     "sonnet": {
-        "model_id": "claude-sonnet-4-20250514",
+        "model_id": "claude-sonnet-4-6",
         "label": "sonnet",
         "temperature": 1.0,
         "max_tokens": 12000,
+    },
+    "opus": {
+        "model_id": "claude-opus-4-6",
+        "label": "opus",
+        "temperature": 1.0,
+        "max_tokens": 16000,
+        "thinking_level": "high",
     },
 }
 
@@ -115,7 +139,7 @@ class ChangeLLMArgs(BaseModel):
         description=(
             "Accepted inputs: gpt-5, gpt-5-mini, gpt-5-instant, gpt-5-high, "
             "gpt-5-high-thinking, Gemini Pro, Gemini Flash, Gemini, Haiku, "
-            "Sonnet."
+            "Sonnet, Opus."
         )
     )
 
@@ -134,7 +158,7 @@ class ChangeLLMArgs(BaseModel):
     description=(
         "Change the underlying LLM model for this conversation.\n\n"
         "Allowed inputs: gpt-5, gpt-5-mini, gpt-5-instant, gpt-5-high, "
-        "gpt-5-high-thinking, Gemini Pro, Gemini Flash, Gemini, Haiku, Sonnet.\n\n"
+        "gpt-5-high-thinking, Gemini Pro, Gemini Flash, Gemini, Haiku, Sonnet, Opus.\n\n"
         "ONLY use this tool if the user explicitly requests to change or switch "
         "the AI model being used. This is a significant change that affects all "
         "subsequent responses in the conversation."
