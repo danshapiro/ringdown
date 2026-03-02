@@ -38,10 +38,13 @@ def _get_agent_context() -> dict[str, Any] | None:
 _ALIAS_MAP: dict[str, str] = {
     "gpt-5": "gpt-5",
     "gpt5": "gpt-5",
+    "openai/gpt-5": "gpt-5",
     "gpt-5-mini": "gpt-5-mini",
     "gpt5-mini": "gpt-5-mini",
+    "openai/gpt-5-mini": "gpt-5-mini",
     "gpt-5-instant": "gpt-5-instant",
     "gpt5-instant": "gpt-5-instant",
+    "openai/gpt-5-instant": "gpt-5-instant",
     "gpt-5-high": "gpt-5-high",
     "gpt5-high": "gpt-5-high",
     "gpt-5-high-thinking": "gpt-5-high",
@@ -72,27 +75,27 @@ _ALIAS_MAP: dict[str, str] = {
 
 _MODEL_CONFIGS: dict[str, dict[str, Any]] = {
     "gpt-5": {
-        "model_id": "gpt-5",
+        "model_id": "openai/gpt-5",
         "label": "gpt-5",
         "temperature": 1.0,
         "max_tokens": 16000,
         "thinking_level": "medium",
     },
     "gpt-5-high": {
-        "model_id": "gpt-5",
+        "model_id": "openai/gpt-5",
         "label": "gpt-5-high",
         "temperature": 1.0,
         "max_tokens": 16000,
         "thinking_level": "high",
     },
     "gpt-5-mini": {
-        "model_id": "gpt-5-mini",
+        "model_id": "openai/gpt-5-mini",
         "label": "gpt-5-mini",
         "temperature": 1.0,
         "max_tokens": 12000,
     },
     "gpt-5-instant": {
-        "model_id": "gpt-5-instant",
+        "model_id": "openai/gpt-5-instant",
         "label": "gpt-5-instant",
         "temperature": 1.0,
         "max_tokens": 8000,
