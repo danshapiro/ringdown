@@ -7,6 +7,7 @@ import asyncio  # Needed for async tool execution with thinking sounds
 import inspect
 
 import litellm
+import openai  # For RateLimitError - litellm maps all 429s to this
 
 
 def acompletion(*args, **kwargs):
@@ -14,9 +15,11 @@ def acompletion(*args, **kwargs):
 
     return litellm.acompletion(*args, **kwargs)
 
+
 from log_love import setup_logging
 
 from . import tool_framework as tf
+
 # Tool orchestration
 from .tool_runner import ToolRunner, ToolEvent  # centralised tool handling
 from . import settings as _settings
@@ -29,6 +32,7 @@ import os
 # URLs for sound effects (absolute URLs provided via env vars when deployed)
 _THINKING_SOUND_URL = os.getenv("SOUND_THINKING_URL", "/sounds/thinking.mp3")
 _FINISHED_SOUND_URL = os.getenv("SOUND_FINISHED_URL", "/sounds/finished.mp3")
+
 
 # Classification of tools for usage limits
 def _classify_tool(name: str) -> str:
@@ -91,6 +95,7 @@ logger = setup_logging()
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
+
 
 def _json_default(obj: Any) -> Any:
     """Best-effort encoder for objects not naturally serialisable."""
@@ -179,6 +184,7 @@ def _log_marker(event: str, **fields: Any) -> None:
             payload[key] = value
     logger.info("RD_MARKER %s", _safe_json_dumps(payload))
 
+
 # ---------------------------------------------------------------------------
 # ToolRunner configuration (status + thinking sounds) – sourced from config.yaml
 # ---------------------------------------------------------------------------
@@ -228,7 +234,7 @@ async def stream_response(
     the original single-turn behaviour.
 
     The underlying call is delegated to :pyfunc:`litellm.acompletion`.
-    
+
     Yields:
         str: Regular text tokens from the LLM response
         dict: Special markers (e.g., {"type": "tool_executing"}) to signal
@@ -237,7 +243,12 @@ async def stream_response(
               termination.
     """
 
-    logger.debug("LLM request (model=%s, tools enabled=%s): %s", agent["model"], bool(agent.get("tools")), user_text)
+    logger.debug(
+        "LLM request (model=%s, tools enabled=%s): %s",
+        agent["model"],
+        bool(agent.get("tools")),
+        user_text,
+    )
 
     # Propagate agent configuration to all tool modules (e.g., for greenlists)
     tf.set_agent_context(agent)
@@ -271,6 +282,7 @@ async def stream_response(
             # Vertex/Gemini models reject certain JSON-Schema keywords like
             # "exclusiveMinimum".  Strip them out when target model is Gemini.
             if any(k in agent["model"].lower() for k in ("gemini", "vertex")):
+
                 def _clean(d: dict):
                     if isinstance(d, dict):
                         # Remove problematic numeric-bound keywords
@@ -368,7 +380,9 @@ async def stream_response(
             if m.get("role") == "tool" and m.get("tool_call_id") and len(m["tool_call_id"]) > 40:
                 orig_id = m["tool_call_id"]
                 m["tool_call_id"] = orig_id[-40:]
-                logger.debug("Truncated OpenAI tool_call_id from %s… to …%s", orig_id[:6], m["tool_call_id"])
+                logger.debug(
+                    "Truncated OpenAI tool_call_id from %s… to …%s", orig_id[:6], m["tool_call_id"]
+                )
         return clipped
 
     # Convenience: wrap litellm.acompletion so we always request streaming.
@@ -424,6 +438,7 @@ async def stream_response(
 
         if not hasattr(iterator, "__aiter__"):
             if hasattr(iterator, "__anext__"):
+
                 class _AsyncIteratorWrapper:
                     def __init__(self, inner):
                         self._inner = inner
@@ -441,6 +456,56 @@ async def stream_response(
                 )
 
         return iterator
+
+    async def _stream_llm_with_rate_limit_retry(
+        msgs: list[dict[str, Any]],
+        *,
+        choice: str | None,
+        max_attempts: int = 4,
+        base_delay: float = 2.0,
+    ) -> Any:
+        """Call LLM with exponential backoff for rate limits.
+
+            Anthropic and other providers return 429 errors with a retry-after header.
+            LiteLLM's num_retries doesn't add meaningful delay, so we handle it here.
+
+        Args:
+                max_attempts: Total attempts (1 initial + N retries). Default 4 = 3 retries.
+                base_delay: Base delay in seconds, increments by 1s each retry (1s, 2s, 3s).
+
+            Returns the stream iterator on success.
+            Raises RateLimitError if all retries are exhausted.
+        """
+        last_error: Exception | None = None
+        for attempt in range(max_attempts):
+            try:
+                return await _stream_llm(msgs, choice=choice)
+            except openai.RateLimitError as e:
+                last_error = e
+                delay = base_delay + attempt
+
+                resp = getattr(e, "response", None)
+                if resp and hasattr(resp, "headers"):
+                    retry_after = resp.headers.get("retry-after")
+                    if retry_after:
+                        try:
+                            delay = max(delay, float(retry_after))
+                        except (ValueError, TypeError):
+                            pass
+
+                if attempt < max_attempts - 1:
+                    logger.warning(
+                        "Rate limit hit (model=%s), backing off %.1fs, attempt %d/%d: %s",
+                        agent["model"],
+                        delay,
+                        attempt + 1,
+                        max_attempts,
+                        str(e)[:200],
+                    )
+                    await asyncio.sleep(delay)
+
+        assert last_error is not None
+        raise last_error
 
     legacy_max = agent.get("max_tool_iterations")
     max_input_tools: int = int(agent.get("max_input_tool_iterations", 6))
@@ -476,7 +541,10 @@ async def stream_response(
 
         if tool_loops >= max_tool_loops and not tools_disabled and tools:
             # Disable tools to force text reply
-            logger.warning("Reached max tool iterations (%d); disabling tools for remainder of turn", max_tool_loops)
+            logger.warning(
+                "Reached max tool iterations (%d); disabling tools for remainder of turn",
+                max_tool_loops,
+            )
             tools = []  # Pass empty list to _stream_llm
             tools_disabled = True
 
@@ -485,14 +553,14 @@ async def stream_response(
         if tools and not tools_disabled:
             choice_mode = "auto"
         elif tools and tools_disabled:
-            choice_mode = "none"       # keep list but tell model not to call
+            choice_mode = "none"  # keep list but tell model not to call
         else:
-            choice_mode = None         # no tools parameter → omit tool_choice
+            choice_mode = None  # no tools parameter → omit tool_choice
 
         logger.debug(
             f"Calling LLM (tool_choice={choice_mode}, loops={tool_loops}, disabled={tools_disabled}, msg_count={len(messages)})"
         )
-        
+
         # Check for any pending async tool results and update messages
         for i, msg in enumerate(messages):
             if msg.get("role") == "tool" and msg.get("content"):
@@ -520,7 +588,7 @@ async def stream_response(
                 except (json.JSONDecodeError, Exception):
                     # Not JSON or other issue, skip
                     pass
-        
+
         # DEBUG: Log message array for debugging reset issue
         logger.debug(
             "Message array content: %s",
@@ -563,7 +631,28 @@ async def stream_response(
                 yield start_payload
 
             _t_llm_start = time.perf_counter()
-            resp_stream = await _stream_llm(messages, choice=choice_mode)
+            resp_stream = await _stream_llm_with_rate_limit_retry(messages, choice=choice_mode)
+        except openai.RateLimitError as exc:
+            # Rate limit retries exhausted – try backup model
+            logger.warning(
+                "Rate limit retries exhausted for model %s, trying backup: %s",
+                agent["model"],
+                str(exc)[:200],
+            )
+            if not used_backup and backup_model and backup_model != agent["model"]:
+                logger.warning("Falling back to backup model: %s", backup_model)
+                agent["model"] = backup_model
+                if "backup_temperature" in agent:
+                    agent["temperature"] = agent["backup_temperature"]
+                if "backup_max_tokens" in agent:
+                    agent["max_tokens"] = agent["backup_max_tokens"]
+                used_backup = True
+                announce_prefix = f"{backup_model} says:\n"
+                continue
+            thinking_audio.stop()
+            yield f"RateLimitError: {exc}"
+            _mark_turn_end("assistant", reason="rate_limit_exhausted", error=str(exc))
+            return
         except Exception as exc:  # noqa: BLE001 – propagate after trying backup
             logger.exception("LLM call failed for model %s: %s", agent["model"], exc)
 
@@ -637,7 +726,11 @@ async def stream_response(
                         idx: int = tc.get("index", 0)
                         current = tool_call_parts.setdefault(
                             idx,
-                            {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                            {
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            },
                         )
 
                         if tc.get("id"):
@@ -661,12 +754,18 @@ async def stream_response(
                 last_finish_reason = finish_reason or last_finish_reason
                 if len(_diag_chunks) < 5:
                     try:
-                        _diag_chunks.append(chunk.model_dump(mode="json") if hasattr(chunk, "model_dump") else repr(chunk)[:500])
+                        _diag_chunks.append(
+                            chunk.model_dump(mode="json")
+                            if hasattr(chunk, "model_dump")
+                            else repr(chunk)[:500]
+                        )
                     except Exception:
                         _diag_chunks.append(repr(chunk)[:500])
 
         except Exception as exc:  # noqa: BLE001 – propagate after trying backup
-            logger.exception("LLM stream failed mid-iteration for model %s: %s", agent["model"], exc)
+            logger.exception(
+                "LLM stream failed mid-iteration for model %s: %s", agent["model"], exc
+            )
 
             # Attempt fallback model once if configured
             if not used_backup and backup_model and backup_model != agent["model"]:
@@ -684,8 +783,12 @@ async def stream_response(
 
             # No fallback or already failed backup – surface the error downstream
             thinking_audio.stop()
-            yield f"{type(exc).__name__}: {exc}"
-            _mark_turn_end("assistant", reason="stream_exception", error=str(exc))
+            if isinstance(exc, openai.RateLimitError):
+                yield f"RateLimitError: {exc}"
+                _mark_turn_end("assistant", reason="stream_rate_limit", error=str(exc))
+            else:
+                yield f"{type(exc).__name__}: {exc}"
+                _mark_turn_end("assistant", reason="stream_exception", error=str(exc))
             return
 
         # ---------------- Finished streaming this round ------------------
@@ -704,7 +807,10 @@ async def stream_response(
 
             # Try the backup model once if we haven't already.
             if not used_backup and backup_model and backup_model != agent["model"]:
-                logger.warning("Primary model returned zero tokens – retrying with backup model '%s'", backup_model)
+                logger.warning(
+                    "Primary model returned zero tokens – retrying with backup model '%s'",
+                    backup_model,
+                )
 
                 # Switch to backup model and apply optional overrides.
                 agent["model"] = backup_model
@@ -725,17 +831,25 @@ async def stream_response(
         if tool_call_parts:
             # Model invoked at least one tool – execute them and iterate again.
             input_calls = sum(
-                1 for tc in tool_call_parts.values() if _classify_tool(tc.get("function", {}).get("name", "")) == "input"
+                1
+                for tc in tool_call_parts.values()
+                if _classify_tool(tc.get("function", {}).get("name", "")) == "input"
             )
             output_calls = sum(
-                1 for tc in tool_call_parts.values() if _classify_tool(tc.get("function", {}).get("name", "")) == "output"
+                1
+                for tc in tool_call_parts.values()
+                if _classify_tool(tc.get("function", {}).get("name", "")) == "output"
             )
 
             limit_issues: list[str] = []
-            if input_calls and (input_tools_used >= max_input_tools or input_tools_used + input_calls > max_input_tools):
+            if input_calls and (
+                input_tools_used >= max_input_tools
+                or input_tools_used + input_calls > max_input_tools
+            ):
                 limit_issues.append(f"input tool limit ({max_input_tools})")
             if output_calls and (
-                output_tools_used >= max_output_tools or output_tools_used + output_calls > max_output_tools
+                output_tools_used >= max_output_tools
+                or output_tools_used + output_calls > max_output_tools
             ):
                 limit_issues.append(f"output tool limit ({max_output_tools})")
 
@@ -747,7 +861,9 @@ async def stream_response(
                 return
 
             if tool_loops >= max_tool_loops:
-                logger.warning("Reached max tool iterations (%d); aborting tool loop", max_tool_loops)
+                logger.warning(
+                    "Reached max tool iterations (%d); aborting tool loop", max_tool_loops
+                )
                 thinking_audio.stop()
                 yield f" [System: Reached maximum of {max_tool_loops} tool uses. Unable to complete the request.]"
                 _mark_turn_end("system", reason="max_tool_iterations", detail=str(max_tool_loops))
@@ -759,18 +875,20 @@ async def stream_response(
 
             tcs = [tool_call_parts[i] for i in sorted(tool_call_parts)]
 
-            messages.append({
-                "role": "assistant",
-                "tool_calls": tcs,
-                "content": None if not assistant_tokens else "".join(assistant_tokens),
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "tool_calls": tcs,
+                    "content": None if not assistant_tokens else "".join(assistant_tokens),
+                }
+            )
 
             # Inject tool-specific status messages and execute via ToolRunner
             runner = ToolRunner(
-                    status_messages=TOOL_STATUS_MESSAGES,
-                    thinking_sounds={"default": []},  # disable periodic thinking chatter
-                    interval_sec=2.0,
-                )
+                status_messages=TOOL_STATUS_MESSAGES,
+                thinking_sounds={"default": []},  # disable periodic thinking chatter
+                interval_sec=2.0,
+            )
 
             for tc in tcs:
                 name = tc["function"]["name"]
@@ -840,17 +958,22 @@ async def stream_response(
                         )
 
                         # Special handling for reset tool
-                        if (name == "reset" and isinstance(ev.data, dict) 
-                            and ev.data.get("action") == "reset_conversation"):
+                        if (
+                            name == "reset"
+                            and isinstance(ev.data, dict)
+                            and ev.data.get("action") == "reset_conversation"
+                        ):
                             logger.info("Reset tool executed - clearing conversation history")
-                            
+
                             # Add the tool result to messages for logging purposes (old conversation)
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc.get("id"),
-                                "content": _safe_json_dumps(ev.data),
-                            })
-                            
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc.get("id"),
+                                    "content": _safe_json_dumps(ev.data),
+                                }
+                            )
+
                             # Yield a special marker to trigger full reset in WebSocket handler
                             # The WebSocket handler will send the reset message as the new conversation's greeting
                             thinking_audio.stop()
@@ -859,31 +982,44 @@ async def stream_response(
                             # End this conversation turn - the old conversation is complete
                             _mark_turn_end("system", reason="reset_conversation")
                             return
-                            
+
                         # Special handling for change_llm tool
-                        if (name == "change_llm" and isinstance(ev.data, dict)
-                            and ev.data.get("action") == "model_changed"):
-                            logger.info("Change LLM tool executed - switching model from %s to %s", 
-                                       ev.data.get("previous_model"), ev.data.get("new_model"))
+                        if (
+                            name == "change_llm"
+                            and isinstance(ev.data, dict)
+                            and ev.data.get("action") == "model_changed"
+                        ):
+                            logger.info(
+                                "Change LLM tool executed - switching model from %s to %s",
+                                ev.data.get("previous_model"),
+                                ev.data.get("new_model"),
+                            )
 
                             # Update agent configuration with new model settings
                             agent["model"] = ev.data["new_model"]
-                            agent["temperature"] = ev.data["settings"]["temperature"]  
+                            agent["temperature"] = ev.data["settings"]["temperature"]
                             # Note: max_tokens is not changed during model switch
-                            
-                            logger.info("Agent configuration updated: model=%s, temperature=%s", 
-                                       agent["model"], agent["temperature"])
-                            
+
+                            logger.info(
+                                "Agent configuration updated: model=%s, temperature=%s",
+                                agent["model"],
+                                agent["temperature"],
+                            )
+
                             # Add the tool call and result to messages
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc.get("id"), 
-                                "content": _safe_json_dumps(ev.data),
-                            })
-                            
-                            # Return the confirmation message directly 
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc.get("id"),
+                                    "content": _safe_json_dumps(ev.data),
+                                }
+                            )
+
+                            # Return the confirmation message directly
                             thinking_audio.stop()
-                            confirmation = ev.data.get("message", "Changed to %s" % ev.data.get("new_model"))
+                            confirmation = ev.data.get(
+                                "message", "Changed to %s" % ev.data.get("new_model")
+                            )
                             yield confirmation
                             _mark_turn_end(
                                 "assistant",
@@ -893,15 +1029,20 @@ async def stream_response(
                             )
                             return  # End the conversation turn with the confirmation message
 
-                        if (name == "hang_up" and isinstance(ev.data, dict)
-                            and ev.data.get("action") == "hangup_call"):
+                        if (
+                            name == "hang_up"
+                            and isinstance(ev.data, dict)
+                            and ev.data.get("action") == "hangup_call"
+                        ):
                             logger.info("Hang up tool executed - terminating call")
 
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc.get("id"),
-                                "content": _safe_json_dumps(ev.data),
-                            })
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc.get("id"),
+                                    "content": _safe_json_dumps(ev.data),
+                                }
+                            )
 
                             thinking_audio.stop()
                             say_text = ev.data.get("message")
@@ -919,14 +1060,16 @@ async def stream_response(
                                 detail=ev.data.get("status"),
                             )
                             return
-                        
+
                         # Normal tool result handling
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.get("id"),
-                            "content": _safe_json_dumps(ev.data),
-                        })
-                        
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.get("id"),
+                                "content": _safe_json_dumps(ev.data),
+                            }
+                        )
+
                         # Check if this is an async tool result placeholder
                         if isinstance(ev.data, dict) and ev.data.get("async_execution"):
                             async_id = ev.data.get("async_id")
@@ -969,7 +1112,9 @@ async def stream_response(
                                                 context_id=context_label,
                                             )
                                         else:
-                                            logger.error(f"Message index {idx} out of range (len={len(messages)})")
+                                            logger.error(
+                                                f"Message index {idx} out of range (len={len(messages)})"
+                                            )
                                     except Exception as e:
                                         logger.error(f"Failed to update async message: {e}")
 
