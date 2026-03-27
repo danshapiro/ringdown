@@ -12,7 +12,7 @@
 # ---------------------------------------------------------------------------
 defaults:
   timezone: America/Los_Angeles     # IANA timezone used for scheduling output.
-  model: claude-sonnet-4-20250514   # Primary LLM model identifier.
+  model: claude-sonnet-4-20250514    # Primary LLM model identifier.
   temperature: 1.0                  # Creativity / randomness of LLM calls.
   max_tokens: 20000                 # Maximum output tokens for the primary model.
   language: en-US                   # Locale code for speech synthesis.
@@ -73,8 +73,14 @@ defaults:
 
   transcription_provider: Google    # Speech-to-text provider used by Twilio relay.
   speech_model: telephony           # Recognition model; telephony works for PSTN.
+  realtime:                         # Default OpenAI Realtime session configuration.
+    model: gpt-4o-mini-realtime-preview-2024-12-17
+    voice: alloy
+    server_vad:
+      activation_threshold: 0.55
+      silence_duration_ms: 420
 
-# Debugging aids – keep empty in production.
+# Debugging aids - keep empty in production.
 debug: ""                           # Example: "dtmf speaker-events" to trace digits.
 
 # Terms passed to STT provider to bias recognition for organisation-specific words.
@@ -159,3 +165,13 @@ agents:
 # Optional shared Drive folders available to agents when not overridden.
 docs_folder_greenlist_defaults:
   - "Ringdown-default"
+
+# Registered Android devices managed by the backend
+mobile_devices: {}
+mobile_text:
+  websocket_path: /v1/mobile/text/session
+  session_ttl_seconds: 900
+  resume_ttl_seconds: 300
+  heartbeat_interval_seconds: 12
+  heartbeat_timeout_seconds: 30
+  tls_pins: []

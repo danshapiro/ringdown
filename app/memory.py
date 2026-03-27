@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -7,8 +8,8 @@ from sqlalchemy.exc import OperationalError
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 from log_love import setup_logging
-
 from .settings import get_env
+
 
 # Module logger
 logger = setup_logging()
@@ -67,7 +68,6 @@ def log_turn(who: str, text: str, *, source: str | None = None) -> None:
         sess.commit()
 
         logger.debug(f"Added turn to db with id={turn.id}")
-
 
 # ---------------------------------------------------------------------------
 # Persistent per-agent conversation state
@@ -159,7 +159,7 @@ def delete_state(agent_name: str) -> None:
         st = sess.get(AgentState, agent_name)
         if st:
             sess.delete(st)
-            sess.commit()
+            sess.commit() 
 
 
 _ensure_schema()

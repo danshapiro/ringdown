@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Outbound call test script for voicebot testing.
 
-This script tests the Ringdown LLM assistant Twilio service by making an
-outbound call TO the bot itself. The test scenario is:
+This script tests the Ringdown LLM assistant Twilio service by making an outbound call TO the bot itself.
+The test scenario is:
 1. Script calls Ringdown's phone number
 2. Ringdown answers and begins its welcome greeting
 3. Script plays combined TTS audio (with pauses between prompts)
@@ -13,35 +13,34 @@ This is a BOT-TO-BOT test - we're not calling a human, we're calling the Ringdow
 to test its audio processing, transcription, and conversation flow with precise timing.
 The "interrupt" events in logs are the bot detecting audio from our test TTS, not human speech.
 
-For chained prompts, multiple TTS files are combined with silence gaps to maintain
+For chained prompts, multiple TTS files are combined with silence gaps to maintain 
 conversation context while ensuring proper timing between prompts.
 
 During the call, retrieves and displays Cloud Run logs from the deployed service.
 """
 
-import datetime as dt
-import json
+import asyncio
 import os
-import subprocess
 import sys
-import tempfile
-import time
-from collections.abc import Callable
 from pathlib import Path
-
-import click
-import requests
-from pydub import AudioSegment
+from typing import Optional, Callable
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
+import time
+import click
+import subprocess
+import datetime as dt
+from zoneinfo import ZoneInfo
+import requests
+import tempfile
+from pydub import AudioSegment
+import json
 
 try:
     from dotenv import load_dotenv
 except ImportError:  # Gracefully continue if python-dotenv is unavailable
-
     def load_dotenv(*_: object, **__: object) -> None:  # type: ignore
         return None
-
 
 load_dotenv(override=False)
 
@@ -56,9 +55,10 @@ for stream_name in ("stdout", "stderr"):
         stream.reconfigure(encoding="utf-8", errors="replace")
 
 # Import utils AFTER ensuring the project root is on sys.path
-from app.settings import get_env  # noqa: E402
-from log_love import setup_logging  # noqa: E402
 from utils.mp3_uploader import upload_mp3_to_twilio as upload_mp3_to_twilio_util  # noqa: E402
+
+from app.settings import get_env
+from log_love import setup_logging
 
 # Setup logging
 logger = setup_logging()
@@ -152,7 +152,7 @@ def _resolve_setting(
     env_vars: tuple[str, ...],
     *,
     fallback: str,
-    gcloud_fetcher: Callable[[], str | None] | None = None,
+    gcloud_fetcher: Callable[[], Optional[str]] | None = None,
 ) -> str:
     for env_key in env_vars:
         val = os.environ.get(env_key)
@@ -214,10 +214,9 @@ if not DEFAULT_SERVICE_NAME or not DEFAULT_SERVICE_REGION:
         "service accessible via 'gcloud run services list'."
     )
 
-
 def _run_cmd(cmd: str, *, check: bool = True, capture: bool = True) -> str:
     """Run cmd in shell and return stdout (stripped). Raises on error.
-
+    
     Replicates the pattern from cloudrun-deploy.py for consistency.
     """
     logger.info("$ %s", cmd)
@@ -251,13 +250,13 @@ def retrieve_cloudrun_logs(
     """Retrieve Cloud Run logs since the specified start time."""
     try:
         if start_time.tzinfo is None:
-            start_utc = start_time.replace(tzinfo=dt.UTC)
+            start_utc = start_time.replace(tzinfo=dt.timezone.utc)
         else:
-            start_utc = start_time.astimezone(dt.UTC)
+            start_utc = start_time.astimezone(dt.timezone.utc)
 
         def _format_ts(dt_value: dt.datetime) -> str:
             return (
-                dt_value.astimezone(dt.UTC)
+                dt_value.astimezone(dt.timezone.utc)
                 .isoformat(timespec="microseconds")
                 .replace("+00:00", "Z")
             )
@@ -271,24 +270,17 @@ def retrieve_cloudrun_logs(
                 parts.append(f'resource.labels.service_name="{service_name}"')
             if include_service and region:
                 parts.append(f'resource.labels.location="{region}"')
+            stdout_log = f'projects/{project_id}/logs/run.googleapis.com%2Fstdout'
+            stderr_log = f'projects/{project_id}/logs/run.googleapis.com%2Fstderr'
+            parts.append(f'(logName="{stdout_log}" OR logName="{stderr_log}")')
             return " AND ".join(parts)
 
         attempt_specs = [
             {"filter_window": 5, "freshness": None, "post_window": 5, "include_service": True},
             {"filter_window": 90, "freshness": None, "post_window": 90, "include_service": True},
             {"filter_window": 300, "freshness": None, "post_window": 300, "include_service": True},
-            {
-                "filter_window": None,
-                "freshness": "15m",
-                "post_window": 900,
-                "include_service": True,
-            },
-            {
-                "filter_window": None,
-                "freshness": "30m",
-                "post_window": 1800,
-                "include_service": False,
-            },
+            {"filter_window": None, "freshness": "15m", "post_window": 900, "include_service": True},
+            {"filter_window": None, "freshness": "30m", "post_window": 1800, "include_service": False},
         ]
 
         attempt_notes: list[str] = []
@@ -297,11 +289,7 @@ def retrieve_cloudrun_logs(
 
         for attempt_index, spec in enumerate(attempt_specs, start=1):
             include_service = spec.get("include_service", True)
-            filter_expr = (
-                _build_filter(spec["filter_window"], include_service=include_service)
-                if spec["filter_window"] is not None
-                else _build_filter(None, include_service=include_service)
-            )
+            filter_expr = _build_filter(spec["filter_window"], include_service=include_service) if spec["filter_window"] is not None else _build_filter(None, include_service=include_service)
             cmd = [
                 "gcloud",
                 "logging",
@@ -318,11 +306,7 @@ def retrieve_cloudrun_logs(
 
             if debug:
                 print(
-                    "[debug] Attempt "
-                    f"{attempt_index}/{len(attempt_specs)} "
-                    f"filter={filter_expr} "
-                    f"freshness={freshness or 'n/a'} "
-                    f"include_service={include_service}"
+                    f"[debug] Attempt {attempt_index}/{len(attempt_specs)} filter={filter_expr} freshness={freshness or 'n/a'} include_service={include_service}"
                 )
                 print(f"[debug] Command: {' '.join(cmd)}")
 
@@ -374,11 +358,7 @@ def retrieve_cloudrun_logs(
                 return "\n=== Error retrieving logs: unexpected gcloud output format ===\n"
 
             window_seconds = spec.get("post_window")
-            min_allowed = (
-                start_utc - dt.timedelta(seconds=window_seconds)
-                if window_seconds is not None
-                else start_utc
-            )
+            min_allowed = start_utc - dt.timedelta(seconds=window_seconds) if window_seconds is not None else start_utc
 
             filtered_entries: list[dict] = []
             for entry in parsed_entries:
@@ -395,9 +375,7 @@ def retrieve_cloudrun_logs(
             if not filtered_entries:
                 scope_note = "service scoped" if include_service else "no service filter"
                 attempt_notes.append(
-                    "attempt "
-                    f"{attempt_index}: {len(parsed_entries)} entries, "
-                    f"but all older than window ({scope_note})"
+                    f"attempt {attempt_index}: {len(parsed_entries)} entries, but all older than window ({scope_note})"
                 )
                 if attempt_index < len(attempt_specs):
                     if debug:
@@ -445,16 +423,18 @@ def retrieve_cloudrun_logs(
                 lines_out.append(line.strip())
 
             formatted = "\n".join(lines_out)
-            return f"\n=== Cloud Run Logs (filter: {filter_expr}) ===\n{formatted}\n"
+            return (
+                f"\n=== Cloud Run Logs (filter: {filter_expr}) ===\n"
+                f"{formatted}\n"
+            )
 
-        filter_details = "; ".join(attempt_notes) if attempt_notes else "no filters executed"
+
+        filter_details = '; '.join(attempt_notes) if attempt_notes else 'no filters executed'
         return f"\n=== No logs found (filters tried: {filter_details}) ===\n"
 
     except Exception as exc:
         logger.error("Failed to retrieve Cloud Run logs: %s", exc)
         return f"\n=== Error retrieving logs: {exc} ===\n"
-
-
 def create_test_twiml(
     mp3_url: str,
     *,
@@ -488,24 +468,22 @@ def create_test_twiml(
     return str(response)
 
 
-def generate_tts_audio(
-    text: str, voice: str = "alloy", model: str = "tts-1", output_format: str = "mp3"
-) -> Path:
+def generate_tts_audio(text: str, voice: str = "alloy", model: str = "tts-1", output_format: str = "mp3") -> Path:
     """Generate audio from text using OpenAI TTS API and return the file path.
-
+    
     Args:
         text: Text to be spoken
         voice: Voice preset (alloy, echo, fable, onyx, nova, shimmer)
         model: TTS model (tts-1, tts-1-hd)
         output_format: Audio format (mp3, wav, etc.)
-
+        
     Returns:
         Path to the generated audio file
     """
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable is required for TTS generation")
-
+    
     # Create temporary file for the generated audio.  A timestamp with
     # **second-level** precision can collide when we synthesize multiple
     # prompts in rapid succession (~ <1 s apart).  Maintain a module-level
@@ -520,25 +498,23 @@ def generate_tts_audio(
     timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     temp_dir = Path(tempfile.gettempdir())
     output_path = temp_dir / f"tts_generated_{timestamp}_{counter}.{output_format}"
-
+    
     payload = {
         "model": model,
         "input": text,
         "voice": voice,
         "format": output_format,
     }
-
+    
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-
+    
     api_url = "https://api.openai.com/v1/audio/speech"
-
+    
     try:
-        logger.info(
-            "Generating TTS audio for text: %s", text[:50] + ("..." if len(text) > 50 else "")
-        )
+        logger.info("Generating TTS audio for text: %s", text[:50] + ("..." if len(text) > 50 else ""))
         response = requests.post(
             api_url,
             json=payload,
@@ -547,111 +523,97 @@ def generate_tts_audio(
             timeout=300,
         )
         response.raise_for_status()
-
+        
         # Write the audio data to file
         with open(output_path, "wb") as fh:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     fh.write(chunk)
-
+        
         logger.info("TTS audio generated successfully: %s", output_path)
         return output_path
-
+        
     except requests.HTTPError as exc:
         msg = exc.response.text if exc.response is not None else str(exc)
-        raise RuntimeError(
-            f"TTS API error {exc.response.status_code if exc.response else ''}: {msg}"
-        ) from exc
+        raise RuntimeError(f"TTS API error {exc.response.status_code if exc.response else ''}: {msg}") from exc
     except Exception as exc:
         raise RuntimeError(f"Failed to generate TTS audio: {exc}") from exc
 
 
-def combine_audio_files_with_pauses(
-    audio_files: list[str], pause_seconds: int
-) -> tuple[str, float, list[float]]:
+def combine_audio_files_with_pauses(audio_files: list[str], pause_seconds: int) -> tuple[str, float, list[float]]:
     """Combine multiple audio files with silence pauses between them.
-
+    
     Args:
         audio_files: List of paths to audio files to combine
         pause_seconds: Number of seconds of silence to insert between files
-
+        
     Returns:
-        Tuple of (
-            path to combined audio file,
-            total duration in seconds,
-            list of individual audio durations,
-        )
+        Tuple of (path to combined audio file, total duration in seconds, list of individual audio durations)
     """
     if not audio_files:
         raise ValueError("No audio files provided")
-
+    
     individual_durations = []
-
+    
     if len(audio_files) == 1:
         # Single file - add final silence period for bot response
         single_audio = AudioSegment.from_mp3(audio_files[0])
         duration = len(single_audio) / 1000.0
         individual_durations.append(duration)
-
+        
         # Add final silence period to give time for bot response
         silence = AudioSegment.silent(duration=pause_seconds * 1000)  # pydub uses milliseconds
         combined_audio = single_audio + silence
-
+        
         # Generate output filename for single file with silence
         temp_dir = Path(tempfile.gettempdir())
         combined_path = temp_dir / f"combined_audio_{int(time.time())}.mp3"
         combined_audio.export(str(combined_path), format="mp3")
-
+        
         total_duration = len(combined_audio) / 1000.0
-        logger.info(
-            "Single audio with final silence created: %s (%.1fs total)",
-            combined_path,
-            total_duration,
-        )
-
+        logger.info("Single audio with final silence created: %s (%.1fs total)", combined_path, total_duration)
+        
         return str(combined_path), total_duration, individual_durations
-
-    logger.info(
-        "Combining %d audio files with %d second pauses...", len(audio_files), pause_seconds
-    )
-
+    
+    logger.info("Combining %d audio files with %d second pauses...", len(audio_files), pause_seconds)
+    
     try:
         # Load the first audio file
         combined_audio = AudioSegment.from_mp3(audio_files[0])
         first_duration = len(combined_audio) / 1000.0
         individual_durations.append(first_duration)
         logger.info("Loaded audio file 1: %s (%.1fs)", audio_files[0], first_duration)
-
+        
         # Create silence segment
         silence = AudioSegment.silent(duration=pause_seconds * 1000)  # pydub uses milliseconds
-
+        
         # Add remaining files with pauses
         for i, audio_file in enumerate(audio_files[1:], 2):
             audio_segment = AudioSegment.from_mp3(audio_file)
             segment_duration = len(audio_segment) / 1000.0
             individual_durations.append(segment_duration)
             logger.info("Loaded audio file %d: %s (%.1fs)", i, audio_file, segment_duration)
-
+            
             # Add silence, then the audio
             combined_audio += silence + audio_segment
-
+        
         # Add final silence period after the last audio file to give time for bot response
         combined_audio += silence
         logger.info("Added final silence period (%.1fs) for bot response", pause_seconds)
-
+        
         # Generate output filename
         temp_dir = Path(tempfile.gettempdir())
         combined_path = temp_dir / f"combined_audio_{int(time.time())}.mp3"
-
+        
         # Export combined audio
         combined_audio.export(str(combined_path), format="mp3")
-
+        
         # Calculate total duration (used for precise call timing)
         total_duration = len(combined_audio) / 1000.0
         logger.info("Combined audio created: %s (%.1fs total)", combined_path, total_duration)
-
+        
         return str(combined_path), total_duration, individual_durations
-
+        
     except Exception as e:
         logger.error("Failed to combine audio files: %s", e)
         raise RuntimeError(f"Audio combination failed: {e}") from e
@@ -663,9 +625,10 @@ def upload_mp3_to_twilio(client: Client, mp3_path: Path) -> str:
     Creates a GCS bucket for test assets if it doesn't exist, uploads the MP3 file,
     makes it publicly accessible, and returns the public URL.
     """
-
     from google.cloud import storage
-
+    from google.oauth2 import service_account
+    import os
+    
     # Get GCP project ID from gcloud config
     try:
         project_id = _run_cmd("gcloud config get-value project", check=True).strip()
@@ -673,22 +636,18 @@ def upload_mp3_to_twilio(client: Client, mp3_path: Path) -> str:
             raise ValueError("No GCP project configured")
     except Exception as e:
         logger.error("Failed to get GCP project ID: %s", e)
-        raise RuntimeError(
-            "GCP project not configured. Run 'gcloud config set project <project-id>'"
-        ) from e
-
+        raise RuntimeError("GCP project not configured. Run 'gcloud config set project <project-id>'") from e
+    
     # Use Application Default Credentials
     try:
         storage_client = storage.Client(project=project_id)
     except Exception as e:
         logger.error("Failed to initialize GCS client: %s", e)
-        raise RuntimeError(
-            "GCS authentication failed. Run 'gcloud auth application-default login'"
-        ) from e
-
+        raise RuntimeError("GCS authentication failed. Run 'gcloud auth application-default login'") from e
+    
     # Bucket name for test assets
     bucket_name = f"{project_id}-test-assets"
-
+    
     try:
         # Get or create bucket
         try:
@@ -700,21 +659,21 @@ def upload_mp3_to_twilio(client: Client, mp3_path: Path) -> str:
             logger.info("Creating GCS bucket: %s", bucket_name)
             bucket = storage_client.create_bucket(bucket_name)
             logger.info("Created GCS bucket: %s", bucket_name)
-
+        
         # Upload file
         blob_name = f"test-audio/{mp3_path.name}"
         blob = bucket.blob(blob_name)
-
+        
         logger.info("Uploading %s to gs://%s/%s", mp3_path, bucket_name, blob_name)
         blob.upload_from_filename(str(mp3_path))
-
+        
         # Make the blob publicly readable
         blob.make_public()
-
+        
         public_url = blob.public_url
         logger.info("MP3 uploaded successfully: %s", public_url)
         return public_url
-
+        
     except Exception as e:
         logger.error("Failed to upload MP3 to GCS: %s", e)
         raise RuntimeError(f"GCS upload failed: {e}") from e
@@ -723,8 +682,8 @@ def upload_mp3_to_twilio(client: Client, mp3_path: Path) -> str:
 def make_test_call(
     mp3_file: str,
     to_number: str = DEFAULT_TO_NUMBER,
-    from_number: str | None = None,
-    project_id: str | None = None,
+    from_number: Optional[str] = None,
+    project_id: Optional[str] = None,
     service_name: str = DEFAULT_SERVICE_NAME,
     region: str = DEFAULT_SERVICE_REGION,
     enable_log_monitoring: bool = True,
@@ -783,7 +742,7 @@ def make_test_call(
             logger.error(
                 "MP3 file %s not found. Upload it to a public location (e.g. Twilio Assets, "
                 "GitHub raw link, S3) and pass that URL via --mp3, or place the file locally.",
-                mp3_path,
+                mp3_path
             )
             raise FileNotFoundError(mp3_path)
 
@@ -814,8 +773,7 @@ def make_test_call(
     )
     if wait_for_remote_hangup:
         print(
-            "[LiveTest] Expecting the assistant to hang up the call. "
-            f"TwiML pause window: {pause_seconds}s.",
+            f"[LiveTest] Expecting the assistant to hang up the call. TwiML pause window: {pause_seconds}s.",
             flush=True,
         )
 
@@ -833,18 +791,16 @@ def make_test_call(
 
         # Monitor call status until completion
         start_time = time.time()
-        call_start_datetime = dt.datetime.now(dt.UTC)
+        call_start_datetime = dt.datetime.now(dt.timezone.utc)
         # Wait window: predicted duration + grace. When remote hangup is required,
         # add the pause window so we allow for the assistant to act.
         if wait_for_remote_hangup:
             if expected_duration is None:
-                raise ValueError(
-                    "expected_duration must be provided when wait_for_remote_hangup=True"
-                )
+                raise ValueError("expected_duration must be provided when wait_for_remote_hangup=True")
             timeout = max(expected_duration + pause_seconds + 30, 90)
         else:
             timeout = (expected_duration + 30) if expected_duration else 60
-
+        
         if enable_log_monitoring and not project_id:
             project_id = DEFAULT_PROJECT_ID
 
@@ -916,8 +872,7 @@ def make_test_call(
             if margin <= 10:
                 raise RuntimeError(
                     "Expected Twilio to hang up before the TwiML pause expired, "
-                    "but local duration was "
-                    f"{local_duration}s vs. pause window {expected_with_pause}s."
+                    f"but local duration was {local_duration}s vs. pause window {expected_with_pause}s."
                 )
             logger.info(
                 "Remote hangup confirmed %.1fs before TwiML pause expiry "
@@ -948,10 +903,10 @@ def get_first_twilio_number(client: Client) -> str:
 
 def make_chained_test_call(
     to_number: str,
-    from_number: str | None,
+    from_number: Optional[str],
     audio_files: list[str],
     silence_timeout: int,
-    project_id: str | None,
+    project_id: Optional[str],
     service_name: str,
     region: str,
     enable_log_monitoring: bool,
@@ -965,40 +920,23 @@ def make_chained_test_call(
     – not the harness – terminates the call.
 
     Returns:
-        Tuple of (
-            call SID,
-            logs,
-            local call duration,
-            combined audio duration,
-            individual audio durations,
-        )
+        Tuple of (call SID, logs, local call duration, combined audio duration, individual audio durations)
     """
     logger.info("=== Starting chained test call with %d audio files ===", len(audio_files))
-
+    
     project_id = project_id or DEFAULT_PROJECT_ID
 
     try:
         # Combine all audio files with silence pauses
-        combined_audio_path, total_audio_duration, individual_durations = (
-            combine_audio_files_with_pauses(audio_files, silence_timeout)
-        )
+        combined_audio_path, total_audio_duration, individual_durations = combine_audio_files_with_pauses(audio_files, silence_timeout)
         remote_pause_seconds = max(silence_timeout * 4, 120)
 
         # Make single call with combined audio – allow Twilio to hang up after the agent obeys
         now_local = dt.datetime.now().astimezone()
         eta_local = now_local + dt.timedelta(seconds=total_audio_duration)
         print(f"[LiveTest] Call start: {now_local:%Y-%m-%d %H:%M:%S %Z}", flush=True)
-        print(
-            "[LiveTest] Estimated completion: "
-            f"{eta_local:%Y-%m-%d %H:%M:%S %Z} "
-            f"(~{total_audio_duration:.1f}s)",
-            flush=True,
-        )
-        print(
-            "[LiveTest] Remote hangup verification window: "
-            f"{remote_pause_seconds}s pause after playback.",
-            flush=True,
-        )
+        print(f"[LiveTest] Estimated completion: {eta_local:%Y-%m-%d %H:%M:%S %Z} (~{total_audio_duration:.1f}s)", flush=True)
+        print(f"[LiveTest] Remote hangup verification window: {remote_pause_seconds}s pause after playback.", flush=True)
 
         logger.info("Making test call with combined audio (%.1fs total)...", total_audio_duration)
         call_sid, logs_output, local_call_duration = make_test_call(
@@ -1014,29 +952,23 @@ def make_chained_test_call(
             wait_for_remote_hangup=True,
             post_play_pause_seconds=remote_pause_seconds,
         )
-
+        
         # Get call duration
         # Use locally-measured call duration rather than Twilio's
         call_duration = int(local_call_duration)
-
+        
         logger.info("=== Chained test call completed ===")
         logger.info("Call SID: %s, Duration: %d seconds", call_sid, call_duration)
-
+        
         # Clean up temporary combined audio file
         try:
             Path(combined_audio_path).unlink()
             logger.info("Cleaned up temporary combined audio file")
         except Exception as e:
             logger.warning("Failed to clean up temporary file %s: %s", combined_audio_path, e)
-
-        return (
-            call_sid,
-            logs_output,
-            local_call_duration,
-            total_audio_duration,
-            individual_durations,
-        )
-
+        
+        return call_sid, logs_output, local_call_duration, total_audio_duration, individual_durations
+        
     except Exception as e:
         logger.error("Chained test call failed: %s", e)
         raise
@@ -1047,155 +979,141 @@ def prepare_log_evaluation_prompt(
     silence_timeout: int,
     individual_durations: list[float],
     call_duration: int,
-    logs: str,
+    logs: str
 ) -> str:
     """Prepare a detailed prompt for LLM evaluation of the test call logs.
-
+    
     Args:
         user_texts: List of text prompts that were converted to TTS
         silence_timeout: Seconds of silence between prompts
         individual_durations: List of individual audio durations for each prompt
         call_duration: Actual call duration from Twilio
         logs: Cloud Run logs from the test call
-
+        
     Returns:
         Detailed evaluation prompt for LLM analysis
     """
-
+    
     # Calculate expected timing
     num_prompts = len(user_texts)
     num_pauses = max(0, num_prompts - 1)
     # Include final silence period for bot response time
     expected_total_pause_time = (num_pauses + 1) * silence_timeout  # +1 for final silence
     combined_audio_duration = sum(individual_durations) + expected_total_pause_time
-
+    
     # Create detailed timeline
     timeline_sections = []
-    timeline_sections.append(
-        "1. **Call Initiation & Bot Welcome** (~0-5s): "
-        'Twilio call setup, WebSocket connection, bot says "Hello caller."'
-    )
-
+    timeline_sections.append("1. **Call Initiation & Bot Welcome** (~0-5s): Twilio call setup, WebSocket connection, bot says \"Hello caller.\"")
+    
     current_time = 5.0  # Approximate welcome greeting duration
     section_num = 2
-
-    for i, (text, duration) in enumerate(zip(user_texts, individual_durations, strict=False)):
+    
+    for i, (text, duration) in enumerate(zip(user_texts, individual_durations)):
         prompt_num = i + 1
         start_time = current_time
         end_time = current_time + duration
-
-        timeline_sections.append(
-            f'{section_num}. **"{text}"** '
-            f"(~{start_time:.1f}-{end_time:.1f}s): "
-            f"User prompt {prompt_num} (Duration: {duration:.1f}s)"
-        )
+        
+        timeline_sections.append(f"{section_num}. **\"{text}\"** (~{start_time:.1f}-{end_time:.1f}s): User prompt {prompt_num} (Duration: {duration:.1f}s)")
         current_time = end_time
         section_num += 1
-
+        
         # Add pause if not the last prompt
         if i < len(user_texts) - 1:
             pause_start = current_time
             pause_end = current_time + silence_timeout
-            timeline_sections.append(
-                f"{section_num}. **Pause Silently while Bot Responds** "
-                f"(~{pause_start:.1f}-{pause_end:.1f}s): "
-                f"{silence_timeout}s gap before next prompt"
-            )
+            timeline_sections.append(f"{section_num}. **Pause Silently while Bot Responds** (~{pause_start:.1f}-{pause_end:.1f}s): {silence_timeout}s gap before next prompt")
             current_time = pause_end
             section_num += 1
-
+    
     # Add final silence period for bot response
     final_silence_start = current_time
     final_silence_end = current_time + silence_timeout
-    timeline_sections.append(
-        f"{section_num}. **Final Silence Period** "
-        f"(~{final_silence_start:.1f}-{final_silence_end:.1f}s): "
-        f"{silence_timeout}s for bot response time"
-    )
+    timeline_sections.append(f"{section_num}. **Final Silence Period** (~{final_silence_start:.1f}-{final_silence_end:.1f}s): {silence_timeout}s for bot response time")
     current_time = final_silence_end
     section_num += 1
-
-    timeline_sections.append(
-        f"{section_num}. **Call End** (~{current_time:.1f}s): "
-        "Assistant obeys the hang-up request and Twilio terminates the call"
-    )
-
+    
+    timeline_sections.append(f"{section_num}. **Call End** (~{current_time:.1f}s): Assistant obeys the hang-up request and Twilio terminates the call")
+    
     timeline_text = "\n".join(timeline_sections)
 
     # Print the timeline for visibility
     print("\n=== EXPECTED TIMELINE ===\n" + timeline_text + "\n========================\n")
+    
+    prompt = f"""Ringdown is a voice assistant. You are a part of an automated evaluation system. The system has just played one or more audio prompts to Ringdown, which should have responded to each one. You are analyzing the log files for errors or potential issues.
 
-    prompt = (
-        "Ringdown is a voice assistant. You are a part of an automated "
-        "evaluation system. The system has just played one or more audio prompts "
-        "to Ringdown, which should have responded to each one. You are analyzing "
-        "the log files for errors or potential issues.\n\n"
-        "## TEST CONFIGURATION:\n"
-        f"- **Number of prompts**: {num_prompts}\n"
-        f"- **Audio prompts that were played for the test**: {json.dumps(user_texts, indent=2)}\n"
-        f"- **Individual audio durations**: {[f'{d:.1f}s' for d in individual_durations]}\n"
-        f"- **Pause time between prompts**: {silence_timeout} seconds\n"
-        f"- **Total expected audio duration**: {combined_audio_duration:.1f} seconds\n"
-        f"- **Actual call duration**: {call_duration} seconds\n\n"
-        "## EXPECTED TIMELINE:\n"
-        f"{timeline_text}\n\n"
-        "Analyze the logs CAREFULLY. Produce a succinct timeline of the call, "
-        "and call out any of the following that occur:\n"
-        "- Any errors or warnings\n"
-        "- Any text that we sent, which did not get transcribed "
-        "(small transcription errors fine and need not be noted)\n"
-        "- Any text that we sent, where there was no response from the bot\n"
-        "- Confirm that Twilio (not the harness) terminated the call after the "
-        "hang-up instruction\n"
-        "And finally, using your best analysis of appropriate answers:\n"
-        "- Any response from the bot which does not make sense given the text we sent.\n\n"
-        "End with a brief summary of any problems, and if there were problems, "
-        "suggestions as to what might have happened. Quote the relevant portion "
-        "of the logs in explaining them.\n\n"
-        'If there were no problems, just say "No problems found."\n\n'
-        "## TIMING ANALYSIS:\n"
-        f"- **Expected total duration**: {combined_audio_duration:.1f} seconds\n"
-        f"  ({num_prompts} prompts + {expected_total_pause_time}s pauses including "
-        "final silence + ~5s welcome)\n"
-        f"- **Actual call duration**: {call_duration} seconds\n\n"
-        "## LOGS TO ANALYZE:\n"
-        "```\n"
-        f"{logs}\n"
-        "```\n"
-    )
+## TEST CONFIGURATION:
+- **Number of prompts**: {num_prompts}
+- **Audio prompts that were played for the test**: {json.dumps(user_texts, indent=2)}
+- **Individual audio durations**: {[f"{d:.1f}s" for d in individual_durations]}
+- **Pause time between prompts**: {silence_timeout} seconds
+- **Total expected audio duration**: {combined_audio_duration:.1f} seconds
+- **Actual call duration**: {call_duration} seconds
+
+## EXPECTED TIMELINE:
+{timeline_text}
+
+Analyze the logs CAREFULLY. Produce a succinct timeline of the call, and call out any of the following that occur:
+- Any errors or warnings
+- Any text that we sent, which did not get transcribed (small transcription errors fine and need not be noted)
+- Any text that we sent, where there was no response from the bot
+- Confirm that Twilio (not the harness) terminated the call after the hang-up instruction
+And finally, using your best analysis of appropriate answers:
+- Any response from the bot which does not make sense given the text we sent.
+
+End with a brief summary of any problems, and if there were problems, suggestions as to what might have happened. Quote the relevant portion of the logs in explaining them.
+
+If there were no problems, just say "No problems found."
+
+## TIMING ANALYSIS:
+- **Expected total duration**: {combined_audio_duration:.1f} seconds ({num_prompts} prompts + {expected_total_pause_time}s pauses including final silence + ~5s welcome)
+- **Actual call duration**: {call_duration} seconds  
+
+
+## LOGS TO ANALYZE:
+```
+{logs}
+```
+
+"""    
     return prompt
 
 
 def evaluate_logs_with_llm(evaluation_prompt: str, model: str) -> str:
     """Send the evaluation prompt to an LLM and return the analysis.
-
+    
     Args:
         evaluation_prompt: Detailed prompt for log evaluation
         model: The model to use for evaluation (e.g., gpt-4o, o3, etc.)
-
+        
     Returns:
         LLM's analysis of the logs
     """
     import openai
-
+    
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable is required for log evaluation")
-
+    
     try:
         client = openai.OpenAI(api_key=api_key)
-
+        
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "You are a python expert."},
-                {"role": "user", "content": evaluation_prompt},
+                {
+                    "role": "system", 
+                    "content": "You are a python expert."
+                },
+                {
+                    "role": "user", 
+                    "content": evaluation_prompt
+                }
             ],
-            temperature=1.0,
+            temperature=1.0
         )
-
+        
         return response.choices[0].message.content
-
+        
     except Exception as e:
         logger.error("Failed to evaluate logs with %s: %s", model, e)
         return f"Log evaluation failed: {e}"
@@ -1203,16 +1121,16 @@ def evaluate_logs_with_llm(evaluation_prompt: str, model: str) -> str:
 
 def create_chained_test_twiml(audio_urls: list[str], pause_seconds: int) -> str:
     """Create TwiML for chained audio testing.
-
+    
     Instead of playing audio files before connecting to the bot, this connects
     to the bot conversation system immediately. The audio files will be injected
     during the conversation using Twilio's call update mechanism.
-
+    
     This ensures the bot's conversation system is active and can transcribe
     all audio inputs properly.
     """
     response = VoiceResponse()
-
+    
     # Connect directly to the bot conversation system
     # This activates the WebSocket and conversation transcription immediately
     redirect_url = DEFAULT_TWIML_REDIRECT
@@ -1222,7 +1140,7 @@ def create_chained_test_twiml(audio_urls: list[str], pause_seconds: int) -> str:
         )
 
     response.redirect(redirect_url, method="GET")
-
+    
     twiml_str = str(response)
     logger.debug("Generated chained TwiML: %s", twiml_str)
     return twiml_str
@@ -1230,71 +1148,86 @@ def create_chained_test_twiml(audio_urls: list[str], pause_seconds: int) -> str:
 
 @click.command()
 @click.option(
-    "--to", default=DEFAULT_TO_NUMBER, help=f"Number to call (default: {DEFAULT_TO_NUMBER})"
-)
+        "--to",
+        default=DEFAULT_TO_NUMBER,
+        help=f"Number to call (default: {DEFAULT_TO_NUMBER})"
+    )
 @click.option(
-    "--from-number", "from_number", help="Twilio number to call from (default: auto-detect)"
-)
+    "--from-number",
+    "from_number",
+        help="Twilio number to call from (default: auto-detect)"
+    )
 @click.option(
     "--text",
     multiple=True,
     default=["name an animal"],
-    help=(
-        "Text to convert to speech and play during call "
-        "(can be used multiple times for chaining, mutually exclusive with "
-        "--mp3). Default: 'name an animal'"
-    ),
+    help="Text to convert to speech and play during call (can be used multiple times for chaining, mutually exclusive with --mp3). Default: 'name an animal'"
 )
-@click.option("--mp3", help="MP3 file to play (mutually exclusive with --text)")
+@click.option(
+        "--mp3",
+        help=f"MP3 file to play (mutually exclusive with --text)"
+    )
 @click.option(
     "--tts-voice",
     default="alloy",
     type=click.Choice(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]),
-    help="OpenAI TTS voice (default: alloy)",
+    help="OpenAI TTS voice (default: alloy)"
 )
 @click.option(
     "--tts-model",
     default="tts-1",
     type=click.Choice(["tts-1", "tts-1-hd"]),
-    help="OpenAI TTS model (default: tts-1)",
+    help="OpenAI TTS model (default: tts-1)"
 )
 @click.option(
     "--silence-timeout",
     type=int,
     default=15,
-    help="Seconds of silence pause between chained TTS prompts (default: 15)",
+    help="Seconds of silence pause between chained TTS prompts (default: 15)"
 )
 @click.option(
-    "--project-id",
-    help="GCP project ID for log monitoring (default: auto-detect from gcloud config)",
-)
+        "--project-id",
+        help="GCP project ID for log monitoring (default: auto-detect from gcloud config)"
+    )
 @click.option(
-    "--service-name",
-    default=DEFAULT_SERVICE_NAME,
-    help=f"Cloud Run service name for log monitoring (default: {DEFAULT_SERVICE_NAME})",
-)
+        "--service-name",
+        default=DEFAULT_SERVICE_NAME,
+        help=f"Cloud Run service name for log monitoring (default: {DEFAULT_SERVICE_NAME})"
+    )
 @click.option(
-    "--region",
-    default=DEFAULT_SERVICE_REGION,
-    help="GCP region for Cloud Run service (default: us-west1)",
-)
-@click.option("--no-logs", is_flag=True, help="Disable Cloud Run log monitoring during call")
-@click.option("--debug", is_flag=True, help="Enable debug output for log monitoring")
+        "--region",
+        default=DEFAULT_SERVICE_REGION,
+        help="GCP region for Cloud Run service (default: us-west1)"
+    )
+@click.option(
+        "--no-logs",
+    is_flag=True,
+        help="Disable Cloud Run log monitoring during call"
+    )
+@click.option(
+        "--debug",
+    is_flag=True,
+        help="Enable debug output for log monitoring"
+    )
 @click.option(
     "--evaluate-logs/--no-evaluate-logs",
     default=True,
-    help="Enable/disable detailed log evaluation using LLM analysis (default: enabled)",
+    help="Enable/disable detailed log evaluation using LLM analysis (default: enabled)"
 )
-@click.option("--log-model", default="o3", help="Model to use for log evaluation (default: o3)")
+@click.option(
+    "--log-model",
+    default="o3",
+    help="Model to use for log evaluation (default: o3)"
+)
 def main(
     to: str,
-    from_number: str | None,
+    from_number: Optional[str],
     text: tuple[str, ...],
-    mp3: str | None,
+    mp3: Optional[str],
     tts_voice: str,
     tts_model: str,
     silence_timeout: int,
-    project_id: str | None,
+    project_id: Optional[str],
     service_name: str,
     region: str,
     no_logs: bool,
@@ -1303,19 +1236,19 @@ def main(
     log_model: str,
 ):
     """Make a test outbound call with Twilio and precise timing control.
-
+    
     By default, generates TTS for "name an animal" and plays it during the call.
-
+    
     Options:
     1. Use --text to specify custom text for TTS generation (supports chaining)
     2. Use --mp3 to play an existing audio file instead
-
-    For chained TTS prompts, audio files are combined with configurable silence
+    
+    For chained TTS prompts, audio files are combined with configurable silence 
     gaps and the call hangs up immediately after all audio completes.
-
+    
     Log evaluation with LLM analysis is enabled by default (using configurable model).
     """
-
+    
     # Validate mutually exclusive options
     if text and mp3:
         logger.error("--text and --mp3 are mutually exclusive. Use one or the other.")
@@ -1323,64 +1256,57 @@ def main(
     project_id = project_id or DEFAULT_PROJECT_ID
     service_name = service_name or DEFAULT_SERVICE_NAME
     region = region or DEFAULT_SERVICE_REGION
-
+    
     # If no explicit options provided, use default text
     if not text and not mp3:
         text = ("name an animal",)
 
     env = get_env()
 
-    os.environ.setdefault("TWILIO_AUTH_TOKEN", env.twilio_auth_token)
+    os.environ.setdefault('TWILIO_AUTH_TOKEN', env.twilio_auth_token)
     if env.twilio_account_sid:
-        os.environ.setdefault("TWILIO_ACCOUNT_SID", env.twilio_account_sid)
-    os.environ.setdefault("OPENAI_API_KEY", env.openai_api_key)
+        os.environ.setdefault('TWILIO_ACCOUNT_SID', env.twilio_account_sid)
+    os.environ.setdefault('OPENAI_API_KEY', env.openai_api_key)
 
     # Ensure we have required environment variables
     if not os.environ.get("TWILIO_AUTH_TOKEN"):
         logger.error(
-            "TWILIO_AUTH_TOKEN not found in environment. Please set it or create a .env file."
+            "TWILIO_AUTH_TOKEN not found in environment. "
+            "Please set it or create a .env file."
         )
         sys.exit(1)
 
     if not env.twilio_account_sid:
         logger.error(
-            "TWILIO_ACCOUNT_SID not found. Add it to your .env file or set it in the environment."
+            "TWILIO_ACCOUNT_SID not found. "
+            "Add it to your .env file or set it in the environment."
         )
         sys.exit(1)
 
     # Handle text chaining vs single MP3
     if text:
         if not os.environ.get("OPENAI_API_KEY"):
-            logger.error("OPENAI_API_KEY not found in environment. Required for TTS generation.")
+            logger.error(
+                "OPENAI_API_KEY not found in environment. "
+                "Required for TTS generation."
+            )
             sys.exit(1)
-
+        
         # Generate audio files for all text inputs
         audio_files = []
         for i, text_input in enumerate(text):
             try:
-                logger.info(
-                    "Generating TTS audio %d/%d from text: %s",
-                    i + 1,
-                    len(text),
-                    text_input[:100] + ("..." if len(text_input) > 100 else ""),
-                )
-                generated_audio_path = generate_tts_audio(
-                    text_input, voice=tts_voice, model=tts_model
-                )
+                logger.info("Generating TTS audio %d/%d from text: %s", 
+                           i+1, len(text), text_input[:100] + ("..." if len(text_input) > 100 else ""))
+                generated_audio_path = generate_tts_audio(text_input, voice=tts_voice, model=tts_model)
                 audio_files.append(str(generated_audio_path))
             except Exception as e:
-                logger.error("TTS generation failed for text %d: %s", i + 1, e)
+                logger.error("TTS generation failed for text %d: %s", i+1, e)
                 sys.exit(1)
-
+        
         # Execute chained conversation
         try:
-            (
-                call_sid,
-                logs_output,
-                local_call_duration,
-                combined_audio_duration,
-                individual_durations,
-            ) = make_chained_test_call(
+            call_sid, logs_output, local_call_duration, combined_audio_duration, individual_durations = make_chained_test_call(
                 to_number=to,
                 from_number=from_number,
                 audio_files=audio_files,
@@ -1391,43 +1317,43 @@ def main(
                 enable_log_monitoring=not no_logs,
                 debug=debug,
             )
-
+            
             # Perform detailed log evaluation if requested
             if evaluate_logs and logs_output and logs_output.strip():
                 logger.info(f"\n=== Starting {log_model.upper()} Log Evaluation ===")
                 try:
                     # Use locally-measured call duration rather than Twilio's
                     call_duration = int(local_call_duration)
-
+                    
                     # Prepare evaluation prompt
                     evaluation_prompt = prepare_log_evaluation_prompt(
                         user_texts=list(text),
                         silence_timeout=silence_timeout,
                         individual_durations=individual_durations,
                         call_duration=call_duration,
-                        logs=logs_output,
+                        logs=logs_output
                     )
-
+                    
                     # Get LLM evaluation
                     evaluation_result = evaluate_logs_with_llm(evaluation_prompt, model=log_model)
 
-                    print("\n" + "=" * 80)
+                    print("\n" + "="*80)
                     print(f"{log_model.upper()} LOG EVALUATION PROMPT")
-                    print("=" * 80)
+                    print("="*80)
                     print(evaluation_prompt)
-                    print("=" * 80 + "\n")
-                    print("\n" + "=" * 80)
+                    print("="*80 + "\n")
+                    print("\n" + "="*80)
                     print(f"{log_model.upper()} LOG EVALUATION RESULTS")
-                    print("=" * 80)
+                    print("="*80)
                     print(evaluation_result)
-                    print("=" * 80 + "\n")
-
+                    print("="*80 + "\n")
+                    
                 except Exception as e:
                     logger.error("Log evaluation failed: %s", e)
                     print(f"\nLog evaluation error: {e}\n")
             elif evaluate_logs:
                 logger.warning("Log evaluation requested but no logs available")
-
+                
         except Exception as e:
             logger.error("Chained test call failed: %s", e)
             sys.exit(1)
@@ -1445,20 +1371,16 @@ def main(
                 debug=debug,
             )
             logger.info("Test call completed successfully. Call SID: %s", call_sid)
-
-            # Note: Single MP3 evaluation not implemented yet.
-            # It would need audio duration calculation.
+            
+            # Note: Single MP3 evaluation not implemented yet - would need audio duration calculation
             if evaluate_logs:
                 logger.warning("Log evaluation for single MP3 files not yet implemented")
-
+                
         except Exception as e:
             logger.error("Test call failed: %s", e)
             sys.exit(1)
 
-    click.echo(
-        "\n✅ live_test_call finished. When you're ready, run the full "
-        "regression with:\n   python tests/live_test_all_functions.py\n"
-    )
+    click.echo("\n✅ live_test_call finished. When you're ready, run the full regression with:\n   python tests/live_test_all_functions.py\n")
 
 
 if __name__ == "__main__":

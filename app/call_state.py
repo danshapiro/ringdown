@@ -1,25 +1,30 @@
-"""Shared call-state registry used by Twilio and WebSocket handlers."""
+"""Shared call-state registry used by Twilio, Android, and WebSocket handlers."""
 
 from __future__ import annotations
 
-CallSession = tuple[str, dict, list | None, bool, str | None]
+from typing import Any, Dict, Optional, Tuple
+
+CallSession = Tuple[str, dict, Optional[list], bool, Optional[str], Optional[Dict[str, Any]]]
 
 
 class _CallRegistry:
     """In-memory registry for active ConversationRelay sessions."""
 
     def __init__(self) -> None:
-        self._call_agent_map: dict[str, CallSession] = {}
+        self._call_agent_map: Dict[str, CallSession] = {}
         self._active_agents: set[str] = set()
 
     # ------------------------------------------------------------------
-    # Call metadata staging (Twilio webhook → WebSocket setup handshake)
+    # Call metadata staging (Twilio webhook -> WebSocket setup handshake)
     # ------------------------------------------------------------------
     def store(self, call_sid: str, session: CallSession) -> None:
-        self._call_agent_map[call_sid] = session
+        self._call_agent_map[call_sid] = self._normalise_session(session)
 
     def pop(self, call_sid: str) -> CallSession | None:
-        return self._call_agent_map.pop(call_sid, None)
+        session = self._call_agent_map.pop(call_sid, None)
+        if session is None:
+            return None
+        return self._normalise_session(session)
 
     # ------------------------------------------------------------------
     # Concurrency guard helpers
@@ -34,12 +39,27 @@ class _CallRegistry:
     def is_active(self, agent_name: str) -> bool:
         return agent_name in self._active_agents
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _normalise_session(self, session: CallSession) -> CallSession:
+        if len(session) == 6:
+            agent, agent_cfg, saved_messages, resumed, caller, extras = session
+            extras = extras if isinstance(extras, dict) else None
+            return (agent, agent_cfg, saved_messages, resumed, caller, extras)
+
+        if len(session) == 5:
+            agent, agent_cfg, saved_messages, resumed, caller = session[:5]
+            return (agent, agent_cfg, saved_messages, resumed, caller, None)
+
+        raise ValueError("Invalid call session tuple length")
+
 
 _registry = _CallRegistry()
 
 
 def store_call(call_sid: str, session: CallSession) -> None:
-    """Persist metadata for a Twilio call until the WebSocket handshake."""
+    """Persist metadata for a call until the WebSocket handshake."""
 
     _registry.store(call_sid, session)
 

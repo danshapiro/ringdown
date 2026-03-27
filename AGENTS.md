@@ -1,3 +1,8 @@
+# Ringdown
+Ringdown is a phone assistant. You can call it (via twilio) or use voice or text with it (via an android app).
+It generally only has one user at a time, although a few secondary users are permitted on the same number. You don't need to worry about staging servers, concurrency, scaling, etc.
+This monorepo has both the backend server and the optional Android app.
+
 ## Coding Standards
 
 ## DON'T DO THIS
@@ -34,12 +39,28 @@ Instead of performing these actions, only recommend them, and have the user conf
   - PowerShell/CMD: `$env:UV_PROJECT_ENVIRONMENT = ".venv"` (add to your profile for persistence).
   - WSL/Bash: `export UV_PROJECT_ENVIRONMENT=.venv-wsl` (add to `.bashrc`/`.zshrc`).
 
+### Android Client & Voice Tests
+- **Python test suite:** Windows: call `.venv\Scripts\python.exe -m pytest tests` so uv does not fall back to the system Python. On WSL/macOS export `UV_PROJECT_ENVIRONMENT=.venv-wsl` and run `uv run pytest tests`. Running from the repo root is fine now that `.gradle-cache` stays out of site-packages.
+- **ADB is guaranteed:** Every handset QA workflow runs with a USB-tethered device. Automation assumes `adb` access, so test setup may pre-grant permissions or push app-ops without manual consent dialogs.
+- **API registration tests** (`tests/test_mobile_registration.py`) require `OPENAI_API_KEY` in the environment; the suite fails fast if it’s missing.
+- **Voice smoke test:** You can see the connected device with `adb devices`, and run `bash android/scripts/run-voice-smoke.sh --backend $BACKEND_URL`. The script wraps `connectedDebugAndroidTest` and expects `ANDROID_SERIAL`.
+- **Instrumentation toggles:** to force the fake transport during tests set `DebugFeatureFlags.overrideVoiceTransportStub(true)`—handled automatically by the existing `VoiceMvpSuite`; no manual changes needed when running the suite.
+- **Deploy/install:** From PowerShell/CMD run `uv run python android/scripts/install.py --device $ANDROID_SERIAL`; it rebuilds the debug APK, installs it, and (by default) reruns the connected instrumentation suite. Use `--skip-tests` if you only need the install. The helper requires the Windows SDK/JDK paths from `android/local.properties`, so do not invoke it from WSL.
+- Connected suite: on WSL/macOS run `bash android/scripts/gradle.sh :app:connectedVoiceMvpAndroidTest` (installs APKs and drives instrumentation via `adb`, so set `ANDROID_SERIAL` if multiple devices are attached); on Windows PowerShell use `./gradlew.bat :app:connectedVoiceMvpAndroidTest`. Keep the resulting debug APK installed for manual QA.
+- **Gradle on Windows:** `android/local.properties` must point to `D:/Users/Dan/GoogleDrivePersonal/code/ringdown/android/.android-sdk` and `.jdk`. Before invoking Gradle, run `$env:JAVA_HOME = 'D:/Users/Dan/GoogleDrivePersonal/code/ringdown/android/.jdk'; Set-Location android; ./gradlew.bat <task>`. If `aapt.exe` is missing, reinstall build tools with `cmd /c "echo y | $((Join-Path $env:ANDROID_SDK_ROOT 'cmdline-tools/latest.win/bin/sdkmanager.bat')) --sdk_root=$env:ANDROID_SDK_ROOT build-tools;34.0.0"`.
+
 ### Deployment (Cloud Run)
 - From the repo root, activate the matching virtual environment (`.venv` on PowerShell/CMD, `.venv-wsl` on bash).
 - Make sure `gcloud auth application-default login` is already configured for the `danbot-twilio` project.
 - Run `python cloudrun-deploy.py` and wait for it to finish; it builds the image, updates secrets, and redeploys the service.
 - The deploy script can exceed the default 2‑minute timeout in the Codex harness—if it gets killed mid-run, rerun it from a local shell outside the harness or split the workflow into smaller steps.
 - Always run ``live_test_all_functions.py`` after every deploy to confirm things work.
+
+### Deployment (Handset)
+- Export `JAVA_HOME=D:/Users/Dan/GoogleDrivePersonal/code/ringdown/android/.jdk` before Gradle calls.
+- Build + instrumented tests: `cd android && ./gradlew.bat :app:connectedVoiceMvpAndroidTest`.
+- Keep the debug APK installed for manual QA: `adb -s <serial> install -r app/build/outputs/apk/debug/app-debug.apk`.
+- Deploy shortcut: `mobile://adb/install?serial=<serial>&path=android/app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Helpful tools
 - `gh` for github work including CI status

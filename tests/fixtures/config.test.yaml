@@ -8,7 +8,7 @@ defaults:
   default_email: team@example.com
   email_greenlist_enforced: true
   admin_emails:
-    - "^[^@]+@example\\.com$"
+    - '^[^@]+@example\.com$'
     - team@example.com
   project_name: ringdown
   calendar_user_name: Ringdown Operator
@@ -83,7 +83,7 @@ agents:
       - reset
     email_greenlist_enforced: true
     email_greenlist:
-      - "^[^@]+@example\\.com$"
+      - '^[^@]+@example\.com$'
       - team@example.com
     docs_folder_greenlist:
       - "Ringdown-default"
@@ -121,6 +121,15 @@ agents:
     tools:
       - TavilySearch
       - reset
+
+mobile_devices: {}
+mobile_text:
+  websocket_path: /v1/mobile/text/session
+  session_ttl_seconds: 900
+  resume_ttl_seconds: 300
+  heartbeat_interval_seconds: 12
+  heartbeat_timeout_seconds: 30
+  tls_pins: []
 
 docs_folder_greenlist_defaults:
   - "Ringdown-default"

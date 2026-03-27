@@ -16,6 +16,9 @@ logs/
 
 # Docker & runtime artifacts
 *.log
+logcat*.txt
+/screenshot.png
+/uidump.xml
 *log*.json
 *.mp3
 logs_since_*.json
@@ -26,7 +29,8 @@ tests/live_test_file.mp3
 .DS_Store
 
 # VS Code / PyCharm
-.vscode/
+.vscode/*
+!.vscode/settings.json
 .idea/
 
 # Python Build Artifacts
@@ -40,7 +44,6 @@ temp*
 .keys/
 .data/
 .claude/
-.worktrees/
 .venv-wsl/
 android/.android-sdk/
 android/.gradle-cache/
@@ -60,3 +63,11 @@ android/.android-sdk-win/
 android/.jdk-win/
 android/app/tmp-apk/
 android/app/tmp_apk/
+android/.gradle/
+*.zip
+
+# Third-party bundles (downloaded vendor artifacts should stay out of git)
+android/third_party/
+
+# Handset harness captures
+artifacts/handset/

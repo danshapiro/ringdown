@@ -105,15 +105,20 @@ python -m utils.websocket_smoke --url wss://<your-cloud-run-host>/ws --receive 3
 ```
 Listen for the greeting and ensure the call summary appears in your logs.
 
+## Android Local Audio Assets
+- `./gradlew :app:prepareLocalModels` (also wired into every `preBuild`) runs `android/scripts/prepare_local_models.py`, downloading the sherpa-onnx streaming ASR bundle (zipformer en 20M int8) and the Piper en_US Amy (low) voice if they are missing or stale, then regenerates `model_manifest.json`.
+- The combined asset footprint is ~120 MB (≈78 MB Piper, ≈42 MB sherpa-onnx). Track APK size while iterating; the manifest enforces checksums so upgrades replace the entire bundle atomically.
+- `LocalModelInstaller` reads the manifest at runtime, verifies recorded checksums, and only reinstalls when the manifest hash changes. We can migrate to a single multi-voice pack once a compact bilingual streaming model is ready; updating the manifest and script will automatically roll new assets out.
+- The handset now always uses the local ASR/TTS pipeline; ensure `android/scripts/prepare_local_models.py` has bundled assets before running the app so voice startup remains fast.
+
 ## Technical Details
-- Architecture: Twilio ConversationRelay streams audio to FastAPI over `/ws`, and the app routes messages through the `stream_response` pipeline, SQLite conversation memory, and any tools you enabled.
+- Architecture: Twilio ConversationRelay streams audio to FastAPI over `/ws`, and the app routes messages through the `stream_response` pipeline (backed by your configured LLM provider), SQLite conversation memory, and any tools you enabled.
 - Configuration: Override `RINGDOWN_CONFIG_PATH` to swap between "workday" and "weekend" personalities without editing files.
 - Integrations: Add `TAVILY_API_KEY`, `GMAIL_IMPERSONATE_EMAIL`, and `GMAIL_SA_KEY_PATH` when you’re ready for search or email follow-ups. Without them, Ringdown politely skips those actions.
 - Testing: `pytest`, `pytest -m integration`, and the WebSocket smoke helper keep regressions away before you push changes.
 - Release workflow: bump `app.__version__`, update `pyproject.toml`, log changes in `CHANGELOG.md`, and tag (`v0.x.y`) when you publish a new build.
 
-## Log Formatting
-- Use `scripts/reformat_litellm_log.py` to turn a raw Cloud Run LiteLLM JSON export into a human-readable transcript.
-
+## Log Formatting (litellm transcripts)
+- If you're exploring logs, use `scripts/reformat_litellm_log.py` to turn a raw Cloud Run JSON export (e.g., `logs/litellm_call_YYYYMMDDThhmmZ_full.json`) into a human-readable transcript for the human.
 ## License
 Ringdown ships under the MIT License (see `LICENSE`).
