@@ -1,9 +1,8 @@
+import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-import logging
-import os
 import yaml
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -219,20 +218,6 @@ def get_project_name() -> str:
     cfg = _load_config()
     project = cfg.get("defaults", {}).get("project_name")
     return str(project).strip() if project else "Project"
-
-
-def get_mobile_devices() -> Dict[str, Any]:
-    """Return mapping of registered mobile devices."""
-
-    cfg = _load_config()
-    return cfg.get("mobile_devices", {})
-
-
-def get_mobile_device(device_id: str) -> Dict[str, Any] | None:
-    """Return configuration entry for a single device, if present."""
-
-    devices = get_mobile_devices()
-    return devices.get(device_id)
 
 
 def get_calendar_user_name() -> str:

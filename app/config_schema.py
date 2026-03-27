@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ToolRunnerConfig(BaseModel):
@@ -123,21 +122,6 @@ class AgentConfig(BaseModel):
         return data
 
 
-class MobileDeviceConfig(BaseModel):
-    """Configuration entry describing a mobile client registered with the backend."""
-
-    label: str = Field(..., min_length=1)
-    agent: str = Field(..., min_length=1)
-    enabled: bool = False
-    created_at: datetime | None = Field(default=None, alias="createdAt")
-    last_seen: datetime | None = Field(default=None, alias="lastSeen")
-    notes: Optional[str] = None
-    poll_after_seconds: Optional[int] = Field(default=None, ge=1, le=300, alias="pollAfterSeconds")
-    blocked_reason: Optional[str] = Field(default=None, alias="blockedReason")
-
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
-
-
 class ConfigModel(BaseModel):
     """Complete Ringdown configuration schema."""
 
@@ -148,7 +132,6 @@ class ConfigModel(BaseModel):
     debug: str | None = None
     hints: str | None = None
     docs_folder_greenlist_defaults: List[str] = Field(default_factory=list)
-    mobile_devices: Dict[str, MobileDeviceConfig] = Field(default_factory=dict, alias="mobileDevices")
 
     model_config = ConfigDict(extra="allow")
 
@@ -177,22 +160,6 @@ class ConfigModel(BaseModel):
                     )
                 seen[number] = agent_name
 
-        mobile_devices = values.get("mobile_devices") or {}
-        for device_id, device_cfg in mobile_devices.items():
-            if isinstance(device_cfg, MobileDeviceConfig):
-                agent = device_cfg.agent
-            elif isinstance(device_cfg, dict):
-                agent = device_cfg.get("agent")
-            else:
-                agent = getattr(device_cfg, "agent", None)
-
-            if not agent:
-                raise ValueError(f"Mobile device '{device_id}' is missing required 'agent' field")
-            if agent not in agents:
-                raise ValueError(
-                    f"Mobile device '{device_id}' references unknown agent '{agent}'. "
-                    "Add the agent to config.yaml before assigning devices."
-                )
         return values
 
 

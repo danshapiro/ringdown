@@ -95,6 +95,13 @@ def test_twilml_unknown_caller():
     assert unknown_cfg["welcome_greeting"] in xml
 
 
+def test_no_mobile_routes_registered():
+    paths = {route.path for route in app_main.app.routes}
+
+    assert not any(path.startswith("/v1/mobile") for path in paths)
+    assert not any(path.startswith("/ws/mobile") for path in paths)
+
+
 def test_live_pricing_fetch():
     """get_token_prices returns numeric costs (may be zero if provider lacks data)."""
 
