@@ -30,7 +30,6 @@ tests/live_test_file.mp3
 
 # VS Code / PyCharm
 .vscode/*
-!.vscode/settings.json
 .idea/
 
 # Python Build Artifacts

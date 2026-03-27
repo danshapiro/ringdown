@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+import app.mobile.smoke as smoke_module
 from app.main import app
 from app.mobile.smoke import SmokeResult, SmokeTestError, run_smoke_test
 from app.mobile.text_session_store import TextSessionStore
@@ -138,3 +139,48 @@ def test_smoke_raises_on_error_event() -> None:
     assert events[-1].get("detail") == "boom"
     assert events[-1].get("exceptionType") == "RuntimeError"
     assert events[-1].get("exceptionRepr") == "RuntimeError('boom')"
+
+
+def test_resolve_remote_smoke_auth_token_reads_local_backend_config(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "mobile_devices:\n  instrumentation-device:\n    auth_token: discovered-token\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("LIVE_TEST_MOBILE_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(smoke_module, "_get_configured_auth_token", lambda _device_id: None)
+    monkeypatch.setattr(
+        smoke_module,
+        "_discover_local_backend_config_path",
+        lambda _base_url: config_path,
+    )
+
+    token = smoke_module.resolve_remote_smoke_auth_token(
+        base_url="http://127.0.0.1:8000",
+        device_id="instrumentation-device",
+    )
+
+    assert token == "discovered-token"
+
+
+def test_resolve_remote_smoke_auth_token_prefers_explicit_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIVE_TEST_MOBILE_AUTH_TOKEN", "env-token")
+    monkeypatch.setattr(
+        smoke_module,
+        "_get_configured_auth_token",
+        lambda _device_id: pytest.fail("config lookup should not run"),
+    )
+
+    token = smoke_module.resolve_remote_smoke_auth_token(
+        base_url="http://127.0.0.1:8000",
+        device_id="instrumentation-device",
+        auth_token="explicit-token",
+    )
+
+    assert token == "explicit-token"

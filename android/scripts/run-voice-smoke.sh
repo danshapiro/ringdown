@@ -7,13 +7,15 @@ Usage: run-voice-smoke.sh [--backend <URL>] [--device-id <ID>] [--auth-token <TO
 
 Runs the live reconnect Android instrumentation smoke against a connected
 device/emulator. The backend URL must be supplied via --backend or the
-RINGDOWN_BACKEND_URL environment variable. The mobile auth token may be
-supplied via --auth-token or LIVE_TEST_MOBILE_AUTH_TOKEN.
+RINGDOWN_BACKEND_URL environment variable. The mobile auth token is optional:
+the wrapper uses --auth-token or LIVE_TEST_MOBILE_AUTH_TOKEN when supplied,
+and otherwise tries to discover the configured token from the local backend.
 EOF
 }
 
 BACKEND_URL="${RINGDOWN_BACKEND_URL:-}"
-DEVICE_ID_OVERRIDE="${RINGDOWN_DEVICE_ID_OVERRIDE:-}"
+DEFAULT_DEVICE_ID="instrumentation-device"
+DEVICE_ID_OVERRIDE="${RINGDOWN_DEVICE_ID_OVERRIDE:-${LIVE_TEST_MOBILE_DEVICE_ID:-}}"
 AUTH_TOKEN_OVERRIDE="${LIVE_TEST_MOBILE_AUTH_TOKEN:-}"
 
 while [[ $# -gt 0 ]]; do
@@ -51,14 +53,33 @@ if [[ -z "${BACKEND_URL}" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+RESOLVED_DEVICE_ID="${DEVICE_ID_OVERRIDE:-${DEFAULT_DEVICE_ID}}"
+
+if [[ -z "${AUTH_TOKEN_OVERRIDE}" ]]; then
+  AUTH_TOKEN_OVERRIDE="$(
+    cd "${REPO_ROOT}"
+    UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-.venv-wsl}" \
+      uv run python - "${BACKEND_URL}" "${RESOLVED_DEVICE_ID}" <<'PY'
+import sys
+
+from app.mobile.smoke import resolve_remote_smoke_auth_token
+
+token = resolve_remote_smoke_auth_token(
+    base_url=sys.argv[1],
+    device_id=sys.argv[2],
+) or ""
+print(token, end="")
+PY
+  )"
+fi
+
 ARGS=(
   ":app:connectedVoiceMvpAndroidTest"
   "-Pandroid.testInstrumentationRunnerArguments.class=com.ringdown.mobile.LiveServiceReconnectAndroidTest"
+  "-Pandroid.testInstrumentationRunnerArguments.liveDeviceId=${RESOLVED_DEVICE_ID}"
 )
 
-if [[ -n "${DEVICE_ID_OVERRIDE}" ]]; then
-  ARGS+=("-Pandroid.testInstrumentationRunnerArguments.liveDeviceId=${DEVICE_ID_OVERRIDE}")
-fi
 if [[ -n "${AUTH_TOKEN_OVERRIDE}" ]]; then
   ARGS+=("-Pandroid.testInstrumentationRunnerArguments.liveAuthToken=${AUTH_TOKEN_OVERRIDE}")
 fi

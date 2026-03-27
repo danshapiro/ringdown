@@ -61,9 +61,9 @@ class LiveServiceReconnectAndroidTest {
     lateinit var deviceIdStoreOverride: DeviceIdStore
 
     private lateinit var resolvedDeviceId: String
-    private lateinit var resolvedAuthToken: String
-    private lateinit var testDataStoreScope: CoroutineScope
-    private lateinit var testDataStore: DataStore<Preferences>
+    private var resolvedAuthToken: String? = null
+    private var testDataStoreScope: CoroutineScope? = null
+    private var testDataStore: DataStore<Preferences>? = null
     private var previousRegistrationMode: String? = null
     private var previousTextSessionMode: String? = null
     private var previousLiveDeviceId: String? = null
@@ -81,7 +81,7 @@ class LiveServiceReconnectAndroidTest {
         testDataStoreScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val storeFile = context.cacheDir.resolve("live_device_datastore.preferences_pb")
         testDataStore = PreferenceDataStoreFactory.create(
-            scope = testDataStoreScope,
+            scope = requireNotNull(testDataStoreScope),
         ) {
             storeFile
         }
@@ -90,10 +90,14 @@ class LiveServiceReconnectAndroidTest {
         val authKey = stringPreferencesKey("auth_token")
         val resumeKey = stringPreferencesKey("resume_token")
         runBlocking {
-            testDataStore.edit { prefs ->
+            requireNotNull(testDataStore).edit { prefs ->
                 prefs[deviceKey] = resolvedDeviceId
                 prefs.remove(agentKey)
-                prefs[authKey] = resolvedAuthToken
+                if (resolvedAuthToken.isNullOrBlank()) {
+                    prefs.remove(authKey)
+                } else {
+                    prefs[authKey] = requireNotNull(resolvedAuthToken)
+                }
                 prefs.remove(resumeKey)
             }
         }
@@ -102,10 +106,10 @@ class LiveServiceReconnectAndroidTest {
             fields = mapOf(
                 "path" to storeFile.absolutePath,
                 "deviceId" to resolvedDeviceId,
-                "authTokenConfigured" to true,
+                "authTokenConfigured" to !resolvedAuthToken.isNullOrBlank(),
             ),
         )
-        deviceIdStoreOverride = DeviceIdStore(testDataStore)
+        deviceIdStoreOverride = DeviceIdStore(requireNotNull(testDataStore))
         hiltRule.inject()
         logInfo(
             event = "live_test.device_configured",
@@ -115,7 +119,7 @@ class LiveServiceReconnectAndroidTest {
 
     @After
     fun tearDown() {
-        testDataStoreScope.cancel()
+        testDataStoreScope?.cancel()
         restoreSystemProperty(TEST_REGISTRATION_MODE_PROPERTY, previousRegistrationMode)
         restoreSystemProperty(TEST_TEXT_SESSION_MODE_PROPERTY, previousTextSessionMode)
         restoreSystemProperty(TEST_LIVE_DEVICE_ID_PROPERTY, previousLiveDeviceId)
@@ -224,17 +228,13 @@ class LiveServiceReconnectAndroidTest {
             .ifBlank { DEFAULT_DEVICE_ID }
     }
 
-    private fun resolveAuthToken(): String {
+    private fun resolveAuthToken(): String? {
         val arguments = InstrumentationRegistry.getArguments()
         return arguments.getString(TEST_LIVE_AUTH_TOKEN_ARGUMENT).orEmpty()
             .ifBlank { System.getProperty(TEST_LIVE_AUTH_TOKEN_PROPERTY).orEmpty() }
             .ifBlank { System.getenv("LIVE_TEST_MOBILE_AUTH_TOKEN").orEmpty() }
-            .ifBlank {
-                error(
-                    "Live auth token missing. Provide liveAuthToken instrumentation arg or " +
-                        "LIVE_TEST_MOBILE_AUTH_TOKEN."
-                )
-            }
+            .ifBlank { "" }
+            .takeIf { it.isNotBlank() }
     }
 
     private fun ActivityScenario<MainActivity>.awaitConnectedState(
@@ -312,9 +312,13 @@ class LiveServiceReconnectAndroidTest {
         private const val MAX_REGISTRATION_ATTEMPTS = 3
     }
 
-    private fun setSystemProperty(key: String, value: String): String? {
+    private fun setSystemProperty(key: String, value: String?): String? {
         val previous = System.getProperty(key)
-        System.setProperty(key, value)
+        if (value.isNullOrBlank()) {
+            System.clearProperty(key)
+        } else {
+            System.setProperty(key, value)
+        }
         return previous
     }
 

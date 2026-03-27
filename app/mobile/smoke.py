@@ -6,13 +6,16 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 from urllib.parse import urlparse
 
 import httpx
+import yaml
 from fastapi.testclient import TestClient
 from websockets.asyncio.client import ClientConnection, connect
 
@@ -66,6 +69,9 @@ class SmokeResult:
         """Alias retained for historical API compatibility."""
 
         return self.assistant_text
+
+
+_LOCAL_SMOKE_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
 
 
 def _require(
@@ -327,9 +333,11 @@ async def run_remote_smoke(
     base = base_url.rstrip("/")
     session_url = f"{base}/v1/mobile/text/session"
     payload: dict[str, Any] = {"deviceId": device_id}
-    resolved_auth_token = (
-        auth_token or os.environ.get("LIVE_TEST_MOBILE_AUTH_TOKEN") or ""
-    ).strip()
+    resolved_auth_token = resolve_remote_smoke_auth_token(
+        base_url=base,
+        device_id=device_id,
+        auth_token=auth_token,
+    )
     if resolved_auth_token:
         payload["authToken"] = resolved_auth_token
     if agent:
@@ -494,6 +502,29 @@ def _build_websocket_url(base_url: str, websocket_path: str) -> str:
     return f"{scheme}://{parsed.netloc}{path}"
 
 
+def resolve_remote_smoke_auth_token(
+    *,
+    base_url: str,
+    device_id: str,
+    auth_token: str | None = None,
+) -> str | None:
+    resolved_auth_token = (
+        auth_token or os.environ.get("LIVE_TEST_MOBILE_AUTH_TOKEN") or ""
+    ).strip()
+    if resolved_auth_token:
+        return resolved_auth_token
+
+    configured_token = _get_configured_auth_token(device_id)
+    if configured_token:
+        return configured_token
+
+    config_path = _discover_local_backend_config_path(base_url)
+    if config_path is None:
+        return None
+
+    return _get_configured_auth_token_from_path(config_path, device_id)
+
+
 def _get_configured_auth_token(device_id: str) -> str | None:
     try:
         raw_device = settings.get_mobile_device(device_id) or {}
@@ -509,6 +540,69 @@ def _get_configured_auth_token(device_id: str) -> str | None:
 
     token = candidate.strip()
     return token or None
+
+
+def _get_configured_auth_token_from_path(config_path: Path, device_id: str) -> str | None:
+    try:
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:  # pragma: no cover - defensive for malformed or missing configs
+        return None
+
+    devices = raw.get("mobile_devices")
+    if not isinstance(devices, dict):
+        return None
+
+    raw_device = devices.get(device_id)
+    if not isinstance(raw_device, dict):
+        return None
+
+    candidate = raw_device.get("auth_token") or raw_device.get("authToken")
+    if not isinstance(candidate, str):
+        return None
+
+    token = candidate.strip()
+    return token or None
+
+
+def _discover_local_backend_config_path(base_url: str) -> Path | None:
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").strip().lower()
+    if host not in _LOCAL_SMOKE_HOSTS:
+        return None
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        result = subprocess.run(
+            ["lsof", f"-iTCP:{port}", "-sTCP:LISTEN", "-nP", "-t"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:  # pragma: no cover - host tooling not always available
+        return None
+
+    if result.returncode not in {0, 1}:
+        return None
+
+    pid = next((line.strip() for line in result.stdout.splitlines() if line.strip().isdigit()), "")
+    if not pid:
+        return None
+
+    environ_path = Path("/proc") / pid / "environ"
+    try:
+        entries = environ_path.read_bytes().split(b"\0")
+    except OSError:  # pragma: no cover - process may have exited
+        return None
+
+    for entry in entries:
+        if entry.startswith(b"RINGDOWN_CONFIG_PATH="):
+            value = entry.split(b"=", 1)[1].decode("utf-8", errors="ignore").strip()
+            if not value:
+                return None
+            path = Path(value)
+            return path if path.exists() else None
+
+    return None
 
 
 @asynccontextmanager
@@ -528,4 +622,10 @@ async def _open_websocket(url: str, session_token: str, timeout: float) -> Clien
         await ws.close()
 
 
-__all__ = ["SmokeResult", "SmokeTestError", "run_smoke_test", "run_remote_smoke"]
+__all__ = [
+    "SmokeResult",
+    "SmokeTestError",
+    "run_smoke_test",
+    "run_remote_smoke",
+    "resolve_remote_smoke_auth_token",
+]

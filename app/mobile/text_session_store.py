@@ -75,7 +75,7 @@ class TextSessionStore:
         resume_token = _generate_token()
 
         ttl = max(session_ttl_seconds, 60)
-        resume_ttl = max(resume_ttl_seconds, ttl)
+        resume_ttl = max(resume_ttl_seconds, 60)
 
         expires_at = now + timedelta(seconds=ttl)
         resume_expires_at = now + timedelta(seconds=resume_ttl)
