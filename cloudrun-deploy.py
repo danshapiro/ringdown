@@ -8,14 +8,10 @@ import platform
 import shlex
 import subprocess
 import sys
-import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence
 
-import yaml
-from log_love import setup_logging
-from tenacity import retry, stop_after_attempt, wait_fixed
 # DEFER HEAVY GOOGLE CLOUD IMPORTS UNTIL NEEDED
 # Importing google.cloud.run_v2 at module import time pulls in a large dependency
 # tree (aiohttp, attrs, etc.) which can appear to "hang" on Windows / networked
@@ -23,11 +19,18 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 # need these clients.
 from zoneinfo import ZoneInfo
 
+import yaml
+from tenacity import retry, stop_after_attempt, wait_fixed
+
+from log_love import setup_logging
+
 try:
     from dotenv import load_dotenv
 except ImportError:  # Fallback: don't crash if python-dotenv isn't installed yet
+
     def load_dotenv(*_: object, **__: object) -> None:  # type: ignore
         return None
+
 
 # Load environment early so module-level defaults pick up .env overrides.
 load_dotenv(override=False)
@@ -35,6 +38,7 @@ load_dotenv(override=False)
 ###############################################################################
 # Configurable defaults (override via env-vars or edit here)                  #
 ###############################################################################
+
 
 def _env_default(*keys: str, default: str = "") -> str:
     """Return the first non-empty environment value from *keys*."""
@@ -151,6 +155,8 @@ def _load_secret_plans(config_path: Path | None) -> list[SecretPlan]:
         )
 
     return plans
+
+
 ###############################################################################
 # Logging setup                                                               #
 ###############################################################################
@@ -198,7 +204,8 @@ def _run_command(
     cwd: Path | str | None = None,
     env: dict[str, str] | None = None,
 ) -> str:
-    """Run a subprocess with argument list to avoid shell quoting issues."""
+    """Run a subprocess with an argument list to avoid shell quoting issues."""
+
     cmd_str = " ".join(shlex.quote(part) for part in args)
     log.info("$ %s", cmd_str)
     stdout_mode = subprocess.PIPE if capture else None
@@ -295,21 +302,19 @@ def _ensure_service_enabled(project_id: str, service_name: str) -> None:
         # worst case the subsequent call will surface the underlying issue.
         log.debug("Service check failed for %s: %s", service_name, exc)
 
-    _confirm_once(f"Enable API '{service_name}' for project '{project_id}'? This may incur charges.")
+    _confirm_once(
+        f"Enable API '{service_name}' for project '{project_id}'? This may incur charges."
+    )
     log.info("Enabling %s for %s", service_name, project_id)
     try:
-        _run_cmd(
-            f"gcloud services enable {service_name} --project {project_id} --quiet"
-        )
+        _run_cmd(f"gcloud services enable {service_name} --project {project_id} --quiet")
     except RuntimeError as exc:
         msg = str(exc)
         if "FAILED_PRECONDITION" in msg and "billing" in msg.lower():
             log.warning("Project billing not enabled - attempting to link automatically ...")
             _ensure_project_billing(project_id)
             # Retry once after linking billing
-            _run_cmd(
-                f"gcloud services enable {service_name} --project {project_id} --quiet"
-            )
+            _run_cmd(f"gcloud services enable {service_name} --project {project_id} --quiet")
             return
         raise
 
@@ -374,8 +379,7 @@ def _add_secret_version(project_id: str, secret_id: str, payload: bytes) -> None
     proc = subprocess.run(  # noqa: S603
         cmd,
         input=payload,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if proc.returncode != 0:
         stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
@@ -435,12 +439,15 @@ def _ensure_artifact_registry_enabled(project_id: str) -> None:
     _ensure_service_enabled(project_id, "artifactregistry.googleapis.com")
 
 
-
-def _fetch_existing_env_config(project_id: str, region: str, service: str) -> dict[str, dict[str, str]]:
+def _fetch_existing_env_config(
+    project_id: str, region: str, service: str
+) -> dict[str, dict[str, str]]:
     """Return current Cloud Run env var definitions for *service*."""
     try:
         raw = _run_cmd(
-            f"gcloud run services describe {service} --platform managed --project {project_id} --region {region} --format=json"
+            "gcloud run services describe "
+            f"{service} --platform managed --project {project_id} "
+            f"--region {region} --format=json"
         )
     except RuntimeError:
         return {}
@@ -451,12 +458,7 @@ def _fetch_existing_env_config(project_id: str, region: str, service: str) -> di
         log.debug("Unable to parse existing service config for %s", service)
         return {}
 
-    containers = (
-        data.get("spec", {})
-        .get("template", {})
-        .get("spec", {})
-        .get("containers", [])
-    )
+    containers = data.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
     if not containers:
         return {}
 
@@ -513,7 +515,7 @@ def _git_pull(branch: str) -> None:
 
 
 def _git_tag_and_push(tag: str, message: str) -> None:
-    _run_cmd(f"git tag -a {tag} -m \"{message}\"")
+    _run_cmd(f'git tag -a {tag} -m "{message}"')
     _run_cmd("git push origin --tags")
 
 
@@ -533,13 +535,13 @@ def _docker_is_running() -> bool:
 def _docker_build(
     image: str,
     *,
-    build_args: Optional[List[str]] = None,
-    labels: Optional[List[str]] = None,
-    extra_args: Optional[List[str]] = None,
+    build_args: list[str] | None = None,
+    labels: list[str] | None = None,
+    extra_args: list[str] | None = None,
     no_cache: bool = False,
     context_dir: Path | str | None = None,
 ) -> None:
-    args: List[str] = ["docker", "build"]
+    args: list[str] = ["docker", "build"]
     if no_cache:
         args.append("--no-cache")
     if build_args:
@@ -572,18 +574,18 @@ def _verify_gcloud_auth() -> None:
     """
 
     try:
-        active = _run_cmd(
-            "gcloud auth list --filter=status:ACTIVE --format=\"value(account)\""
-        )
+        active = _run_cmd('gcloud auth list --filter=status:ACTIVE --format="value(account)"')
     except RuntimeError as exc:
         raise SystemExit(
             "\n".join(
                 [
-                    "The Google Cloud CLI ('gcloud') is either not installed or not accessible in this shell.",
+                    "The Google Cloud CLI ('gcloud') is either not installed "
+                    "or not accessible in this shell.",
                     "Download & install it from:",
                     "  https://cloud.google.com/sdk/docs/install",
                     "",
-                    "After installation restart your terminal or ensure the install directory is added to PATH,",
+                    "After installation restart your terminal or ensure the "
+                    "install directory is added to PATH,",
                     "then run:\n",
                     "  gcloud init",
                     "  gcloud auth login",
@@ -609,12 +611,15 @@ def _verify_gcloud_auth() -> None:
 def _docker_login(region: str) -> None:
     """Authenticate Docker to Artifact Registry for *region*."""
     registry = f"{region}-docker.pkg.dev"
-    _run_cmd(f"gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin https://{registry}")
+    _run_cmd(
+        f"gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin https://{registry}"
+    )
 
 
 ###############################################################################
 # MP3 upload helpers                                                           #
 ###############################################################################
+
 
 def _ensure_mp3_uploaded(project_id: str, mp3_path: Path) -> str:
     """Return public URL for *mp3_path*, uploading to GCS if necessary.
@@ -626,9 +631,11 @@ def _ensure_mp3_uploaded(project_id: str, mp3_path: Path) -> str:
     """
     import base64
     import hashlib
+
     from google.cloud import storage  # type: ignore
-    from utils.mp3_uploader import upload_mp3_to_twilio
     from twilio.rest import Client
+
+    from utils.mp3_uploader import upload_mp3_to_twilio
 
     if not mp3_path.exists():
         raise FileNotFoundError(mp3_path)
@@ -653,6 +660,7 @@ def _ensure_mp3_uploaded(project_id: str, mp3_path: Path) -> str:
     dummy_client = Client("", "")
     return upload_mp3_to_twilio(dummy_client, mp3_path)
 
+
 ###############################################################################
 # Core deploy logic                                                           #
 ###############################################################################
@@ -664,20 +672,20 @@ def deploy(
     region: str,
     service: str,
     env_vars: dict[str, str],
-    env_overrides: Optional[set[str]] = None,
-    remote_branch: Optional[str] = None,
-    local_branch: Optional[str] = None,
+    env_overrides: set[str] | None = None,
+    remote_branch: str | None = None,
+    local_branch: str | None = None,
     always_warm: bool = DEFAULT_ALWAYS_WARM,
     cpu: str = DEFAULT_CPU,
     memory: str = DEFAULT_MEMORY,
     port: int = DEFAULT_PORT,
     timeout: int = DEFAULT_CLOUDRUN_TIMEOUT,
     no_cache: bool = False,
-    health_endpoint: Optional[str] = None,
-    build_args: Optional[List[str]] = None,
-    extra_args: Optional[List[str]] = None,
-    labels: Optional[List[str]] = None,
-    secret_config: Optional[Path] = None,
+    health_endpoint: str | None = None,
+    build_args: list[str] | None = None,
+    extra_args: list[str] | None = None,
+    labels: list[str] | None = None,
+    secret_config: Path | None = None,
 ) -> str:
     """Build, push and deploy the service to Cloud Run. Returns the service URL."""
 
@@ -708,7 +716,6 @@ def deploy(
     _verify_gcloud_auth()
 
     secret_plans = _load_secret_plans(secret_config)
-
     gmail_required = any(key.startswith("GMAIL_") for key in env_vars)
     if not gmail_required:
         gmail_required = any(
@@ -723,8 +730,12 @@ def deploy(
     # Upload MP3 assets (thinking/finished sounds) and inject URLs
     # ------------------------------------------------------------------
     sounds_dir = Path(__file__).resolve().parent / "sounds"
-    env_vars.setdefault("SOUND_THINKING_URL", _ensure_mp3_uploaded(project_id, sounds_dir / "thinking.mp3"))
-    env_vars.setdefault("SOUND_FINISHED_URL", _ensure_mp3_uploaded(project_id, sounds_dir / "finished.mp3"))
+    env_vars.setdefault(
+        "SOUND_THINKING_URL", _ensure_mp3_uploaded(project_id, sounds_dir / "thinking.mp3")
+    )
+    env_vars.setdefault(
+        "SOUND_FINISHED_URL", _ensure_mp3_uploaded(project_id, sounds_dir / "finished.mp3")
+    )
 
     # 2. Generate image URI ---------------------------------------------------
     # Make sure gcloud is targeting the correct project
@@ -756,7 +767,6 @@ def deploy(
     _run_cmd(f"gcloud config set project {project_id}")
 
     timestamp = _dt.datetime.utcnow().strftime("%Y%m%d%H%M")
-
     repo = f"{region}-docker.pkg.dev/{project_id}/{service}/{service}"
 
     # Ensure repository exists (idempotent)
@@ -765,7 +775,8 @@ def deploy(
     except RuntimeError:
         log.info("Creating Artifact Registry repository %s in %s", service, region)
         _confirm_once(
-            f"Create Artifact Registry repository '{service}' in region '{region}' for project '{project_id}'?"
+            "Create Artifact Registry repository "
+            f"'{service}' in region '{region}' for project '{project_id}'?"
         )
         _run_cmd(
             " ".join(
@@ -852,7 +863,7 @@ def deploy(
     _run_cmd(" ".join(cmd_parts), capture=False)
 
     url = _run_cmd(
-        f"gcloud run services describe {service} --region {region} --format \"value(status.url)\""
+        f'gcloud run services describe {service} --region {region} --format "value(status.url)"'
     )
     url = url.strip()
     log.info("Deployed to: %s", url)
@@ -865,12 +876,15 @@ def deploy(
         [
             "\nNext steps - connect Twilio:\n",  # leading blank line for readability
             "1. Log in to the Twilio Console (https://console.twilio.com).",
-            "2. Navigate to \"Phone Numbers -> Manage -> Active numbers\" and select the number you want to use.",
+            '2. Navigate to "Phone Numbers -> Manage -> Active numbers" and '
+            "select the number you want to use.",
             "3. In the 'Voice & Fax' tab, under 'A CALL COMES IN', choose 'Webhook'.",
-            "4. Set the URL to:  %s" % webhook_url,
+            f"4. Set the URL to:  {webhook_url}",
             "   (Method: GET - Twilio will request the TwiML with a simple GET)",
             "5. Click 'Save'.",
-            "\nTo verify the service is running: call the number and ensure your Ringdown agent greets you, or open the webhook URL in a browser - it should return valid TwiML.\n",
+            "\nTo verify the service is running: call the number and ensure "
+            "your Ringdown agent greets you, or open the webhook URL in a "
+            "browser - it should return valid TwiML.\n",
         ]
     )
     print(guidance)
@@ -879,10 +893,11 @@ def deploy(
     try:
         # Lazy import here as well
         from google.cloud import run_v2  # type: ignore
+
         svc_client = run_v2.ServicesClient()
         svc_path = f"projects/{project_id}/locations/{region}/services/{service}"
         svc_obj = svc_client.get_service(name=svc_path)
-        new_rev = (svc_obj.latest_created_revision or '').split('/')[-1]
+        new_rev = (svc_obj.latest_created_revision or "").split("/")[-1]
         if new_rev:
             log.info("Waiting for revision %s to become Ready ...", new_rev)
             _wait_for_revision_ready(project_id, region, service, new_rev)
@@ -925,7 +940,7 @@ def deploy(
 ###############################################################################
 
 
-def _parse_env_vars(values: List[str]) -> dict[str, str]:
+def _parse_env_vars(values: list[str]) -> dict[str, str]:
     env_dict: dict[str, str] = {}
     for item in values:
         if "=" not in item:
@@ -935,7 +950,7 @@ def _parse_env_vars(values: List[str]) -> dict[str, str]:
     return env_dict
 
 
-def main(argv: Optional[List[str]] = None) -> None:
+def main(argv: list[str] | None = None) -> None:
     print("[cloudrun-deploy] initializing...")
     load_dotenv(override=False)
     is_windows = os.name == "nt"
@@ -944,14 +959,14 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
 
     if not os.environ.get("UV_PROJECT_ENVIRONMENT"):
-        os.environ["UV_PROJECT_ENVIRONMENT"] = ".venv" if is_windows else (
-            ".venv-wsl" if is_wsl else ".venv"
+        os.environ["UV_PROJECT_ENVIRONMENT"] = (
+            ".venv" if is_windows else (".venv-wsl" if is_wsl else ".venv")
         )
         print(
             f"[cloudrun-deploy] UV_PROJECT_ENVIRONMENT defaulted to "
             f"{os.environ['UV_PROJECT_ENVIRONMENT']} for this session."
         )
-    
+
     # Check if virtual environment is active
     if not os.environ.get("VIRTUAL_ENV"):
         print("WARNING: Virtual environment is not active.")
@@ -962,14 +977,18 @@ def main(argv: Optional[List[str]] = None) -> None:
         else:
             print("Consider activating it with: source .venv/bin/activate")
         print()
-    
+
     print("[cloudrun-deploy] ensuring gcloud on PATH...")
     _ensure_gcloud_on_path()
 
     parser = argparse.ArgumentParser(description="Deploy the service to Cloud Run")
     parser.add_argument("--project-id", help="GCP project ID (default: gcloud config value)")
-    parser.add_argument("--region", default=DEFAULT_REGION, help="GCP region (default: %(default)s)")
-    parser.add_argument("--service", default=DEFAULT_SERVICE, help="Cloud Run service name (default: %(default)s)")
+    parser.add_argument(
+        "--region", default=DEFAULT_REGION, help="GCP region (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--service", default=DEFAULT_SERVICE, help="Cloud Run service name (default: %(default)s)"
+    )
 
     branch = parser.add_mutually_exclusive_group()
     branch.add_argument("--remote-branch", help="Deploy branch from origin & pull latest")
@@ -984,13 +1003,43 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="Path to secret configuration YAML (default: %(default)s)",
     )
 
-    parser.add_argument("--no-cache", action="store_true", help="Build Docker image with --no-cache")
-    parser.add_argument("--health-endpoint", help="Relative URL path to perform health check after deploy")
-    parser.add_argument("--build-arg", nargs="*", default=[], metavar="KEY=VAL", help="Additional --build-arg for docker build")
-    parser.add_argument("--docker-arg", nargs="*", default=[], metavar="ARG", help="Extra raw arg to pass to docker build (e.g. --platform linux/amd64)")
-    parser.add_argument("--label", nargs="*", default=[], metavar="KEY=VAL", help="Additional image label key=value pairs")
-    parser.add_argument("--timeout", type=int, default=DEFAULT_CLOUDRUN_TIMEOUT, help=f"Request timeout in seconds (default: {DEFAULT_CLOUDRUN_TIMEOUT}s/60min)")
-    parser.add_argument("--yes", action="store_true", help="Skip interactive confirmations (assume yes)")
+    parser.add_argument(
+        "--no-cache", action="store_true", help="Build Docker image with --no-cache"
+    )
+    parser.add_argument(
+        "--health-endpoint", help="Relative URL path to perform health check after deploy"
+    )
+    parser.add_argument(
+        "--build-arg",
+        nargs="*",
+        default=[],
+        metavar="KEY=VAL",
+        help="Additional --build-arg for docker build",
+    )
+    parser.add_argument(
+        "--docker-arg",
+        nargs="*",
+        default=[],
+        metavar="ARG",
+        help="Extra raw arg to pass to docker build (e.g. --platform linux/amd64)",
+    )
+    parser.add_argument(
+        "--label",
+        nargs="*",
+        default=[],
+        metavar="KEY=VAL",
+        help="Additional image label key=value pairs",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_CLOUDRUN_TIMEOUT,
+        help=f"Request timeout in seconds (default: {DEFAULT_CLOUDRUN_TIMEOUT}s/60min)",
+    )
+
+    parser.add_argument(
+        "--yes", action="store_true", help="Skip interactive confirmations (assume yes)"
+    )
 
     print("[cloudrun-deploy] parsing args...")
     args = parser.parse_args(argv)
@@ -1006,9 +1055,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     print("[cloudrun-deploy] resolving project id...")
     project_id = (
-        args.project_id
-        or DEFAULT_PROJECT_ID
-        or _run_cmd("gcloud config get-value project")
+        args.project_id or DEFAULT_PROJECT_ID or _run_cmd("gcloud config get-value project")
     )
     if not project_id:
         raise SystemExit(
@@ -1018,10 +1065,10 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     # Include common LLM provider keys so they propagate to Cloud Run if present.
     _DEFAULT_ENV_KEYS = (
-        "OPENAI_API_KEY",    # OpenAI models
-        "GOOGLE_API_KEY",   # Gemini / Google Generative AI
+        "OPENAI_API_KEY",  # OpenAI models
+        "GOOGLE_API_KEY",  # Gemini / Google Generative AI
         "ANTHROPIC_API_KEY",  # Claude models
-        "TAVILY_API_KEY",     # Tavily search
+        "TAVILY_API_KEY",  # Tavily search
         "TWILIO_AUTH_TOKEN",  # Twilio webhook validation
         "GMAIL_IMPERSONATE_EMAIL",  # Gmail impersonation
         "GMAIL_SA_KEY_PATH",  # Gmail service account path
@@ -1078,8 +1125,9 @@ def main(argv: Optional[List[str]] = None) -> None:
             raise SystemExit(f"Mobile text smoke test failed: {exc}") from exc
         else:
             print(
-                f"[cloudrun-deploy] mobile text smoke test succeeded "
-                f"(session {result.session_id}, response='{result.response_text[:60]}...')."
+                "[cloudrun-deploy] mobile text smoke test succeeded "
+                f"(session {result.session_id}, "
+                f"response='{result.response_text[:60]}...')."
             )
     else:
         print(
@@ -1093,10 +1141,13 @@ def main(argv: Optional[List[str]] = None) -> None:
 ###############################################################################
 
 
-def _show_recent_revisions(project_id: str, region: str, service: str, *, limit: int = DEFAULT_REVISION_HISTORY_LIMIT) -> None:
+def _show_recent_revisions(
+    project_id: str, region: str, service: str, *, limit: int = DEFAULT_REVISION_HISTORY_LIMIT
+) -> None:
     """Log the *limit* most recent revisions with their traffic allocation and readiness."""
     # Lazy import to avoid heavy dependency load at module import time
     from google.cloud import run_v2  # type: ignore
+
     try:
         svc_path = f"projects/{project_id}/locations/{region}/services/{service}"
         svc_client = run_v2.ServicesClient()
@@ -1118,7 +1169,12 @@ def _show_recent_revisions(project_id: str, region: str, service: str, *, limit:
             percent = traffic_map.get(rev_id, 0)
             ready_cond = next((c for c in rev.conditions if c.type == "Ready"), None)
             healthy = ready_cond and ready_cond.state == run_v2.Condition.State.CONDITION_SUCCEEDED
-            log.info("  %s  traffic=%3s%%  status=%s", rev_id, percent, "healthy" if healthy else "failed")
+            log.info(
+                "  %s  traffic=%3s%%  status=%s",
+                rev_id,
+                percent,
+                "healthy" if healthy else "failed",
+            )
     except Exception as exc:
         log.error("Unable to list revisions: %s", exc)
 
@@ -1152,7 +1208,9 @@ def _delete_failed_revisions(project_id: str, region: str, service: str) -> None
     if getattr(service_obj, "latest_created_revision", None):
         latest_created = service_obj.latest_created_revision.split("/")[-1]
 
-    active = {t.revision.split("/")[-1] for t in service_obj.traffic if t.percent > 0 and t.revision}
+    active = {
+        t.revision.split("/")[-1] for t in service_obj.traffic if t.percent > 0 and t.revision
+    }
 
     to_delete: list[str] = []
     for rev in rev_client.list_revisions(parent=svc_path):
@@ -1176,7 +1234,10 @@ def _delete_failed_revisions(project_id: str, region: str, service: str) -> None
         _show_recent_revisions(project_id, region, service)
 
 
-@retry(stop=stop_after_attempt(DEFAULT_READINESS_ATTEMPTS), wait=wait_fixed(DEFAULT_READINESS_WAIT_SECONDS))
+@retry(
+    stop=stop_after_attempt(DEFAULT_READINESS_ATTEMPTS),
+    wait=wait_fixed(DEFAULT_READINESS_WAIT_SECONDS),
+)
 def _wait_for_revision_ready(project_id: str, region: str, service: str, revision: str) -> None:
     """Block until *revision*'s Ready condition succeeds, else raise."""
     # Lazy import to avoid heavy dependency load at module import time
@@ -1218,11 +1279,18 @@ def _ensure_adc(project_id: str) -> None:
         _run_cmd(f"gcloud auth application-default login --project {project_id}")
 
 
-def _perform_final_health_check(base_url: str, endpoint: str, *, status: int = 200, timeout: int = DEFAULT_HEALTH_TIMEOUT_SECONDS) -> None:
+def _perform_final_health_check(
+    base_url: str,
+    endpoint: str,
+    *,
+    status: int = 200,
+    timeout: int = DEFAULT_HEALTH_TIMEOUT_SECONDS,
+) -> None:
     url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
     log.info("Final health check: %s", url)
     # Lazy import to avoid heavy dependency load at module import time
     import requests  # type: ignore
+
     resp = requests.get(url, timeout=timeout)
     if resp.status_code != status:
         raise RuntimeError(f"Final health check failed ({resp.status_code})")
@@ -1244,10 +1312,13 @@ def _ensure_project_billing(project_id: str) -> None:
     # 1. Check if already linked
     try:
         linked = _run_cmd(
-            f'gcloud beta billing projects describe {project_id} --format="value(billingAccountName)"'
+            "gcloud beta billing projects describe "
+            f'{project_id} --format="value(billingAccountName)"'
         )
         if linked:
-            log.info("Project %s already linked to billing account %s", project_id, linked.split("/")[-1])
+            log.info(
+                "Project %s already linked to billing account %s", project_id, linked.split("/")[-1]
+            )
             return
     except RuntimeError as exc:
         # Not fatal - may happen if API not enabled yet.
@@ -1275,12 +1346,8 @@ def _ensure_project_billing(project_id: str) -> None:
 
     acct_id = candidate.split("/")[-1]
     log.info("Linking project %s to billing account %s", project_id, acct_id)
-    _confirm_once(
-        f"About to link project '{project_id}' to billing account '{acct_id}'."
-    )
-    _run_cmd(
-        f"gcloud beta billing projects link {project_id} --billing-account {acct_id} --quiet"
-    )
+    _confirm_once(f"About to link project '{project_id}' to billing account '{acct_id}'.")
+    _run_cmd(f"gcloud beta billing projects link {project_id} --billing-account {acct_id} --quiet")
 
 
 ###############################################################################
@@ -1310,7 +1377,7 @@ def _confirm_once(message: str) -> None:
     try:
         input(f"{message}\nPress <Enter> to continue or Ctrl+C to abort ... ")
     except KeyboardInterrupt:
-        raise SystemExit("Aborted by user.")
+        raise SystemExit("Aborted by user.") from None
 
 
 ###############################################################################
@@ -1344,34 +1411,46 @@ def _ensure_secret_accessor(project_id: str, secret_name: str, service_account: 
 
     try:
         policy_json = _run_cmd(
-            " ".join([
-                "gcloud secrets get-iam-policy",
-                secret_name,
-                f"--project {project_id}",
-                "--format=json",
-            ])
+            " ".join(
+                [
+                    "gcloud secrets get-iam-policy",
+                    secret_name,
+                    f"--project {project_id}",
+                    "--format=json",
+                ]
+            )
         )
         policy = json.loads(policy_json or "{}")
         for binding in policy.get("bindings", []):
-            if binding.get("role") == SECRET_ACCESSOR_ROLE and \
-               f"serviceAccount:{service_account}" in binding.get("members", []):
-                log.info("Service account %s already has access to secret %s", service_account, secret_name)
+            if binding.get(
+                "role"
+            ) == SECRET_ACCESSOR_ROLE and f"serviceAccount:{service_account}" in binding.get(
+                "members", []
+            ):
+                log.info(
+                    "Service account %s already has access to secret %s",
+                    service_account,
+                    secret_name,
+                )
                 return  # Already bound
     except Exception as exc:  # pylint: disable=broad-except
         log.debug("Unable to inspect IAM policy for secret %s: %s", secret_name, exc)
 
     _confirm_once(
-        f"Grant {SECRET_ACCESSOR_ROLE} on secret '{secret_name}' to service account '{service_account}'?"
+        f"Grant {SECRET_ACCESSOR_ROLE} on secret '{secret_name}' "
+        f"to service account '{service_account}'?"
     )
     _run_cmd(
-        " ".join([
-            "gcloud secrets add-iam-policy-binding",
-            secret_name,
-            f"--project {project_id}",
-            f"--member serviceAccount:{service_account}",
-            f"--role {SECRET_ACCESSOR_ROLE}",
-            "--quiet",
-        ])
+        " ".join(
+            [
+                "gcloud secrets add-iam-policy-binding",
+                secret_name,
+                f"--project {project_id}",
+                f"--member serviceAccount:{service_account}",
+                f"--role {SECRET_ACCESSOR_ROLE}",
+                "--quiet",
+            ]
+        )
     )
 
 
@@ -1379,4 +1458,4 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        sys.exit(1) 
+        sys.exit(1)

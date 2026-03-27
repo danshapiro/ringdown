@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
-CallSession = Tuple[str, dict, Optional[list], bool, Optional[str], Optional[Dict[str, Any]]]
+CallSession = tuple[str, dict, list | None, bool, str | None, dict[str, Any] | None]
 
 
 class _CallRegistry:
     """In-memory registry for active ConversationRelay sessions."""
 
     def __init__(self) -> None:
-        self._call_agent_map: Dict[str, CallSession] = {}
+        self._call_agent_map: dict[str, CallSession] = {}
         self._active_agents: set[str] = set()
 
     # ------------------------------------------------------------------

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
 import litellm
+from fastapi import FastAPI
 
+from app import settings
 from app.api import mobile, mobile_text, twilio, websocket
 from app.api.websocket import websocket_endpoint as websocket_endpoint
 from app.audio import (
@@ -18,9 +19,9 @@ from app.audio import (
 )
 from app.lifespan import lifespan
 from app.logging_utils import logger, setup_logging
-from app.metrics import METRIC_MESSAGES, router as metrics_router
+from app.metrics import METRIC_MESSAGES
+from app.metrics import router as metrics_router
 from app.settings import get_project_name
-from app import settings
 from app.validators import validator as _twilio_validator
 
 __all__ = [

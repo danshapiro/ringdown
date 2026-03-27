@@ -22,7 +22,7 @@ mobile_devices:
     agent: Danbot Agent
     enabled: false
     created_at: '2025-11-03T18:00:00+00:00'
-""".strip()
+""".strip(),
     )
 
     pending = list_pending_devices(config)
@@ -47,7 +47,7 @@ mobile_devices:
     enabled: false
   second-device:
     enabled: false
-""".strip()
+""".strip(),
     )
 
     with pytest.raises(RuntimeError):
@@ -62,7 +62,7 @@ def test_auto_approve_no_pending_returns_none(tmp_path: Path) -> None:
 mobile_devices:
   handset:
     enabled: true
-""".strip()
+""".strip(),
     )
 
     assert auto_approve_single_pending(config) is None

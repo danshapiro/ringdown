@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import threading
-from datetime import datetime, timezone
 import secrets
-from typing import Any, Dict, Tuple
+import threading
+from datetime import UTC, datetime
+from typing import Any
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
@@ -33,8 +33,8 @@ def ensure_device_entry(
     device_id: str,
     *,
     label: str | None,
-    metadata: Dict[str, Any],
-) -> Tuple[bool, Dict[str, Any]]:
+    metadata: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
     """Ensure a mobile device exists in config.yaml.
 
     Returns a tuple ``(created, entry_dict)`` where ``created`` indicates whether the
@@ -68,13 +68,13 @@ def ensure_device_entry(
         entry["label"] = label or device_key
         entry["agent"] = metadata.get("agent") or "unknown-caller"
         entry["enabled"] = False
-        entry["created_at"] = datetime.now(timezone.utc).isoformat()
+        entry["created_at"] = datetime.now(UTC).isoformat()
 
         poll_after = metadata.get("poll_after_seconds")
         if isinstance(poll_after, int) and poll_after > 0:
             entry["poll_after_seconds"] = poll_after
 
-        context: Dict[str, Any] = {}
+        context: dict[str, Any] = {}
         for key in ("platform", "model", "app_version", "appVersion"):
             value = metadata.get(key)
             if value:
@@ -101,8 +101,8 @@ def ensure_device_entry(
 def ensure_device_security_fields(
     device_id: str,
     *,
-    metadata: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Ensure security fields (auth token, resume TTL, TLS pins) exist for *device_id*."""
 
     device_key = device_id.strip()
@@ -134,7 +134,7 @@ def ensure_device_security_fields(
 
 def _ensure_security_fields(
     entry: CommentedMap,
-    metadata: Dict[str, Any],
+    metadata: dict[str, Any],
     *,
     is_new: bool = False,
 ) -> bool:
@@ -174,7 +174,7 @@ def approve_device(
     device_id: str,
     *,
     agent: str | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Mark *device_id* as enabled in config.yaml, optionally updating the agent name."""
 
     device_key = device_id.strip()

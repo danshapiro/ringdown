@@ -1,10 +1,9 @@
+import importlib.util
 import json
 import sys
+import types
 from argparse import ArgumentTypeError
 from pathlib import Path
-
-import importlib.util
-import types
 
 import pytest
 

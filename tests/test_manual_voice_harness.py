@@ -1,8 +1,3 @@
-import types
-
-import pytest
-
-
 def load_module():
     import importlib.util
     from pathlib import Path

@@ -1,10 +1,9 @@
 import copy
+import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-import logging
-import os
 import yaml
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,9 +13,10 @@ from log_love import setup_logging
 from .config_schema import ConfigModel, ServerVADConfig, resolve_config_path
 
 
-def get_programmatic_tool_prompts() -> Dict[str, str]:
+def get_programmatic_tool_prompts() -> dict[str, str]:
     """Get tool prompts from the tool registry for interpolation."""
     from .tool_framework import TOOL_REGISTRY
+
     prompts = {}
     for tool_name, tool_spec in TOOL_REGISTRY.items():
         if tool_spec.prompt:
@@ -24,20 +24,20 @@ def get_programmatic_tool_prompts() -> Dict[str, str]:
     return prompts
 
 
-def build_tool_prompts_for_agent(agent_tools: List[str], tool_header: str) -> str:
+def build_tool_prompts_for_agent(agent_tools: list[str], tool_header: str) -> str:
     """Build combined tool prompts for an agent based on enabled tools."""
     parts = []
-    
+
     # Add the tool header first
     if tool_header:
         parts.append(tool_header.strip())
-    
+
     # Add prompts for each enabled tool
     programmatic_prompts = get_programmatic_tool_prompts()
     for tool_name in agent_tools:
         if tool_name in programmatic_prompts:
             parts.append(programmatic_prompts[tool_name].strip())
-    
+
     return "\n\n".join(parts)
 
 
@@ -140,9 +140,7 @@ def _config_path() -> Path:
         raise FileNotFoundError(f"Configuration file not found at {path}")
 
     if path.name == "config.example.yaml":
-        logger.info(
-            "Using config.example.yaml – copy to config.yaml for customised deployments."
-        )
+        logger.info("Using config.example.yaml – copy to config.yaml for customised deployments.")
     else:
         logger.debug("Configuration loaded from %s", path)
     return path
@@ -154,7 +152,7 @@ def _load_config_model() -> ConfigModel:
 
     path = _config_path()
     with path.open("r", encoding="utf-8") as fp:
-        raw_data: Dict[str, Any] = yaml.safe_load(fp) or {}
+        raw_data: dict[str, Any] = yaml.safe_load(fp) or {}
 
     try:
         return ConfigModel.model_validate(raw_data)
@@ -164,7 +162,7 @@ def _load_config_model() -> ConfigModel:
 
 
 @lru_cache
-def _load_config() -> Dict[str, Any]:
+def _load_config() -> dict[str, Any]:
     """Return the validated configuration as a plain dictionary."""
 
     return _load_config_model().model_dump(mode="python")
@@ -223,21 +221,21 @@ def get_project_name() -> str:
     return str(project).strip() if project else "Project"
 
 
-def get_mobile_devices() -> Dict[str, Any]:
+def get_mobile_devices() -> dict[str, Any]:
     """Return mapping of registered mobile devices."""
 
     cfg = _load_config()
     return cfg.get("mobile_devices", {})
 
 
-def get_mobile_device(device_id: str) -> Dict[str, Any] | None:
+def get_mobile_device(device_id: str) -> dict[str, Any] | None:
     """Return configuration entry for a single device, if present."""
 
     devices = get_mobile_devices()
     return devices.get(device_id)
 
 
-def get_mobile_text_config() -> Dict[str, Any]:
+def get_mobile_text_config() -> dict[str, Any]:
     """Return configuration for mobile text streaming sessions."""
 
     cfg = _load_config()
@@ -253,7 +251,7 @@ def get_calendar_user_name() -> str:
     return str(cfg.get("defaults", {}).get("calendar_user_name", "User")).strip()
 
 
-def _merge_with_defaults(agent_cfg: Dict[str, Any], defaults: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_with_defaults(agent_cfg: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
     """Return `agent_cfg` overlaid on top of `defaults` (shallow)."""
 
     merged = defaults.copy()
@@ -314,7 +312,7 @@ def _merge_with_defaults(agent_cfg: Dict[str, Any], defaults: Dict[str, Any]) ->
             prompt_template = "\n".join(prompt_template)
 
         # Build mapping of available placeholder -> text
-        tool_prompts: Dict[str, str] = {}
+        tool_prompts: dict[str, str] = {}
         # First, add programmatic prompts from tool registry
         tool_prompts.update(get_programmatic_tool_prompts())
         # Add the tool header from config
@@ -322,14 +320,16 @@ def _merge_with_defaults(agent_cfg: Dict[str, Any], defaults: Dict[str, Any]) ->
             tool_prompts["ToolHeader"] = defaults["tool_header"]
         if "tool_header" in merged:
             tool_prompts["ToolHeader"] = merged["tool_header"]
-        
+
         # Build combined ToolPrompts based on agent's enabled tools
         # Now uses the correct merged tools list!
         final_agent_tools = merged.get("tools", [])
         tool_header = merged.get("tool_header", defaults.get("tool_header", ""))
         if final_agent_tools:
-            tool_prompts["ToolPrompts"] = build_tool_prompts_for_agent(final_agent_tools, tool_header)
-        
+            tool_prompts["ToolPrompts"] = build_tool_prompts_for_agent(
+                final_agent_tools, tool_header
+            )
+
         # Legacy support: Then, add config-based prompts (can override programmatic ones)
         tool_prompts.update(defaults.get("tool_prompts", {}) or {})
         # Agent-specific overrides/extra prompts allowed
@@ -349,7 +349,7 @@ def _merge_with_defaults(agent_cfg: Dict[str, Any], defaults: Dict[str, Any]) ->
     return merged
 
 
-def get_agent_config(agent_name: str) -> Dict[str, Any]:
+def get_agent_config(agent_name: str) -> dict[str, Any]:
     """Return fully-merged config for `agent_name` (defaults applied)."""
 
     cfg = _load_config()
@@ -360,11 +360,18 @@ def get_agent_config(agent_name: str) -> Dict[str, Any]:
         raise KeyError(f"Agent '{agent_name}' missing in config.yaml")
 
     merged = _merge_with_defaults(agents[agent_name], defaults)
-    logger.debug("Agent '%s' config resolved: %s", agent_name, {k: (v[:20] + '...' if isinstance(v, str) and len(v) > 20 else v) for k, v in merged.items()})
+    logger.debug(
+        "Agent '%s' config resolved: %s",
+        agent_name,
+        {
+            k: (v[:20] + "..." if isinstance(v, str) and len(v) > 20 else v)
+            for k, v in merged.items()
+        },
+    )
     return merged
 
 
-def get_agent_realtime_config(agent_name: str) -> Dict[str, Any]:
+def get_agent_realtime_config(agent_name: str) -> dict[str, Any]:
     """Return realtime configuration for the given agent (merged with defaults)."""
 
     cfg = _load_config()
@@ -372,7 +379,7 @@ def get_agent_realtime_config(agent_name: str) -> Dict[str, Any]:
     agent_entry = cfg.get("agents", {}).get(agent_name, {})
     agent_rt = agent_entry.get("realtime") or {}
 
-    merged: Dict[str, Any] = {}
+    merged: dict[str, Any] = {}
     if isinstance(defaults_rt, dict):
         merged.update(defaults_rt)
     if isinstance(agent_rt, dict):
@@ -397,7 +404,7 @@ def get_agent_realtime_config(agent_name: str) -> Dict[str, Any]:
     return merged
 
 
-def get_agent_for_number(caller_number: str | None) -> tuple[str, Dict[str, Any]]:
+def get_agent_for_number(caller_number: str | None) -> tuple[str, dict[str, Any]]:
     """Return (`agent_name`, merged_config) for an inbound `caller_number`.
 
     The first agent whose *phone_numbers* list contains `caller_number` wins.
@@ -420,7 +427,7 @@ def get_agent_for_number(caller_number: str | None) -> tuple[str, Dict[str, Any]
     return "unknown-caller", _merge_with_defaults(agents["unknown-caller"], defaults)
 
 
-def get_tools_list(agent_name: str) -> List[str]:
+def get_tools_list(agent_name: str) -> list[str]:
     """Return final list of tool names enabled for the given agent."""
 
-    return get_agent_config(agent_name).get("tools", []) 
+    return get_agent_config(agent_name).get("tools", [])

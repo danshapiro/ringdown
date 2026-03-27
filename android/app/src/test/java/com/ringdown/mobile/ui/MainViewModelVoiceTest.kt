@@ -13,7 +13,6 @@ import com.ringdown.mobile.domain.RegistrationStatus
 import com.ringdown.mobile.domain.TextSessionBootstrap
 import com.ringdown.mobile.util.MainDispatcherRule
 import com.ringdown.mobile.voice.GreetingSpeechGateway
-import com.ringdown.mobile.voice.GreetingSpeechGateway
 import com.ringdown.mobile.voice.InstantProvider
 import com.ringdown.mobile.voice.LocalVoiceSessionController
 import com.ringdown.mobile.voice.VoiceConnectionState

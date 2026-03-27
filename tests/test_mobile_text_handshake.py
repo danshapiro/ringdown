@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import contextlib
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -16,7 +16,7 @@ client = TestClient(app)
 
 
 def _state() -> TextSessionState:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return TextSessionState(
         session_id="session-abc",
         device_id="device-123",
@@ -281,7 +281,9 @@ def test_text_session_unknown_device_returns_error_detail() -> None:
     store = MagicMock()
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch("app.api.mobile.settings.get_mobile_device", return_value=None))
-        stack.enter_context(patch("app.api.mobile.settings.get_mobile_text_config", return_value={}))
+        stack.enter_context(
+            patch("app.api.mobile.settings.get_mobile_text_config", return_value={})
+        )
         stack.enter_context(patch("app.api.mobile.settings.get_agent_config", return_value={}))
         stack.enter_context(patch("app.api.mobile.get_text_session_store", return_value=store))
         response = client.post(
@@ -299,8 +301,12 @@ def test_text_session_denied_when_device_not_enabled() -> None:
     store = MagicMock()
     device_cfg = {"enabled": False, "agent": "Agent Alpha"}
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("app.api.mobile.settings.get_mobile_device", return_value=device_cfg))
-        stack.enter_context(patch("app.api.mobile.settings.get_mobile_text_config", return_value={}))
+        stack.enter_context(
+            patch("app.api.mobile.settings.get_mobile_device", return_value=device_cfg)
+        )
+        stack.enter_context(
+            patch("app.api.mobile.settings.get_mobile_text_config", return_value={})
+        )
         stack.enter_context(patch("app.api.mobile.settings.get_agent_config", return_value={}))
         stack.enter_context(patch("app.api.mobile.get_text_session_store", return_value=store))
         response = client.post(

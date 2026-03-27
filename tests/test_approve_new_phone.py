@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -50,13 +50,13 @@ def test_list_pending_devices_sorted(tmp_path: Path) -> None:
     first = pending[0]
     assert first.label == "Alpha"
     assert first.notes == "Needs approval"
-    assert first.created_at == datetime(2025, 10, 24, 20, 15, tzinfo=timezone.utc)
+    assert first.created_at == datetime(2025, 10, 24, 20, 15, tzinfo=UTC)
 
 
 def test_approve_device_sets_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _write_config(tmp_path)
 
-    freeze = datetime(2025, 10, 25, 12, 0, tzinfo=timezone.utc)
+    freeze = datetime(2025, 10, 25, 12, 0, tzinfo=UTC)
 
     from approve_new_phone import approve_device
 

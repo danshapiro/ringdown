@@ -9,8 +9,8 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 
 @dataclasses.dataclass(frozen=True)
@@ -30,6 +30,31 @@ class ModelSpec:
     install_dir: str
     prune: tuple[str, ...]
     payloads: tuple[PayloadSpec, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class DependencySpec:
+    id: str
+    display_name: str
+    download_url: str
+    relative_path: str
+    sha256: str
+    size_bytes: int
+
+
+DEPENDENCY_SPECS: tuple[DependencySpec, ...] = (
+    DependencySpec(
+        id="sherpa-onnx-android-aar",
+        display_name="Sherpa-ONNX Android runtime AAR",
+        download_url=(
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+            "v1.12.15/sherpa-onnx-1.12.15.aar"
+        ),
+        relative_path="sherpa-onnx-1.12.15.aar",
+        sha256="6994c53380846107b0363fee02fa9db6176c61c746a2315893c6b01e7f6d4c1d",
+        size_bytes=38_774_224,
+    ),
+)
 
 
 MODEL_SPECS: tuple[ModelSpec, ...] = (
@@ -113,9 +138,8 @@ def log_json(severity: str, event: str, **fields: object) -> None:
 
 
 def download_archive(url: str, dest: Path) -> None:
-    with urllib.request.urlopen(url) as response:
-        with dest.open("wb") as outfile:
-            shutil.copyfileobj(response, outfile)
+    with urllib.request.urlopen(url) as response, dest.open("wb") as outfile:
+        shutil.copyfileobj(response, outfile)
 
 
 def extract_tar_bz2(archive_path: Path, dest_dir: Path) -> None:
@@ -129,6 +153,39 @@ def compute_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def validate_dependency(spec: DependencySpec, third_party_dir: Path) -> bool:
+    candidate = third_party_dir / spec.relative_path
+    if not candidate.exists():
+        log_json("DEBUG", "dependency.missing", dependency=spec.id, path=str(spec.relative_path))
+        return False
+
+    actual_size = candidate.stat().st_size
+    if actual_size != spec.size_bytes:
+        log_json(
+            "DEBUG",
+            "dependency.size_mismatch",
+            dependency=spec.id,
+            path=str(spec.relative_path),
+            expected=spec.size_bytes,
+            actual=actual_size,
+        )
+        return False
+
+    actual_hash = compute_sha256(candidate)
+    if actual_hash != spec.sha256:
+        log_json(
+            "DEBUG",
+            "dependency.sha_mismatch",
+            dependency=spec.id,
+            path=str(spec.relative_path),
+            expected=spec.sha256,
+            actual=actual_hash,
+        )
+        return False
+
+    return True
 
 
 def validate_payloads(spec: ModelSpec, base_dir: Path) -> bool:
@@ -173,6 +230,36 @@ def prune_paths(spec: ModelSpec, base_dir: Path) -> None:
             target.unlink()
 
 
+def ensure_dependency(spec: DependencySpec, third_party_dir: Path) -> None:
+    target = third_party_dir / spec.relative_path
+    if validate_dependency(spec, third_party_dir):
+        log_json("INFO", "dependency.ok", dependency=spec.id, action="skip")
+        return
+
+    if target.exists():
+        log_json("INFO", "dependency.reset", dependency=spec.id, reason="stale_or_missing_payloads")
+        target.unlink()
+
+    third_party_dir.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f"{spec.id}-", dir=third_party_dir) as temp_dir_str:
+        temp_dir = Path(temp_dir_str)
+        download_path = temp_dir / Path(spec.relative_path).name
+        log_json("INFO", "dependency.download.start", dependency=spec.id, url=spec.download_url)
+        download_archive(spec.download_url, download_path)
+        log_json(
+            "INFO",
+            "dependency.download.complete",
+            dependency=spec.id,
+            bytes=download_path.stat().st_size,
+        )
+        shutil.move(download_path, target)
+
+    if not validate_dependency(spec, third_party_dir):
+        raise RuntimeError(f"failed to validate dependency {spec.id}")
+    log_json("INFO", "dependency.ready", dependency=spec.id, path=str(target))
+
+
 def ensure_model(spec: ModelSpec, models_dir: Path) -> None:
     asset_dir = models_dir / spec.asset_dir
     if validate_payloads(spec, asset_dir):
@@ -189,7 +276,9 @@ def ensure_model(spec: ModelSpec, models_dir: Path) -> None:
         archive_path = temp_dir / "model.tar.bz2"
         log_json("INFO", "model.download.start", model=spec.id, url=spec.archive_url)
         download_archive(spec.archive_url, archive_path)
-        log_json("INFO", "model.download.complete", model=spec.id, bytes=archive_path.stat().st_size)
+        log_json(
+            "INFO", "model.download.complete", model=spec.id, bytes=archive_path.stat().st_size
+        )
         extract_tar_bz2(archive_path, models_dir)
 
     prune_paths(spec, asset_dir)
@@ -226,7 +315,9 @@ def build_manifest(specs: Iterable[ModelSpec]) -> dict[str, object]:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Ensure local ASR/TTS models are present and write manifest.")
+    parser = argparse.ArgumentParser(
+        description="Ensure local ASR/TTS models are present and write manifest."
+    )
     parser.add_argument(
         "--models-dir",
         type=Path,
@@ -250,6 +341,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     models_dir: Path = args.models_dir.resolve()
+    third_party_dir = models_dir.parent
+    for spec in DEPENDENCY_SPECS:
+        ensure_dependency(spec, third_party_dir)
     for spec in MODEL_SPECS:
         ensure_model(spec, models_dir)
 

@@ -236,9 +236,7 @@ def _resolve_service_account_credentials(
                 "GMAIL_SA_KEY_PATH points to missing file or invalid JSON; "
                 f"value begins with {key_reference[:32]!r}."
             ) from exc
-        credentials = service_account.Credentials.from_service_account_info(
-            key_data, scopes=scopes
-        )
+        credentials = service_account.Credentials.from_service_account_info(key_data, scopes=scopes)
 
     if dry_run:
         return credentials

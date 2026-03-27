@@ -459,10 +459,13 @@ def test_search_drive_runtime_limit_truncates():
         "nextPageToken": "token123",
     }
 
-    with patch(
-        "app.tools.google_docs._get_services",
-        return_value=(mock_docs_service, mock_drive_service),
-    ), patch("app.tools.google_docs.time.monotonic", side_effect=[0.0, 31.0, 31.0]):
+    with (
+        patch(
+            "app.tools.google_docs._get_services",
+            return_value=(mock_docs_service, mock_drive_service),
+        ),
+        patch("app.tools.google_docs.time.monotonic", side_effect=[0.0, 31.0, 31.0]),
+    ):
         result = tf.execute_tool("SearchGoogleDrive", {"query": "Doc"})
 
     assert result["success"] is True

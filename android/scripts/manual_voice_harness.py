@@ -13,9 +13,9 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence, TextIO
-
+from typing import TextIO
 
 DEFAULT_ACTIVITY = "com.ringdown.mobile.debug/com.ringdown.mobile.MainActivity"
 DEFAULT_FAIL_EVENTS = (
@@ -30,7 +30,9 @@ DEFAULT_SUCCESS_EVENTS = (
 )
 
 
-def _run_adb(device: Optional[str], *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run_adb(
+    device: str | None, *args: str, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     cmd = ["adb"]
     if device:
         cmd.extend(["-s", device])
@@ -38,10 +40,13 @@ def _run_adb(device: Optional[str], *args: str, check: bool = True) -> subproces
     return subprocess.run(cmd, check=check, capture_output=True, text=True)
 
 
-def _ensure_device(device: Optional[str]) -> str:
+def _ensure_device(device: str | None) -> str:
     try:
         result = _run_adb(None, "devices")
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:  # pragma: no cover - defensive
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+    ) as exc:  # pragma: no cover - defensive
         raise RuntimeError("Failed to invoke adb. Is the Android SDK installed?") from exc
 
     lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -52,7 +57,9 @@ def _ensure_device(device: Optional[str]) -> str:
 
     if device:
         if device not in connected:
-            raise RuntimeError(f"Requested device '{device}' is not connected (found: {connected}).")
+            raise RuntimeError(
+                f"Requested device '{device}' is not connected (found: {connected})."
+            )
         return device
 
     if len(connected) > 1:
@@ -99,7 +106,7 @@ def _tail_logcat(device: str) -> subprocess.Popen[str]:
 
 def _forward_logs(
     process: subprocess.Popen[str],
-    log_fp: Optional[TextIO],
+    log_fp: TextIO | None,
     failure_event: threading.Event,
     success_event: threading.Event,
     fail_on_error: bool,
@@ -129,7 +136,7 @@ def _forward_logs(
     return thread
 
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Manual realtime voice harness")
     parser.add_argument("--device", help="ADB device serial (optional)")
     parser.add_argument(
@@ -192,7 +199,7 @@ def main() -> int:
     print("4. Press Hang up on the device or Ctrl+C here to stop.")
     print()
 
-    log_fp: Optional[TextIO] = None
+    log_fp: TextIO | None = None
     if args.log_output:
         log_path = args.log_output.expanduser()
         log_path.parent.mkdir(parents=True, exist_ok=True)

@@ -7,9 +7,9 @@ import asyncio
 import json
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from typing import Any
 from unittest.mock import patch
+from urllib.parse import urlparse
 
 import httpx
 from fastapi.testclient import TestClient
@@ -23,13 +23,13 @@ class SmokeTestError(RuntimeError):
         self,
         message: str,
         *,
-        events: Optional[List[Dict[str, Any]]] = None,
-        logs: Optional[List[Dict[str, Any]]] = None,
+        events: list[dict[str, Any]] | None = None,
+        logs: list[dict[str, Any]] | None = None,
     ) -> None:
-        self.events: List[Dict[str, Any]] = list(events or [])
-        self.logs: List[Dict[str, Any]] = list(logs or [])
+        self.events: list[dict[str, Any]] = list(events or [])
+        self.logs: list[dict[str, Any]] = list(logs or [])
 
-        detail_parts: List[str] = []
+        detail_parts: list[str] = []
         if self.events:
             try:
                 detail_parts.append(f"events_tail={json.dumps(self.events[-3:], default=str)}")
@@ -56,7 +56,7 @@ class SmokeResult:
     assistant_text: str
     resume_token: str
     websocket_path: str
-    events: List[Dict[str, Any]]
+    events: list[dict[str, Any]]
 
     @property
     def response_text(self) -> str:
@@ -69,29 +69,34 @@ def _require(
     condition: bool,
     message: str,
     *,
-    events: Optional[List[Dict[str, Any]]] = None,
-    logs: Optional[List[Dict[str, Any]]] = None,
+    events: list[dict[str, Any]] | None = None,
+    logs: list[dict[str, Any]] | None = None,
 ) -> None:
     if not condition:
         raise SmokeTestError(message, events=events, logs=logs)
 
 
 def _assert_message_type(
-    message: Dict[str, Any],
+    message: dict[str, Any],
     expected: str,
     *,
-    events: List[Dict[str, Any]],
-    logs: List[Dict[str, Any]],
+    events: list[dict[str, Any]],
+    logs: list[dict[str, Any]],
 ) -> None:
     actual = message.get("type")
-    _require(actual == expected, f"Expected message type '{expected}', observed '{actual}'", events=events, logs=logs)
+    _require(
+        actual == expected,
+        f"Expected message type '{expected}', observed '{actual}'",
+        events=events,
+        logs=logs,
+    )
 
 
-def _capture_mobile_text_logs(buffer: List[Dict[str, Any]]):
+def _capture_mobile_text_logs(buffer: list[dict[str, Any]]):
     """Return a context manager that records structured logs emitted by the mobile text stack."""
 
     try:
-        from app.api import mobile_text as mobile_text_module  # noqa: WPS433 - runtime import for optional patch
+        from app.api import mobile_text as mobile_text_module
     except Exception:  # pragma: no cover - defensive fallback when module missing
         return nullcontext()
 
@@ -115,8 +120,8 @@ def run_smoke_test(
 ) -> SmokeResult:
     """Exercise session bootstrap + websocket streaming against a local TestClient."""
 
-    events: List[Dict[str, Any]] = []
-    log_records: List[Dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
+    log_records: list[dict[str, Any]] = []
 
     with _capture_mobile_text_logs(log_records):
         handshake = client.post(
@@ -169,7 +174,7 @@ def run_smoke_test(
             logs=log_records,
         )
 
-        assistant_parts: List[str] = []
+        assistant_parts: list[str] = []
         greeting_text: str | None = None
 
         with client.websocket_connect(
@@ -215,7 +220,7 @@ def run_smoke_test(
 
     assistant_text = "".join(assistant_parts).strip()
 
-    resume_payload: Dict[str, Any] = {
+    resume_payload: dict[str, Any] = {
         "deviceId": device_id,
         "resumeToken": resume_token,
     }
@@ -273,7 +278,9 @@ def run_smoke_test(
 
 
 def _cli() -> None:
-    parser = argparse.ArgumentParser(description="Run the mobile text smoke test against a local server.")
+    parser = argparse.ArgumentParser(
+        description="Run the mobile text smoke test against a local server."
+    )
     parser.add_argument("--device-id", required=True, help="Registered device identifier")
     parser.add_argument(
         "--prompt",
@@ -283,6 +290,7 @@ def _cli() -> None:
     args = parser.parse_args()
 
     from fastapi.testclient import TestClient  # Imported lazily for CLI usage
+
     from app.main import app
 
     client = TestClient(app)
@@ -302,7 +310,7 @@ async def run_remote_smoke(
     base_url: str,
     device_id: str,
     prompt_text: str,
-    agent: Optional[str] = None,
+    agent: str | None = None,
     timeout: float = 30.0,
     verify_resume: bool = True,
 ) -> SmokeResult:
@@ -310,7 +318,7 @@ async def run_remote_smoke(
 
     base = base_url.rstrip("/")
     session_url = f"{base}/v1/mobile/text/session"
-    payload: Dict[str, Any] = {"deviceId": device_id}
+    payload: dict[str, Any] = {"deviceId": device_id}
     if agent:
         payload["agent"] = agent
 
@@ -324,12 +332,17 @@ async def run_remote_smoke(
             try:
                 detail_json = response.json()
                 detail = json.dumps(detail_json)
-                code = detail_json.get("detail", {}).get("code") if isinstance(detail_json, dict) else None
+                code = (
+                    detail_json.get("detail", {}).get("code")
+                    if isinstance(detail_json, dict)
+                    else None
+                )
             except Exception:  # noqa: BLE001
                 detail_json = None
             if detail_json and code == "device_not_approved":
                 raise SmokeTestError(
-                    f"Device {device_id} pending approval; update config.yaml or run approve_new_phone.py."
+                    f"Device {device_id} pending approval; update config.yaml "
+                    "or run approve_new_phone.py."
                 )
             raise SmokeTestError(
                 f"Session handshake failed ({response.status_code}): {detail or response.text}"
@@ -343,7 +356,7 @@ async def run_remote_smoke(
         resolved_agent = body.get("agent") or agent
         auth_token = body.get("authToken")
 
-    events: List[Dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
 
     _require(
         isinstance(session_id, str) and session_id,
@@ -372,7 +385,7 @@ async def run_remote_smoke(
     )
 
     ws_url = _build_websocket_url(base, websocket_path)
-    assistant_parts: List[str] = []
+    assistant_parts: list[str] = []
     greeting_text: str | None = None
 
     async with _open_websocket(ws_url, session_token, timeout) as websocket:
@@ -383,7 +396,9 @@ async def run_remote_smoke(
         if isinstance(ready.get("greeting"), str):
             greeting_text = ready["greeting"].strip() or None
 
-        await websocket.send(json.dumps({"type": "user_message", "text": prompt_text, "final": True}))
+        await websocket.send(
+            json.dumps({"type": "user_message", "text": prompt_text, "final": True})
+        )
 
         while True:
             raw = await asyncio.wait_for(websocket.recv(), timeout)
@@ -432,7 +447,8 @@ async def run_remote_smoke(
             except Exception:  # noqa: BLE001
                 detail = resume_resp.text
             raise SmokeTestError(
-                f"Resume handshake failed ({resume_resp.status_code}) for device {device_id}: {detail}",
+                "Resume handshake failed "
+                f"({resume_resp.status_code}) for device {device_id}: {detail}",
                 events=list(events),
             )
         resume_body = resume_resp.json()

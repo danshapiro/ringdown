@@ -200,20 +200,28 @@ class ChatSessionController @Inject constructor(
 
     private suspend fun handleConnectionClosed(event: TextSessionEvent.ConnectionClosed) {
         val reason = event.reason?.ifBlank { null } ?: "Connection closed"
-        if (sessionActive.get()) {
-            scheduleReconnect(reason)
-        } else {
-            failSession(reason)
+        if (!sessionActive.get() || event.reason == "client_shutdown") {
+            logStructured(
+                "INFO",
+                "chat_session.connection_closed_ignored",
+                mapOf("reason" to event.reason, "code" to event.code),
+            )
+            return
         }
+        scheduleReconnect(reason)
     }
 
     private suspend fun handleConnectionFailure(event: TextSessionEvent.ConnectionFailure) {
         val reason = event.error.message ?: "Connection failure"
-        if (sessionActive.get()) {
-            scheduleReconnect(reason)
-        } else {
-            failSession(reason)
+        if (!sessionActive.get()) {
+            logStructured(
+                "INFO",
+                "chat_session.connection_failure_ignored",
+                mapOf("reason" to reason),
+            )
+            return
         }
+        scheduleReconnect(reason)
     }
 
     private fun seedPersistedHistoryLocked() {

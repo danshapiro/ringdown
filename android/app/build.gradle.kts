@@ -225,10 +225,16 @@ val adbExecutableProvider = providers.provider {
         System.getenv("ANDROID_SDK_ROOT"),
         System.getenv("ANDROID_HOME"),
     ).filterNotNull()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
         .map { candidate -> File(candidate) }
-        .firstOrNull()
+        .toList()
+
+    val sdkDir = sdkDirCandidates.firstOrNull { it.exists() }
         ?: throw GradleException(
-            "Android SDK not configured. Set sdk.dir in local.properties or export ANDROID_SDK_ROOT.",
+            "Android SDK not configured. Checked: ${
+                sdkDirCandidates.joinToString(",") { it.path }
+            }",
         )
 
     val adbCandidates = if (isWindowsHost || isWslHost) {
@@ -239,10 +245,10 @@ val adbExecutableProvider = providers.provider {
 
     val adbFile = adbCandidates
         .asSequence()
-        .map { candidate -> sdkDirCandidates.resolve("platform-tools").resolve(candidate) }
+        .map { candidate -> sdkDir.resolve("platform-tools").resolve(candidate) }
         .firstOrNull { it.exists() }
         ?: throw GradleException(
-            "adb executable not found in ${sdkDirCandidates.resolve("platform-tools")}. Install platform-tools with sdkmanager.",
+            "adb executable not found in ${sdkDir.resolve("platform-tools")}. Install platform-tools with sdkmanager.",
         )
     adbFile.absolutePath
 }

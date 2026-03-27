@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,7 +28,7 @@ def client() -> TestClient:
 
 
 def _build_state(session_id: str = "session-1") -> TextSessionState:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return TextSessionState(
         session_id=session_id,
         device_id="device-1",
@@ -63,14 +63,12 @@ def test_mobile_text_session_streams_tokens(client: TestClient) -> None:
     store.update_messages = AsyncMock()
     store.mark_disconnected = AsyncMock()
 
-    with patch("app.api.mobile_text.get_text_session_store", return_value=store), patch(
-        "app.api.mobile_text.stream_response", fake_stream_response
-    ), patch(
-        "app.api.mobile_text.log_turn"
-    ) as mock_log, patch(
-        "app.api.mobile_text.litellm.token_counter", return_value=2
-    ), patch(
-        "app.api.mobile_text.METRIC_MESSAGES", metric
+    with (
+        patch("app.api.mobile_text.get_text_session_store", return_value=store),
+        patch("app.api.mobile_text.stream_response", fake_stream_response),
+        patch("app.api.mobile_text.log_turn") as mock_log,
+        patch("app.api.mobile_text.litellm.token_counter", return_value=2),
+        patch("app.api.mobile_text.METRIC_MESSAGES", metric),
     ):
         with client.websocket_connect(
             "/v1/mobile/text/session",
@@ -117,29 +115,29 @@ def test_mobile_text_session_forwards_tool_markers(client: TestClient) -> None:
     store.update_messages = AsyncMock()
     store.mark_disconnected = AsyncMock()
 
-    with patch("app.api.mobile_text.get_text_session_store", return_value=store), patch(
-        "app.api.mobile_text.stream_response", fake_stream_response
-    ), patch("app.api.mobile_text.log_turn"), patch(
-        "app.api.mobile_text.litellm.token_counter", return_value=1
-    ), patch(
-        "app.api.mobile_text.METRIC_MESSAGES", metric
-    ):
-        with client.websocket_connect(
+    with (
+        patch("app.api.mobile_text.get_text_session_store", return_value=store),
+        patch("app.api.mobile_text.stream_response", fake_stream_response),
+        patch("app.api.mobile_text.log_turn"),
+        patch("app.api.mobile_text.litellm.token_counter", return_value=1),
+        patch("app.api.mobile_text.METRIC_MESSAGES", metric),
+        client.websocket_connect(
             "/v1/mobile/text/session",
             headers={"x-ringdown-session-token": "session-token"},
-        ) as websocket:
-            websocket.receive_json()  # ready
-            websocket.receive_json()  # greeting
+        ) as websocket,
+    ):
+        websocket.receive_json()  # ready
+        websocket.receive_json()  # greeting
 
-            websocket.send_json({"type": "user_message", "text": "Run search", "final": True})
-            marker = websocket.receive_json()
-            assert marker["type"] == "tool_event"
-            assert marker["event"] == "tool_executing"
+        websocket.send_json({"type": "user_message", "text": "Run search", "final": True})
+        marker = websocket.receive_json()
+        assert marker["type"] == "tool_event"
+        assert marker["event"] == "tool_executing"
 
-            assistant = websocket.receive_json()
-            assert assistant["type"] == "assistant_token"
-            assert assistant["final"] is True
-            assert assistant["token"] == "Finished."
+        assistant = websocket.receive_json()
+        assert assistant["type"] == "assistant_token"
+        assert assistant["final"] is True
+        assert assistant["token"] == "Finished."
 
 
 def test_mobile_text_session_defaults_source_when_not_provided(client: TestClient) -> None:
@@ -154,24 +152,22 @@ def test_mobile_text_session_defaults_source_when_not_provided(client: TestClien
     store.update_messages = AsyncMock()
     store.mark_disconnected = AsyncMock()
 
-    with patch("app.api.mobile_text.get_text_session_store", return_value=store), patch(
-        "app.api.mobile_text.stream_response", fake_stream_response
-    ), patch(
-        "app.api.mobile_text.log_turn"
-    ) as mock_log, patch(
-        "app.api.mobile_text.litellm.token_counter", return_value=2
-    ), patch(
-        "app.api.mobile_text.METRIC_MESSAGES", metric
-    ):
-        with client.websocket_connect(
+    with (
+        patch("app.api.mobile_text.get_text_session_store", return_value=store),
+        patch("app.api.mobile_text.stream_response", fake_stream_response),
+        patch("app.api.mobile_text.log_turn") as mock_log,
+        patch("app.api.mobile_text.litellm.token_counter", return_value=2),
+        patch("app.api.mobile_text.METRIC_MESSAGES", metric),
+        client.websocket_connect(
             "/v1/mobile/text/session",
             headers={"x-ringdown-session-token": "session-token"},
-        ) as websocket:
-            websocket.receive_json()  # ready
-            websocket.receive_json()  # greeting
+        ) as websocket,
+    ):
+        websocket.receive_json()  # ready
+        websocket.receive_json()  # greeting
 
-            websocket.send_json({"type": "user_message", "text": "Hello", "final": True})
-            websocket.receive_json()  # assistant
+        websocket.send_json({"type": "user_message", "text": "Hello", "final": True})
+        websocket.receive_json()  # assistant
 
     mock_log.assert_any_call("user", "Hello", source="mobile-text")
 

@@ -493,8 +493,7 @@ class SearchDriveArgs(BaseModel):
     query: str = Field(
         ...,
         description=(
-            "Text to match when searching Google Drive. Use defaults unless "
-            "specified otherwise."
+            "Text to match when searching Google Drive. Use defaults unless specified otherwise."
         ),
     )
     titles_only: bool = Field(

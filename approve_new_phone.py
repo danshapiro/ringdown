@@ -7,13 +7,12 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from ruamel.yaml import YAML
-
 
 _yaml = YAML()
 _yaml.indent(mapping=2, sequence=4, offset=2)
@@ -28,9 +27,12 @@ class DeviceRequest:
     label: str
     agent: str
     created_at: datetime
-    notes: Optional[str]
+    notes: str | None
 
-DEVICE_KEY_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+DEVICE_KEY_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
 
 
 def _default_config_path() -> Path:
@@ -75,11 +77,11 @@ def _parse_created_at(value: object) -> datetime:
         try:
             dt = datetime.fromisoformat(value.strip())
             if dt.tzinfo is None:
-                return dt.replace(tzinfo=timezone.utc)
+                return dt.replace(tzinfo=UTC)
             return dt
         except ValueError:
             pass
-    return datetime.fromtimestamp(0, tz=timezone.utc)
+    return datetime.fromtimestamp(0, tz=UTC)
 
 
 def _is_enabled(value: object) -> bool:
@@ -114,7 +116,7 @@ def _iter_pending_devices(data: dict) -> Iterable[DeviceRequest]:
         )
 
 
-def list_pending_devices(config_path: Path | None = None) -> List[DeviceRequest]:
+def list_pending_devices(config_path: Path | None = None) -> list[DeviceRequest]:
     """Return all pending device approvals sorted by creation time."""
 
     resolved = config_path or _default_config_path()
@@ -124,10 +126,12 @@ def list_pending_devices(config_path: Path | None = None) -> List[DeviceRequest]
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
-def approve_device(config_path: Path | None, device_id: str, *, agent: Optional[str] = None) -> DeviceRequest:
+def approve_device(
+    config_path: Path | None, device_id: str, *, agent: str | None = None
+) -> DeviceRequest:
     """Approve *device_id* by setting enabled=true and optional agent."""
 
     if not device_id:
@@ -165,8 +169,8 @@ def approve_device(config_path: Path | None, device_id: str, *, agent: Optional[
 def auto_approve_single_pending(
     config_path: Path | None = None,
     *,
-    agent: Optional[str] = None,
-) -> Optional[DeviceRequest]:
+    agent: str | None = None,
+) -> DeviceRequest | None:
     """Approve the sole pending handset request, if exactly one exists.
 
     Returns the approved device entry, or ``None`` when no pending devices exist.
@@ -193,7 +197,7 @@ def _format_row(row: DeviceRequest) -> str:
     )
 
 
-def _resolve_deploy_script(explicit: Optional[str]) -> Path:
+def _resolve_deploy_script(explicit: str | None) -> Path:
     if explicit:
         return Path(explicit).expanduser().resolve()
     return Path(__file__).resolve().with_name("cloudrun-deploy.py")
@@ -223,7 +227,7 @@ def _handle_list(args: argparse.Namespace) -> int:
 
 def _handle_approve(args: argparse.Namespace) -> int:
     config_path = Path(args.config) if args.config else None
-    parser: Optional[argparse.ArgumentParser] = getattr(args, "parser", None)
+    parser: argparse.ArgumentParser | None = getattr(args, "parser", None)
 
     if args.auto and args.device_id:
         if parser:
@@ -248,7 +252,8 @@ def _handle_approve(args: argparse.Namespace) -> int:
 
         selected = pending[0]
         print(
-            f"Auto-approving pending handset {selected.device_id} ({selected.label}) requested by {selected.agent}."
+            "Auto-approving pending handset "
+            f"{selected.device_id} ({selected.label}) requested by {selected.agent}."
         )
         target_device_id = selected.device_id
     else:
@@ -258,7 +263,12 @@ def _handle_approve(args: argparse.Namespace) -> int:
     print(f"Approved {result.device_id} for agent {result.agent}.")
     if args.sync_env:
         env_path = Path(args.env_file).resolve()
-        synced = sync_env_device(env_path, config_path=config_path, allow_disabled=True, prefer_label=args.prefer_label)
+        synced = sync_env_device(
+            env_path,
+            config_path=config_path,
+            allow_disabled=True,
+            prefer_label=args.prefer_label,
+        )
         print(f"Updated {env_path} with LIVE_TEST_MOBILE_DEVICE_ID={synced}.")
     if args.deploy:
         script_path = _resolve_deploy_script(args.deploy_script)
@@ -266,14 +276,14 @@ def _handle_approve(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_devices(config_path: Path | None = None) -> Dict[str, Dict[str, object]]:
+def _load_devices(config_path: Path | None = None) -> dict[str, dict[str, object]]:
     resolved = config_path or _default_config_path()
     data = _load_config(resolved)
     devices = data.get("mobile_devices")
     if not isinstance(devices, dict) or not devices:
         raise ValueError("config.yaml missing mobile_devices section")
     # ensure dictionary of dicts
-    result: Dict[str, Dict[str, object]] = {}
+    result: dict[str, dict[str, object]] = {}
     for key, value in devices.items():
         if isinstance(value, dict):
             result[str(key)] = value
@@ -283,20 +293,20 @@ def _load_devices(config_path: Path | None = None) -> Dict[str, Dict[str, object
 
 
 def _select_device(
-    devices: Dict[str, Dict[str, object]],
+    devices: dict[str, dict[str, object]],
     *,
     allow_disabled: bool,
     prefer_label: str,
-) -> Tuple[str, Dict[str, object]]:
+) -> tuple[str, dict[str, object]]:
     prefer_lower = prefer_label.lower()
-    candidates: List[Tuple[int, float, str, Dict[str, object]]] = []
+    candidates: list[tuple[int, float, str, dict[str, object]]] = []
     for device_id, entry in devices.items():
         enabled = _is_enabled(entry.get("enabled"))
         if not allow_disabled and not enabled:
             continue
 
         created = _parse_created_at(entry.get("created_at") or entry.get("createdAt"))
-        created_ts = created.astimezone(timezone.utc).timestamp()
+        created_ts = created.astimezone(UTC).timestamp()
         label = str(entry.get("label") or device_id)
         priority = 1
         if prefer_lower:
@@ -370,7 +380,9 @@ def _handle_sync_env(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Approve pending handset registrations")
-    parser.add_argument("--config", help="Path to config.yaml (defaults to RINGDOWN_CONFIG_PATH or ./config.yaml)")
+    parser.add_argument(
+        "--config", help="Path to config.yaml (defaults to RINGDOWN_CONFIG_PATH or ./config.yaml)"
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -426,7 +438,9 @@ def build_parser() -> argparse.ArgumentParser:
         parser=approve_parser,
     )
 
-    sync_parser = subparsers.add_parser("sync-env", help="Update LIVE_TEST_MOBILE_DEVICE_ID using config.yaml")
+    sync_parser = subparsers.add_parser(
+        "sync-env", help="Update LIVE_TEST_MOBILE_DEVICE_ID using config.yaml"
+    )
     sync_parser.add_argument(
         "--env-file",
         default=".env",
@@ -447,7 +461,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     raw_args = list(argv) if argv is not None else sys.argv[1:]
     subcommands = {"list", "approve", "sync-env"}
     has_subcommand = any(arg in subcommands for arg in raw_args if not arg.startswith("-"))

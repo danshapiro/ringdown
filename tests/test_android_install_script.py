@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Any, List
+from typing import Any
 
 import pytest
 
@@ -11,11 +11,11 @@ import android.scripts.install as install_script
 
 class CallRecorder:
     def __init__(self) -> None:
-        self.calls: List[List[str]] = []
+        self.calls: list[list[str]] = []
 
     def __call__(
         self,
-        cmd: List[str],
+        cmd: list[str],
         check: bool,
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
@@ -47,7 +47,7 @@ def test_install_runs_build_and_adb(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
     install_script.main(["--device", "emulator-5554", "--skip-tests"])
 
-    gradle_wrapper = str((tmp_path / "android" / "gradlew"))
+    gradle_wrapper = str(tmp_path / "android" / "gradlew")
     expected_gradle = [gradle_wrapper, ":app:assembleDebug"]
     expected_adb = ["adb", "-s", "emulator-5554", "install", "-r", str(apk_path)]
 

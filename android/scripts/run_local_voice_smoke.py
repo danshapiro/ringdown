@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
 import shutil
 import subprocess
 import sys
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional, Sequence
 
 HARNESS_PATH = Path(__file__).resolve().with_name("manual_voice_harness.py")
 DEFAULT_PROFILE_DIR = Path(__file__).resolve().parent / "voice_smoke_profiles"
@@ -28,7 +27,7 @@ DEFAULT_HANGUP_DELAY = 3.0
 _ADB_BIN: str | None = None
 
 
-def _run_adb(device: Optional[str], *args: str) -> None:
+def _run_adb(device: str | None, *args: str) -> None:
     if _ADB_BIN is None:
         raise SystemExit("ADB binary not initialised; call _set_adb_binary first.")
     cmd = [_ADB_BIN]
@@ -43,7 +42,7 @@ def _set_adb_binary(path: str) -> None:
     _ADB_BIN = path
 
 
-def _resolve_adb_binary(candidate: Optional[str]) -> str:
+def _resolve_adb_binary(candidate: str | None) -> str:
     resolved = shutil.which(candidate or "adb")
     if resolved is None:
         raise SystemExit(
@@ -53,7 +52,7 @@ def _resolve_adb_binary(candidate: Optional[str]) -> str:
     return resolved
 
 
-def _verify_device_online(adb_bin: str, device: Optional[str]) -> None:
+def _verify_device_online(adb_bin: str, device: str | None) -> None:
     if not device:
         return
     result = subprocess.run(
@@ -126,7 +125,10 @@ def parse_args() -> argparse.Namespace:
         "--hangup-delay",
         type=float,
         default=None,
-        help=f"Seconds to wait before hangup tap once the harness exits (default: {DEFAULT_HANGUP_DELAY})",
+        help=(
+            "Seconds to wait before hangup tap once the harness exits "
+            f"(default: {DEFAULT_HANGUP_DELAY})"
+        ),
     )
     parser.add_argument(
         "--success-event",
@@ -159,7 +161,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--log-output",
         type=Path,
-        help="Optional path to capture harness stdout (defaults to result_json.log when --result-json is set)",
+        help=(
+            "Optional path to capture harness stdout "
+            "(defaults to result_json.log when --result-json is set)"
+        ),
     )
     parser.add_argument(
         "--result-json",
@@ -174,7 +179,9 @@ def _resolve_profile_path(path: Path) -> Path:
     if candidate.exists():
         return candidate
     suffix = candidate.suffix or ".json"
-    lookup = DEFAULT_PROFILE_DIR / (candidate.name if candidate.suffix else f"{candidate.name}{suffix}")
+    lookup = DEFAULT_PROFILE_DIR / (
+        candidate.name if candidate.suffix else f"{candidate.name}{suffix}"
+    )
     if lookup.exists():
         return lookup
     raise SystemExit(f"Profile file '{path}' not found (also checked {lookup}).")
@@ -228,7 +235,7 @@ def _apply_profile(args: argparse.Namespace) -> None:
         args.extra_harness_arg = [str(item) for item in data["extraHarnessArgs"] if item]
 
 
-def _tap(device: Optional[str], coord: tuple[int, int]) -> None:
+def _tap(device: str | None, coord: tuple[int, int]) -> None:
     x, y = coord
     _run_adb(device, "shell", "input", "tap", str(x), str(y))
 
@@ -319,11 +326,15 @@ def _run_with_taps(args: argparse.Namespace) -> int:
     return return_code
 
 
-def _resolve_log_output_path(args: argparse.Namespace) -> Optional[Path]:
+def _resolve_log_output_path(args: argparse.Namespace) -> Path | None:
     if args.log_output:
         return args.log_output.expanduser()
     if args.result_json:
-        target = args.result_json.with_suffix(args.result_json.suffix + ".log") if args.result_json.suffix else Path(str(args.result_json) + ".log")
+        target = (
+            args.result_json.with_suffix(args.result_json.suffix + ".log")
+            if args.result_json.suffix
+            else Path(str(args.result_json) + ".log")
+        )
         return target.expanduser()
     return None
 
@@ -353,11 +364,10 @@ def main() -> int:
     status = "success" if return_code == 0 else "failure"
     if args.result_json:
         payload_path = args.result_json.expanduser()
-        data_path = payload_path
         info = {
             "status": status,
             "returnCode": return_code,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
         if log_path:
             info["logPath"] = str(log_path)

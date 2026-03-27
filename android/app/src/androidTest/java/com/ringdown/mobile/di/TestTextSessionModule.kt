@@ -2,6 +2,8 @@ package com.ringdown.mobile.di
 
 import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
+import com.ringdown.mobile.chat.ChatSessionController
+import com.ringdown.mobile.chat.ChatSessionGateway
 import com.ringdown.mobile.data.TextSessionRepository
 import com.ringdown.mobile.data.TextSessionStarter
 import com.ringdown.mobile.domain.TextSessionBootstrap
@@ -34,6 +36,12 @@ object TestTextSessionModule {
             FakeTextSessionStarter()
         }
     }
+
+    @Provides
+    @Singleton
+    fun provideChatSessionGateway(
+        controller: ChatSessionController,
+    ): ChatSessionGateway = controller
 
     private fun shouldUseLiveTextSession(): Boolean {
         val argument = InstrumentationRegistry.getArguments()

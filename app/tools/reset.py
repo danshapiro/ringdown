@@ -6,7 +6,7 @@ hear the onboarding message again.
 
 import logging
 import threading
-from typing import Any, Dict
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -18,36 +18,47 @@ logger = logging.getLogger(__name__)
 _agent_context = threading.local()
 
 
-def set_agent_context(agent_config: Dict[str, Any] | None) -> None:
+def set_agent_context(agent_config: dict[str, Any] | None) -> None:
     """Capture the active agent configuration for subsequent tool calls."""
 
     _agent_context.config = agent_config
 
 
-def _get_agent_context() -> Dict[str, Any] | None:
+def _get_agent_context() -> dict[str, Any] | None:
     return getattr(_agent_context, "config", None)
+
 
 class ResetArgs(BaseModel):
     """Arguments for the reset tool.
-    
+
     This tool doesn't require any arguments since it simply resets
     the conversation state.
     """
-    
+
     confirm: bool = True  # Always True when the tool is called
 
 
 @register_tool(
     name="reset",
-    description="MANDATORY: Call this tool immediately when the user says 'reset', 'restart' or similar. Do NOT respond conversationally to reset requests. This resets the conversation to its initial state, clearing ALL message history permanently. This is a destructive action that cannot be undone.",
+    description=(
+        "MANDATORY: Call this tool immediately when the user says 'reset', "
+        "'restart' or similar. Do NOT respond conversationally to reset "
+        "requests. This resets the conversation to its initial state, "
+        "clearing ALL message history permanently. This is a destructive "
+        "action that cannot be undone."
+    ),
     param_model=ResetArgs,
     prompt="""
-    MANDATORY TOOL USAGE: When the user says "RESET", "RESTART" or similar, you MUST call this tool immediately. Do not respond conversationally to reset requests.
+    MANDATORY TOOL USAGE: When the user says "RESET", "RESTART" or similar,
+    you MUST call this tool immediately. Do not respond conversationally to
+    reset requests.
     
-    This tool resets the conversation back to the beginning, permanently deleting all conversation history. 
+    This tool resets the conversation back to the beginning, permanently
+    deleting all conversation history.
     
     CRITICAL REQUIREMENTS - You MUST call this tool when:
-    1. The user explicitly says the word "RESET" or "RESTART" (or variations like "reset the conversation", "please restart", etc.)
+    1. The user explicitly says the word "RESET" or "RESTART" (or variations
+       like "reset the conversation", "please restart", etc.)
     2. Never use this tool for simple questions, clarifications, or continuing conversations.
     3. Do not use it under any other circumstances.
     
@@ -69,17 +80,17 @@ class ResetArgs(BaseModel):
 )
 def reset_conversation(args: ResetArgs) -> dict[str, str]:
     """Reset the conversation to its initial state.
-    
+
     This tool clears the conversation history and returns a welcome message,
     effectively restarting the conversation from the beginning.
-    
+
     Args:
         args: ResetArgs containing confirmation (always True when called)
-        
+
     Returns:
         A dictionary with the reset confirmation and welcome message
     """
-    
+
     logger.info("Reset tool called - conversation will be reset to initial state")
 
     # The actual message array clearing will need to be handled by the calling code
@@ -95,7 +106,6 @@ def reset_conversation(args: ResetArgs) -> dict[str, str]:
 
         config = _settings._load_config()
         defaults = config.get("defaults", {})
-
         for agent_name in config.get("agents", {}):
             candidate = _settings.get_agent_config(agent_name)
             candidate_tools = {str(t).lower() for t in candidate.get("tools", [])}
@@ -105,13 +115,10 @@ def reset_conversation(args: ResetArgs) -> dict[str, str]:
         else:
             agent_cfg = defaults
 
-    # Reset markers are consumed by the websocket layer which now expects a
-    # single-word acknowledgement so the live regression harness can match it
-    # reliably. Any follow-up greeting is sent separately by the chat loop.
     reset_marker = "resetting"
 
     return {
         "action": "reset_conversation",
         "message": reset_marker,
-        "status": "Conversation has been reset to the starting state."
+        "status": "Conversation has been reset to the starting state.",
     }

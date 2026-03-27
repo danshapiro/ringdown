@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import json
 import time
-from typing import Any, Dict, List
+from typing import Any
 
 import litellm
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
@@ -32,7 +32,9 @@ def _structured_log(level: str, event: str, **fields: Any) -> None:
     try:
         message = json.dumps(payload, ensure_ascii=True, default=str, separators=(",", ":"))
     except TypeError:
-        message = json.dumps({"event": event, "fallback": "serialization_failed"}, ensure_ascii=True)
+        message = json.dumps(
+            {"event": event, "fallback": "serialization_failed"}, ensure_ascii=True
+        )
 
     log_method = getattr(logger, level, logger.info)
     log_method(message)
@@ -48,7 +50,7 @@ def _normalise_source(value: Any | None) -> str | None:
     return None
 
 
-async def _send_json(ws: WebSocket, payload: Dict[str, Any]) -> None:
+async def _send_json(ws: WebSocket, payload: dict[str, Any]) -> None:
     """Safely send JSON data if the connection remains open."""
 
     if ws.application_state.name == "CONNECTED":
@@ -62,7 +64,7 @@ def _resolve_greeting(agent_cfg: dict[str, Any]) -> str | None:
     return _DEFAULT_GREETING
 
 
-def _initialise_messages(state: TextSessionState) -> List[Dict[str, Any]]:
+def _initialise_messages(state: TextSessionState) -> list[dict[str, Any]]:
     """Ensure the session carries a message history seeded with the system prompt."""
 
     messages = state.messages or []
@@ -84,9 +86,7 @@ async def mobile_text_session(ws: WebSocket) -> None:
     """Bidirectional text streaming endpoint for the Android client."""
 
     session_token = (
-        ws.headers.get(_SESSION_TOKEN_HEADER)
-        or ws.query_params.get("sessionToken")
-        or ""
+        ws.headers.get(_SESSION_TOKEN_HEADER) or ws.query_params.get("sessionToken") or ""
     ).strip()
     if not session_token:
         await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason="session token required")

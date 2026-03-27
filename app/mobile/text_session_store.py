@@ -6,8 +6,8 @@ import asyncio
 import secrets
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Tuple
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 
 @dataclass
@@ -17,7 +17,7 @@ class TextSessionState:
     session_id: str
     device_id: str
     agent_name: str
-    agent_config: Dict[str, Any]
+    agent_config: dict[str, Any]
     created_at: datetime
     expires_at: datetime
     resume_expires_at: datetime
@@ -26,17 +26,17 @@ class TextSessionState:
     resume_ttl_seconds: int
     heartbeat_interval_seconds: int
     heartbeat_timeout_seconds: int
-    tls_pins: List[str]
-    messages: List[Dict[str, Any]] = field(default_factory=list)
+    tls_pins: list[str]
+    messages: list[dict[str, Any]] = field(default_factory=list)
     active: bool = False
     greeting_sent: bool = False
-    last_seen: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_seen: datetime = field(default_factory=lambda: datetime.now(UTC))
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def refresh_expiry(self, session_ttl_seconds: int, resume_ttl_seconds: int) -> None:
         """Extend expiry windows for session and resume windows."""
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ttl = max(session_ttl_seconds, 60)
         resume_ttl = max(resume_ttl_seconds, 60)
         self.session_ttl_seconds = ttl
@@ -50,9 +50,9 @@ class TextSessionStore:
     """Manage ephemeral session tokens for mobile text streaming."""
 
     def __init__(self) -> None:
-        self._sessions: Dict[str, TextSessionState] = {}
-        self._session_tokens: Dict[str, str] = {}
-        self._resume_index: Dict[str, str] = {}
+        self._sessions: dict[str, TextSessionState] = {}
+        self._session_tokens: dict[str, str] = {}
+        self._resume_index: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
     async def create_session(
@@ -60,16 +60,16 @@ class TextSessionStore:
         *,
         device_id: str,
         agent_name: str,
-        agent_config: Dict[str, Any],
+        agent_config: dict[str, Any],
         heartbeat_interval_seconds: int,
         heartbeat_timeout_seconds: int,
-        tls_pins: List[str],
+        tls_pins: list[str],
         session_ttl_seconds: int,
         resume_ttl_seconds: int,
-    ) -> Tuple[TextSessionState, str]:
+    ) -> tuple[TextSessionState, str]:
         """Create a brand new session and return (state, session_token)."""
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         session_id = str(uuid.uuid4())
         session_token = _generate_token()
         resume_token = _generate_token()
@@ -80,7 +80,7 @@ class TextSessionStore:
         expires_at = now + timedelta(seconds=ttl)
         resume_expires_at = now + timedelta(seconds=resume_ttl)
 
-        messages: List[Dict[str, Any]] = []
+        messages: list[dict[str, Any]] = []
         prompt = agent_config.get("prompt")
         if isinstance(prompt, str) and prompt.strip():
             messages.append({"role": "system", "content": prompt})
@@ -118,11 +118,11 @@ class TextSessionStore:
         resume_ttl_seconds: int,
         heartbeat_interval_seconds: int,
         heartbeat_timeout_seconds: int,
-        tls_pins: List[str],
-    ) -> Tuple[TextSessionState, str]:
+        tls_pins: list[str],
+    ) -> tuple[TextSessionState, str]:
         """Resume an existing session, returning (state, new_session_token)."""
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._lock:
             self._prune_expired_locked(now)
             session_id = self._resume_index.get(resume_token)
@@ -159,7 +159,7 @@ class TextSessionStore:
     async def consume_session_token(self, session_token: str) -> TextSessionState:
         """Consume a one-time session token for WebSocket connection."""
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._lock:
             self._prune_expired_locked(now)
             session_id = self._session_tokens.pop(session_token, None)
@@ -181,7 +181,7 @@ class TextSessionStore:
     async def mark_disconnected(self, session_id: str) -> None:
         """Mark a session as disconnected and extend its resume window."""
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._lock:
             state = self._sessions.get(session_id)
             if state is None:
@@ -191,7 +191,7 @@ class TextSessionStore:
             state.resume_expires_at = now + timedelta(seconds=resume_ttl)
             state.last_seen = now
 
-    async def update_messages(self, session_id: str, messages: List[Dict[str, Any]]) -> None:
+    async def update_messages(self, session_id: str, messages: list[dict[str, Any]]) -> None:
         """Persist conversation history for a session."""
 
         async with self._lock:
@@ -199,7 +199,7 @@ class TextSessionStore:
             if state is None:
                 return
             state.messages = list(messages)
-            state.last_seen = datetime.now(timezone.utc)
+            state.last_seen = datetime.now(UTC)
 
     async def delete_session(self, session_id: str) -> None:
         """Remove a session entirely."""
@@ -221,7 +221,7 @@ class TextSessionStore:
         }
 
     def _prune_expired_locked(self, now: datetime) -> None:
-        expired: List[str] = []
+        expired: list[str] = []
         for session_id, state in list(self._sessions.items()):
             if state.active:
                 # Active sessions rely on WebSocket to signal closure; do not prune here.

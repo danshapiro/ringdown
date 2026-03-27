@@ -12,7 +12,6 @@ from app.main import app
 from app.mobile.smoke import SmokeResult, SmokeTestError, run_smoke_test
 from app.mobile.text_session_store import TextSessionStore
 
-
 client = TestClient(app)
 
 
@@ -44,7 +43,9 @@ def _patch_mobile_layers(store: TextSessionStore) -> contextlib.ExitStack:
 
     stack = contextlib.ExitStack()
     stack.enter_context(patch("app.api.mobile.settings.get_mobile_device", return_value=device_cfg))
-    stack.enter_context(patch("app.api.mobile.settings.get_mobile_text_config", return_value=text_cfg))
+    stack.enter_context(
+        patch("app.api.mobile.settings.get_mobile_text_config", return_value=text_cfg)
+    )
     stack.enter_context(patch("app.api.mobile.settings.get_agent_config", return_value=agent_cfg))
     stack.enter_context(patch("app.api.mobile.get_text_session_store", return_value=store))
     stack.enter_context(patch("app.api.mobile_text.get_text_session_store", return_value=store))
@@ -73,11 +74,14 @@ def test_smoke_success() -> None:
             def __aiter__(self_inner):
                 async def _generator():
                     yield SimpleNamespace(
-                        choices=[SimpleNamespace(delta={"content": "assistant reply"}, finish_reason=None)]
+                        choices=[
+                            SimpleNamespace(
+                                delta={"content": "assistant reply"}, finish_reason=None
+                            )
+                        ]
                     )
-                    yield SimpleNamespace(
-                        choices=[SimpleNamespace(delta={}, finish_reason="stop")]
-                    )
+                    yield SimpleNamespace(choices=[SimpleNamespace(delta={}, finish_reason="stop")])
+
                 return _generator()
 
         return _FakeResponse()
@@ -117,18 +121,13 @@ def test_smoke_raises_on_error_event() -> None:
 
     stack.enter_context(patch("app.api.mobile_text.stream_response", failing_stream))
 
-    with stack:
-        with pytest.raises(SmokeTestError) as excinfo:
-            run_smoke_test(client, device_id="device-123", prompt_text="hello")
+    with stack, pytest.raises(SmokeTestError) as excinfo:
+        run_smoke_test(client, device_id="device-123", prompt_text="hello")
 
     logs = excinfo.value.logs
     events = excinfo.value.events
     stream_log = next(
-        (
-            entry
-            for entry in logs
-            if entry.get("event") == "mobile_text_session.stream_failure"
-        ),
+        (entry for entry in logs if entry.get("event") == "mobile_text_session.stream_failure"),
         {},
     )
     assert stream_log.get("error") == "boom"

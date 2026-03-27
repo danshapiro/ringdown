@@ -26,6 +26,7 @@ def acompletion(*args, **kwargs):
 
     return litellm.acompletion(*args, **kwargs)
 
+
 # URLs for sound effects (absolute URLs provided via env vars when deployed)
 _THINKING_SOUND_URL = os.getenv("SOUND_THINKING_URL", "/sounds/thinking.mp3")
 _FINISHED_SOUND_URL = os.getenv("SOUND_FINISHED_URL", "/sounds/finished.mp3")

@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import settings
-from app.chat import stream_response
 from app.logging_utils import logger
 from app.mobile.config_store import (
     approve_device,
@@ -21,8 +19,6 @@ from app.mobile.config_store import (
     ensure_device_security_fields,
 )
 from app.mobile.text_session_store import get_text_session_store
-from app.memory import log_turn
-from app.settings import get_agent_config
 
 DEFAULT_POLL_AFTER_SECONDS = 5
 
@@ -35,10 +31,10 @@ class MobileRegisterRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     device_id: str = Field(..., alias="deviceId", min_length=4, max_length=128)
-    label: Optional[str] = None
-    platform: Optional[str] = None
-    model: Optional[str] = None
-    app_version: Optional[str] = Field(default=None, alias="appVersion")
+    label: str | None = None
+    platform: str | None = None
+    model: str | None = None
+    app_version: str | None = Field(default=None, alias="appVersion")
 
 
 class MobileRegisterResponse(BaseModel):
@@ -48,8 +44,8 @@ class MobileRegisterResponse(BaseModel):
 
     status: str
     message: str
-    poll_after_seconds: Optional[int] = Field(default=None, alias="pollAfterSeconds")
-    agent: Optional[str] = None
+    poll_after_seconds: int | None = Field(default=None, alias="pollAfterSeconds")
+    agent: str | None = None
 
 
 class MobileTextSessionRequest(BaseModel):
@@ -58,9 +54,9 @@ class MobileTextSessionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     device_id: str = Field(..., alias="deviceId", min_length=4, max_length=128)
-    auth_token: Optional[str] = Field(default=None, alias="authToken", min_length=1, max_length=256)
-    agent: Optional[str] = None
-    resume_token: Optional[str] = Field(default=None, alias="resumeToken")
+    auth_token: str | None = Field(default=None, alias="authToken", min_length=1, max_length=256)
+    agent: str | None = None
+    resume_token: str | None = Field(default=None, alias="resumeToken")
 
 
 class MobileTextSessionResponse(BaseModel):
@@ -77,8 +73,8 @@ class MobileTextSessionResponse(BaseModel):
     heartbeat_interval_seconds: int = Field(..., alias="heartbeatIntervalSeconds")
     heartbeat_timeout_seconds: int = Field(..., alias="heartbeatTimeoutSeconds")
     tls_pins: list[str] = Field(default_factory=list, alias="tlsPins")
-    auth_token: Optional[str] = Field(default=None, alias="authToken")
-    history: List["MobileConversationMessage"] = Field(default_factory=list, alias="history")
+    auth_token: str | None = Field(default=None, alias="authToken")
+    history: list[MobileConversationMessage] = Field(default_factory=list, alias="history")
 
 
 class MobileConversationMessage(BaseModel):
@@ -89,21 +85,21 @@ class MobileConversationMessage(BaseModel):
     id: str
     role: str
     text: str = ""
-    timestamp_iso: Optional[str] = Field(default=None, alias="timestampIso")
-    message_type: Optional[str] = Field(default=None, alias="messageType")
-    tool_payload: Optional[Dict[str, Any]] = Field(default=None, alias="toolPayload")
+    timestamp_iso: str | None = Field(default=None, alias="timestampIso")
+    message_type: str | None = Field(default=None, alias="messageType")
+    tool_payload: dict[str, Any] | None = Field(default=None, alias="toolPayload")
 
 
 _HISTORY_LIMIT = 200
 
 
-def _serialise_history(messages: List[Dict[str, Any]] | None) -> List[MobileConversationMessage]:
+def _serialise_history(messages: list[dict[str, Any]] | None) -> list[MobileConversationMessage]:
     """Convert stored conversation messages into a mobile-friendly format."""
 
     if not messages:
         return []
 
-    serialised: List[MobileConversationMessage] = []
+    serialised: list[MobileConversationMessage] = []
     for entry in messages:
         role_value = str(entry.get("role") or "").strip().lower()
         if role_value not in {"assistant", "user", "tool"}:
@@ -123,8 +119,12 @@ def _serialise_history(messages: List[Dict[str, Any]] | None) -> List[MobileConv
                 id=str(message_id or uuid.uuid4()),
                 role=role_value,
                 text=text_value or "",
-                timestamp_iso=str(timestamp_iso).strip() if isinstance(timestamp_iso, str) and timestamp_iso.strip() else None,
-                message_type=str(msg_type).strip() if isinstance(msg_type, str) and msg_type.strip() else None,
+                timestamp_iso=str(timestamp_iso).strip()
+                if isinstance(timestamp_iso, str) and timestamp_iso.strip()
+                else None,
+                message_type=str(msg_type).strip()
+                if isinstance(msg_type, str) and msg_type.strip()
+                else None,
                 tool_payload=payload_value,
             )
         )
@@ -148,7 +148,7 @@ def _extract_text(content: Any) -> str:
         return ""
 
     if isinstance(content, list):
-        parts: List[str] = []
+        parts: list[str] = []
         for chunk in content:
             if isinstance(chunk, str) and chunk.strip():
                 parts.append(chunk.strip())
@@ -161,7 +161,7 @@ def _extract_text(content: Any) -> str:
     return ""
 
 
-def _coerce_tool_payload(role: str, entry: Dict[str, Any]) -> Dict[str, Any] | None:
+def _coerce_tool_payload(role: str, entry: dict[str, Any]) -> dict[str, Any] | None:
     """Normalise tool payloads so the client can render structured pills."""
 
     candidate = entry.get("toolPayload") or entry.get("tool_payload")
@@ -187,17 +187,18 @@ def _coerce_tool_payload(role: str, entry: Dict[str, Any]) -> Dict[str, Any] | N
 
     return payload
 
-def _resolve_greeting(agent_cfg: Dict[str, Any]) -> Optional[str]:
+
+def _resolve_greeting(agent_cfg: dict[str, Any]) -> str | None:
     candidate = agent_cfg.get("welcome_greeting")
     if isinstance(candidate, str) and candidate.strip():
         return candidate.strip()
     return "You are connected to the Ringdown assistant."
 
 
-def _normalise_device_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+def _normalise_device_entry(entry: dict[str, Any]) -> dict[str, Any]:
     """Return a shallow copy of *entry* with snake_case keys where appropriate."""
 
-    result: Dict[str, Any] = dict(entry or {})
+    result: dict[str, Any] = dict(entry or {})
     if "pollAfterSeconds" in result and "poll_after_seconds" not in result:
         result["poll_after_seconds"] = result["pollAfterSeconds"]
     if "blockedReason" in result and "blocked_reason" not in result:
@@ -245,11 +246,7 @@ async def register_device(payload: MobileRegisterRequest) -> MobileRegisterRespo
     env_settings = settings.get_env()
     auto_device_id = (env_settings.live_test_mobile_device_id or "").strip()
     if auto_device_id and device_id == auto_device_id and not device_cfg.get("enabled"):
-        desired_agent = (
-            device_cfg.get("agent")
-            or payload.label
-            or settings.get_default_bot_name()
-        )
+        desired_agent = device_cfg.get("agent") or payload.label or settings.get_default_bot_name()
         try:
             updated_entry = approve_device(device_id, agent=desired_agent)
             device_cfg = _normalise_device_entry(updated_entry)
@@ -305,7 +302,10 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "code": "device_not_registered",
-                "message": f"Device '{device_id}' is not registered. Add the device under mobile_devices in config.yaml and redeploy.",
+                "message": (
+                    f"Device '{device_id}' is not registered. Add the device "
+                    "under mobile_devices in config.yaml and redeploy."
+                ),
             },
         )
 
@@ -315,7 +315,10 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "code": "device_not_approved",
-                "message": f"Device '{device_id}' is pending approval. Set enabled: true in config.yaml mobile_devices and redeploy.",
+                "message": (
+                    f"Device '{device_id}' is pending approval. Set enabled: "
+                    "true in config.yaml mobile_devices and redeploy."
+                ),
             },
         )
 
@@ -331,7 +334,10 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={
                     "code": "security_initialisation_failed",
-                    "message": f"Unable to prepare security configuration for device '{device_id}'. Check server logs.",
+                    "message": (
+                        "Unable to prepare security configuration for device "
+                        f"'{device_id}'. Check server logs."
+                    ),
                 },
             ) from exc
         device_cfg = _normalise_device_entry(refreshed_entry)
@@ -343,7 +349,10 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={
                     "code": "invalid_credentials",
-                    "message": "Auth token rejected. Verify the mobile device entry matches the handset token.",
+                    "message": (
+                        "Auth token rejected. Verify the mobile device entry "
+                        "matches the handset token."
+                    ),
                 },
             )
     elif configured_token:
@@ -353,7 +362,9 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
         )
         provided_token = configured_token
     else:
-        logger.warning("Device %s missing configured auth token; allowing unsecured handshake", device_id)
+        logger.warning(
+            "Device %s missing configured auth token; allowing unsecured handshake", device_id
+        )
 
     agent_name = payload.agent or device_cfg.get("agent")
     if not agent_name:

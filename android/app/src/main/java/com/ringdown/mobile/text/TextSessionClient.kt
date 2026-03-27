@@ -587,6 +587,9 @@ open class TextSessionClient @Inject constructor(
         )
 
         val hadSocket = lock.withLock {
+            heartbeatJob?.cancel()
+            heartbeatJob = null
+            heartbeatTimeoutJob = null
             val socket = activeWebSocket
             if (socket != null) {
                 runCatching { socket.cancel() }

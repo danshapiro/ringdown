@@ -6,8 +6,6 @@ import platform
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Tuple
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ANDROID_DIR = REPO_ROOT / "android"
@@ -21,7 +19,7 @@ IS_WSL = SYSTEM == "Linux" and "microsoft" in platform.release().lower()
 IS_NATIVE_POSIX = not (IS_WINDOWS or IS_WSL)
 
 
-def _run(cmd: List[str], *, cwd: Path | None = None, env: Dict[str, str] | None = None) -> None:
+def _run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
     subprocess.run(cmd, check=True, cwd=cwd or REPO_ROOT, env=env)
 
 
@@ -35,8 +33,8 @@ def _wsl_to_windows_path(path: Path) -> str:
     return result.stdout.strip()
 
 
-def _load_local_properties() -> Dict[str, str]:
-    properties: Dict[str, str] = {}
+def _load_local_properties() -> dict[str, str]:
+    properties: dict[str, str] = {}
     if not LOCAL_PROPERTIES.exists():
         return properties
 
@@ -68,9 +66,9 @@ def _to_platform_path(path: str) -> str:
     return path.replace("\\", "/")
 
 
-def _gradle_env_and_flags() -> Tuple[Dict[str, str], List[str]]:
+def _gradle_env_and_flags() -> tuple[dict[str, str], list[str]]:
     env = os.environ.copy()
-    extra_flags: List[str] = []
+    extra_flags: list[str] = []
     props = _load_local_properties()
 
     sdk_dir = props.get("sdk.dir")
@@ -91,7 +89,7 @@ def _gradle_env_and_flags() -> Tuple[Dict[str, str], List[str]]:
     return env, extra_flags
 
 
-def _run_gradle(task_spec: str, env: Dict[str, str], extra_flags: List[str]) -> None:
+def _run_gradle(task_spec: str, env: dict[str, str], extra_flags: list[str]) -> None:
     gradle_args = extra_flags + shlex.split(task_spec)
     if IS_WINDOWS:
         wrapper = str(ANDROID_DIR / "gradlew.bat")
@@ -111,7 +109,9 @@ def _run_gradle(task_spec: str, env: Dict[str, str], extra_flags: List[str]) -> 
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build, install, and optionally test the Android client.")
+    parser = argparse.ArgumentParser(
+        description="Build, install, and optionally test the Android client."
+    )
     parser.add_argument("--device", required=True, help="ADB device serial to target.")
     parser.add_argument(
         "--build-task",
