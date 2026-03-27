@@ -46,7 +46,7 @@ __all__ = [
 setup_logging()
 
 
-def _create_app() -> FastAPI:
+def _create_app(*, include_mobile: bool = True) -> FastAPI:
     """Construct the FastAPI application and mount routers."""
 
     title = get_project_name().replace("-", " ").title()
@@ -57,8 +57,9 @@ def _create_app() -> FastAPI:
 
     # Webhook routers for Twilio Voice and ConversationRelay streaming.
     application.include_router(twilio.router)
-    application.include_router(mobile.router)
-    application.include_router(mobile_text.router)
+    if include_mobile:
+        application.include_router(mobile.router)
+        application.include_router(mobile_text.router)
     application.include_router(websocket.router)
 
     return application

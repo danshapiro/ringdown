@@ -44,10 +44,10 @@ class TextSessionRepository @Inject constructor(
             } catch (error: Throwable) {
                 if (error is HttpException) {
                     val errorCode = extractErrorCode(error)
-                    if (error.code() == 401 && attempt == 1) {
+                    if (error.code() == 401) {
                         deviceIdStore.updateAuthToken(null)
                         deviceIdStore.updateResumeToken(null)
-                        continue
+                        throw error
                     }
                     if (error.code() == 404 && attempt == 1 && errorCode == "resume_token_not_recognised") {
                         deviceIdStore.updateResumeToken(null)

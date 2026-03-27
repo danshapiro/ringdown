@@ -93,7 +93,7 @@ def test_text_session_handshake_creates_session() -> None:
     assert body["heartbeatIntervalSeconds"] == 12
     assert body["heartbeatTimeoutSeconds"] == 30
     assert body["tlsPins"] == ["pin-global", "pin-device"]
-    assert body["authToken"] == "secret-token"
+    assert body["authToken"] is None
     assert body["history"] == []
     store.create_session.assert_awaited_once()
 
@@ -121,7 +121,7 @@ def test_text_session_handshake_resumes_session() -> None:
     data = response.json()
     assert data["sessionToken"] == "new-session-token"
     assert data["resumeToken"] == state.resume_token
-    assert data["authToken"] == "secret-token"
+    assert data["authToken"] is None
     assert data["history"] == []
     store.resume_session.assert_awaited_once()
 
@@ -216,6 +216,23 @@ def test_text_session_handshake_backfills_missing_token() -> None:
     assert body["authToken"] == "generated-token"
     ensure_patch.assert_called_once_with("device-123", metadata=device_cfg)
     store.create_session.assert_awaited_once()
+
+
+def test_text_session_handshake_rejects_missing_auth_for_configured_device() -> None:
+    store = MagicMock()
+    patches = _patch_config(store)
+    with contextlib.ExitStack() as stack:
+        for item in patches:
+            stack.enter_context(item)
+        response = client.post(
+            "/v1/mobile/text/session",
+            json={"deviceId": "device-123"},
+        )
+
+    assert response.status_code == 401
+    detail = response.json()["detail"]
+    assert detail["code"] == "missing_credentials"
+    store.create_session.assert_not_called()
 
 
 def test_text_session_handshake_rejects_bad_auth() -> None:

@@ -324,6 +324,7 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
 
     provided_token = (payload.auth_token or "").strip()
     configured_token = (device_cfg.get("auth_token") or "").strip()
+    issued_auth_token: str | None = None
 
     if not configured_token:
         try:
@@ -342,8 +343,21 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
             ) from exc
         device_cfg = _normalise_device_entry(refreshed_entry)
         configured_token = (device_cfg.get("auth_token") or "").strip()
+        issued_auth_token = configured_token or None
 
-    if provided_token and configured_token:
+    if not configured_token:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "security_initialisation_failed",
+                "message": (
+                    "Unable to prepare security configuration for device "
+                    f"'{device_id}'. Check server logs."
+                ),
+            },
+        )
+
+    if provided_token:
         if not secrets.compare_digest(provided_token, configured_token):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -355,15 +369,16 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
                     ),
                 },
             )
-    elif configured_token:
-        logger.warning(
-            "Device %s initiated text session without auth token; allowing due to legacy client",
-            device_id,
-        )
-        provided_token = configured_token
-    else:
-        logger.warning(
-            "Device %s missing configured auth token; allowing unsecured handshake", device_id
+    elif issued_auth_token is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "missing_credentials",
+                "message": (
+                    "Auth token required. Provision the device token before "
+                    "requesting a mobile text session."
+                ),
+            },
         )
 
     agent_name = payload.agent or device_cfg.get("agent")
@@ -481,7 +496,7 @@ async def text_session(payload: MobileTextSessionRequest) -> MobileTextSessionRe
         heartbeat_interval_seconds=heartbeat_interval,
         heartbeat_timeout_seconds=heartbeat_timeout,
         tls_pins=tls_pins,
-        auth_token=configured_token or None,
+        auth_token=issued_auth_token,
         history=history,
     )
 

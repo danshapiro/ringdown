@@ -27,7 +27,7 @@ class TextSessionRepositoryTest {
     private val dispatcher = StandardTestDispatcher()
 
     @Test
-    fun clearsStaleAuthTokenAndRetriesAfter401() = runTest(dispatcher) {
+    fun clearsStaleAuthTokenAndResumeTokenAfter401() = runTest(dispatcher) {
         val scope = TestScope(dispatcher)
         val store = DeviceIdStore(testDataStore(scope))
         val staleToken = "stale-token"
@@ -36,39 +36,58 @@ class TextSessionRepositoryTest {
 
         val captures = mutableListOf<TextSessionRequest>()
         val api = object : TextSessionApi {
-            private var attempts = 0
             override suspend fun createTextSession(payload: TextSessionRequest): TextSessionResponse {
                 captures += payload
-                attempts += 1
-                return if (attempts == 1) {
-                    throw unauthorized()
-                } else {
-                    TextSessionResponse(
-                        sessionId = "session-abc",
-                        sessionToken = "session-token",
-                        resumeToken = "resume-new",
-                        websocketPath = "/v1/mobile/text/session",
-                        agent = "Agent Alpha",
-                        expiresAt = "2025-11-02T00:00:00Z",
-                        heartbeatIntervalSeconds = 15,
-                        heartbeatTimeoutSeconds = 45,
-                        tlsPins = emptyList(),
-                        authToken = "fresh-token",
-                    )
-                }
+                throw unauthorized()
+            }
+        }
+
+        val repository = TextSessionRepository(api, store, dispatcher)
+        try {
+            repository.startTextSession(null)
+            throw AssertionError("Expected HttpException to be thrown")
+        } catch (error: HttpException) {
+            assertEquals(401, error.code())
+        }
+
+        assertEquals(1, captures.size)
+        assertEquals(staleToken, captures.single().authToken)
+        assertNull(store.currentAuthToken())
+        assertNull(store.currentResumeToken())
+    }
+
+    @Test
+    fun storesBootstrapAuthTokenWhenServerProvidesOne() = runTest(dispatcher) {
+        val scope = TestScope(dispatcher)
+        val store = DeviceIdStore(testDataStore(scope))
+
+        val captures = mutableListOf<TextSessionRequest>()
+        val api = object : TextSessionApi {
+            override suspend fun createTextSession(payload: TextSessionRequest): TextSessionResponse {
+                captures += payload
+                return TextSessionResponse(
+                    sessionId = "session-abc",
+                    sessionToken = "session-token",
+                    resumeToken = "resume-new",
+                    websocketPath = "/v1/mobile/text/session",
+                    agent = "Agent Alpha",
+                    expiresAt = "2025-11-02T00:00:00Z",
+                    heartbeatIntervalSeconds = 15,
+                    heartbeatTimeoutSeconds = 45,
+                    tlsPins = emptyList(),
+                    authToken = "fresh-token",
+                )
             }
         }
 
         val repository = TextSessionRepository(api, store, dispatcher)
         val bootstrap = repository.startTextSession(null)
-        val updatedAuth = store.currentAuthToken()
-        val updatedResume = store.currentResumeToken()
 
         assertEquals("session-abc", bootstrap.sessionId)
-        assertEquals(staleToken, captures.first().authToken)
-        assertEquals("fresh-token", updatedAuth)
-        assertEquals("resume-new", updatedResume)
-        assertEquals(null, captures.last().authToken)
+        assertEquals(1, captures.size)
+        assertNull(captures.single().authToken)
+        assertEquals("fresh-token", store.currentAuthToken())
+        assertEquals("resume-new", store.currentResumeToken())
     }
 
     @Test

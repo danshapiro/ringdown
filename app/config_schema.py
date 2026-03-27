@@ -182,8 +182,8 @@ class MobileTextConfig(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
-class ConfigModel(BaseModel):
-    """Complete Ringdown configuration schema."""
+class BackendOnlyConfigModel(BaseModel):
+    """Backend-only configuration schema used to preserve the cleaned-main contract."""
 
     defaults: DefaultsConfig
     agents: dict[str, AgentConfig]
@@ -192,11 +192,6 @@ class ConfigModel(BaseModel):
     debug: str | None = None
     hints: str | None = None
     docs_folder_greenlist_defaults: list[str] = Field(default_factory=list)
-    mobile_devices: dict[str, MobileDeviceConfig] = Field(
-        default_factory=dict, alias="mobileDevices"
-    )
-    mobile_text: MobileTextConfig = Field(alias="mobileText")
-
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     @model_validator(mode="before")
@@ -241,6 +236,15 @@ class ConfigModel(BaseModel):
                     "Add the agent to config.yaml before assigning devices."
                 )
         return values
+
+
+class ConfigModel(BackendOnlyConfigModel):
+    """Complete Ringdown configuration schema."""
+
+    mobile_devices: dict[str, MobileDeviceConfig] = Field(
+        default_factory=dict, alias="mobileDevices"
+    )
+    mobile_text: MobileTextConfig = Field(alias="mobileText")
 
 
 def _coerce_truthy(flag: str | None) -> bool:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -14,6 +15,8 @@ from urllib.parse import urlparse
 import httpx
 from fastapi.testclient import TestClient
 from websockets.asyncio.client import ClientConnection, connect
+
+from app import settings
 
 
 class SmokeTestError(RuntimeError):
@@ -122,11 +125,15 @@ def run_smoke_test(
 
     events: list[dict[str, Any]] = []
     log_records: list[dict[str, Any]] = []
+    configured_auth_token = _get_configured_auth_token(device_id)
 
     with _capture_mobile_text_logs(log_records):
+        handshake_payload: dict[str, Any] = {"deviceId": device_id}
+        if configured_auth_token:
+            handshake_payload["authToken"] = configured_auth_token
         handshake = client.post(
             "/v1/mobile/text/session",
-            json={"deviceId": device_id},
+            json=handshake_payload,
         )
         _require(
             handshake.status_code == 200,
@@ -141,7 +148,7 @@ def run_smoke_test(
         resume_token = body.get("resumeToken")
         websocket_path = body.get("websocketPath")
         agent = body.get("agent")
-        auth_token = body.get("authToken")
+        auth_token = body.get("authToken") or configured_auth_token
 
         _require(
             isinstance(session_id, str) and session_id,
@@ -311,6 +318,7 @@ async def run_remote_smoke(
     device_id: str,
     prompt_text: str,
     agent: str | None = None,
+    auth_token: str | None = None,
     timeout: float = 30.0,
     verify_resume: bool = True,
 ) -> SmokeResult:
@@ -319,11 +327,15 @@ async def run_remote_smoke(
     base = base_url.rstrip("/")
     session_url = f"{base}/v1/mobile/text/session"
     payload: dict[str, Any] = {"deviceId": device_id}
+    resolved_auth_token = (
+        auth_token or os.environ.get("LIVE_TEST_MOBILE_AUTH_TOKEN") or ""
+    ).strip()
+    if resolved_auth_token:
+        payload["authToken"] = resolved_auth_token
     if agent:
         payload["agent"] = agent
 
     http_timeout = httpx.Timeout(timeout)
-    auth_token: str | None = None
     async with httpx.AsyncClient(timeout=http_timeout) as client:
         response = await client.post(session_url, json=payload)
 
@@ -354,7 +366,7 @@ async def run_remote_smoke(
         resume_token = body.get("resumeToken")
         websocket_path = body.get("websocketPath")
         resolved_agent = body.get("agent") or agent
-        auth_token = body.get("authToken")
+        resolved_auth_token = body.get("authToken") or resolved_auth_token
 
     events: list[dict[str, Any]] = []
 
@@ -435,8 +447,8 @@ async def run_remote_smoke(
             "deviceId": device_id,
             "resumeToken": resume_token,
         }
-        if isinstance(auth_token, str) and auth_token.strip():
-            resume_payload["authToken"] = auth_token
+        if resolved_auth_token:
+            resume_payload["authToken"] = resolved_auth_token
 
         async with httpx.AsyncClient(timeout=http_timeout) as client:
             resume_resp = await client.post(session_url, json=resume_payload)
@@ -480,6 +492,23 @@ def _build_websocket_url(base_url: str, websocket_path: str) -> str:
     scheme = "wss" if parsed.scheme == "https" else "ws"
     path = websocket_path if websocket_path.startswith("/") else f"/{websocket_path}"
     return f"{scheme}://{parsed.netloc}{path}"
+
+
+def _get_configured_auth_token(device_id: str) -> str | None:
+    try:
+        raw_device = settings.get_mobile_device(device_id) or {}
+    except Exception:  # pragma: no cover - local smoke callers may not have device config
+        return None
+
+    if not isinstance(raw_device, dict):
+        return None
+
+    candidate = raw_device.get("auth_token") or raw_device.get("authToken")
+    if not isinstance(candidate, str):
+        return None
+
+    token = candidate.strip()
+    return token or None
 
 
 @asynccontextmanager

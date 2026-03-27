@@ -3,16 +3,18 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF' >&2
-Usage: run-voice-smoke.sh [--backend <URL>] [--device-id <ID>]
+Usage: run-voice-smoke.sh [--backend <URL>] [--device-id <ID>] [--auth-token <TOKEN>]
 
 Runs the live reconnect Android instrumentation smoke against a connected
 device/emulator. The backend URL must be supplied via --backend or the
-RINGDOWN_BACKEND_URL environment variable.
+RINGDOWN_BACKEND_URL environment variable. The mobile auth token may be
+supplied via --auth-token or LIVE_TEST_MOBILE_AUTH_TOKEN.
 EOF
 }
 
 BACKEND_URL="${RINGDOWN_BACKEND_URL:-}"
 DEVICE_ID_OVERRIDE="${RINGDOWN_DEVICE_ID_OVERRIDE:-}"
+AUTH_TOKEN_OVERRIDE="${LIVE_TEST_MOBILE_AUTH_TOKEN:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -24,6 +26,11 @@ while [[ $# -gt 0 ]]; do
     --device-id)
       [[ $# -ge 2 ]] || { echo "Error: missing value for --device-id" >&2; usage; exit 1; }
       DEVICE_ID_OVERRIDE="${2:-}"
+      shift 2
+      ;;
+    --auth-token)
+      [[ $# -ge 2 ]] || { echo "Error: missing value for --auth-token" >&2; usage; exit 1; }
+      AUTH_TOKEN_OVERRIDE="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -51,6 +58,9 @@ ARGS=(
 
 if [[ -n "${DEVICE_ID_OVERRIDE}" ]]; then
   ARGS+=("-Pandroid.testInstrumentationRunnerArguments.liveDeviceId=${DEVICE_ID_OVERRIDE}")
+fi
+if [[ -n "${AUTH_TOKEN_OVERRIDE}" ]]; then
+  ARGS+=("-Pandroid.testInstrumentationRunnerArguments.liveAuthToken=${AUTH_TOKEN_OVERRIDE}")
 fi
 
 STAGING_BACKEND_BASE_URL="${BACKEND_URL}" \

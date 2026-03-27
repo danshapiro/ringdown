@@ -15,6 +15,8 @@ import com.google.common.truth.Truth.assertThat
 import com.ringdown.mobile.data.store.DeviceIdStore
 import com.ringdown.mobile.domain.RegistrationStatus
 import com.ringdown.mobile.testing.RuntimePermissionRule
+import com.ringdown.mobile.testing.TEST_LIVE_AUTH_TOKEN_ARGUMENT
+import com.ringdown.mobile.testing.TEST_LIVE_AUTH_TOKEN_PROPERTY
 import com.ringdown.mobile.testing.TEST_LIVE_DEVICE_ID_ARGUMENT
 import com.ringdown.mobile.ui.MainUiState
 import com.ringdown.mobile.ui.MainViewModel
@@ -59,18 +61,22 @@ class LiveServiceReconnectAndroidTest {
     lateinit var deviceIdStoreOverride: DeviceIdStore
 
     private lateinit var resolvedDeviceId: String
+    private lateinit var resolvedAuthToken: String
     private lateinit var testDataStoreScope: CoroutineScope
     private lateinit var testDataStore: DataStore<Preferences>
     private var previousRegistrationMode: String? = null
     private var previousTextSessionMode: String? = null
     private var previousLiveDeviceId: String? = null
+    private var previousLiveAuthToken: String? = null
 
     @Before
     fun setUp() {
         resolvedDeviceId = resolveDeviceId()
+        resolvedAuthToken = resolveAuthToken()
         previousRegistrationMode = setSystemProperty(TEST_REGISTRATION_MODE_PROPERTY, "live")
         previousTextSessionMode = setSystemProperty(TEST_TEXT_SESSION_MODE_PROPERTY, "live")
         previousLiveDeviceId = setSystemProperty(TEST_LIVE_DEVICE_ID_PROPERTY, resolvedDeviceId)
+        previousLiveAuthToken = setSystemProperty(TEST_LIVE_AUTH_TOKEN_PROPERTY, resolvedAuthToken)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         testDataStoreScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val storeFile = context.cacheDir.resolve("live_device_datastore.preferences_pb")
@@ -87,7 +93,7 @@ class LiveServiceReconnectAndroidTest {
             testDataStore.edit { prefs ->
                 prefs[deviceKey] = resolvedDeviceId
                 prefs.remove(agentKey)
-                prefs.remove(authKey)
+                prefs[authKey] = resolvedAuthToken
                 prefs.remove(resumeKey)
             }
         }
@@ -96,6 +102,7 @@ class LiveServiceReconnectAndroidTest {
             fields = mapOf(
                 "path" to storeFile.absolutePath,
                 "deviceId" to resolvedDeviceId,
+                "authTokenConfigured" to true,
             ),
         )
         deviceIdStoreOverride = DeviceIdStore(testDataStore)
@@ -112,6 +119,7 @@ class LiveServiceReconnectAndroidTest {
         restoreSystemProperty(TEST_REGISTRATION_MODE_PROPERTY, previousRegistrationMode)
         restoreSystemProperty(TEST_TEXT_SESSION_MODE_PROPERTY, previousTextSessionMode)
         restoreSystemProperty(TEST_LIVE_DEVICE_ID_PROPERTY, previousLiveDeviceId)
+        restoreSystemProperty(TEST_LIVE_AUTH_TOKEN_PROPERTY, previousLiveAuthToken)
     }
 
     @Test
@@ -214,6 +222,19 @@ class LiveServiceReconnectAndroidTest {
             .ifBlank { System.getProperty(TEST_LIVE_DEVICE_ID_PROPERTY).orEmpty() }
             .ifBlank { System.getenv("LIVE_TEST_MOBILE_DEVICE_ID").orEmpty() }
             .ifBlank { DEFAULT_DEVICE_ID }
+    }
+
+    private fun resolveAuthToken(): String {
+        val arguments = InstrumentationRegistry.getArguments()
+        return arguments.getString(TEST_LIVE_AUTH_TOKEN_ARGUMENT).orEmpty()
+            .ifBlank { System.getProperty(TEST_LIVE_AUTH_TOKEN_PROPERTY).orEmpty() }
+            .ifBlank { System.getenv("LIVE_TEST_MOBILE_AUTH_TOKEN").orEmpty() }
+            .ifBlank {
+                error(
+                    "Live auth token missing. Provide liveAuthToken instrumentation arg or " +
+                        "LIVE_TEST_MOBILE_AUTH_TOKEN."
+                )
+            }
     }
 
     private fun ActivityScenario<MainActivity>.awaitConnectedState(

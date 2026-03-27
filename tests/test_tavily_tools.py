@@ -13,12 +13,12 @@ pytestmark = pytest.mark.integration
 HAS_KEY = bool(os.getenv("TAVILY_API_KEY"))
 
 
-def _skip_if_no_key():
+def _require_key():
     if not HAS_KEY:
-        pytest.skip("TAVILY_API_KEY not set – skipping live Tavily tests", allow_module_level=True)
+        raise RuntimeError("TAVILY_API_KEY must be set for live Tavily tests")
 
 
-_skip_if_no_key()
+_require_key()
 
 
 def test_search_live():
