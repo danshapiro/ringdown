@@ -1,0 +1,97 @@
+Ringdown Android Local-Audio Rearchitecture Plan
+===============================================
+
+Context
+-------
+- Legacy Daily Pipecat managed A/V dependency has been removed; handset now runs the local sherpa-onnx stack end to end.
+- Backend now issues `/v1/mobile/text/session` WebSocket bootstrap details directly so all token streaming stays on-device.
+- Goal: shift to fully on-device audio pipeline (VAD, STT, TTS) using sherpa-onnx initially, while leaving room to experiment with Piper or Kokoro-onnx.
+- Requirement: stream litellm tokens directly to the handset as text; handset synthesizes speech locally and captures microphone input locally for transcription/turn-taking.
+
+High-Level Architecture Changes
+-------------------------------
+1. Replace Daily session bootstrap with a lightweight WebSocket text-stream protocol between handset and backend for litellm token streaming.
+2. Removed managed A/V dependency paths (`ManagedAVClient`, `VoiceSessionRepository`, Daily CallClient) and introduced a new session API that:
+   - Authenticates devices.
+   - Provides conversation metadata, agent config, and stream endpoints for upstream (user text) and downstream (assistant tokens).
+3. Android app gains local audio engine module managing:
+   - Microphone capture -> VAD gating -> local STT (initially sherpa-onnx speech recognition).
+   - Text output pipeline -> local TTS (sherpa-onnx) -> audio playback.
+   - Turn-taking and barge-in, possibly via local VAD plus text-driven heuristics.
+4. Backend adjustments to support bidirectional text streams, tool usage, and state persistence independent of Twilio/TTS.
+
+Android Workstreams
+-------------------
+*Streaming/Networking*
+- Choose transport: likely persistent WebSocket to `/ws/mobile` with JSON frames:
+  - Upstream messages: `{type: "user_utterance", text, metadata}`.
+  - Downstream messages: incremental litellm tokens, tool markers, control messages.
+- Handle reconnection, backoff, heartbeats, and resume conversation state.
+- Ensure TLS pinning / auth (reuse existing mobile token or issue new signed JWT).
+
+*Audio Input Pipeline*
+- Integrate sherpa-onnx streaming ASR for on-device STT.
+  - Evaluate available models that fit size/latency constraints.
+  - Package models via Android dynamic feature or on-demand download.
+  - Abstract behind an interface so Piper/Kokoro swap in later.
+- Implement local VAD (sherpa-onnx includes VAD; evaluate alternatives) to trigger end-of-turn detection.
+
+*Audio Output Pipeline*
+- Integrate sherpa-onnx TTS; design engine facade with pluggable backends (SherpaTtsEngine, PiperTtsEngine, KokoroTtsEngine).
+- Manage audio buffers for streaming playback as tokens arrive; support prosody adjustments via SSML-like markup where possible.
+- Handle barge-in (pause playback when VAD detects speech) and resume playback gracefully.
+
+*Conversation State & UI*
+- Refactor `VoiceSessionController`:
+  - Remove Daily CallClient references, replace with `TextSessionClient`.
+  - Maintain transcripts using local STT results and assistant tokens.
+  - Manage session lifecycle (start/stop, retries) and sync with UI state.
+- Update UI to reflect connection status, errors, missing local model downloads.
+
+*Tool/Control Harness*
+- Revisit control harness concept; deterministic prompts now originate locally.
+- Decide whether to keep remote control channel for QA (maybe convert to text injection).
+
+Backend Workstreams
+-------------------
+- Create new mobile session API returning conversation token + websocket URL instead of Daily credentials.
+- Extend websocket handler to support mobile text mode:
+  - Accept authenticated mobile connections.
+  - Allow clients to send recognized text instead of relying on Twilio transcripts.
+  - Stream litellm tokens as text frames (existing logic already emits tokens; ensure format is mobile-friendly).
+  - Provide markers for tool execution, hold music hints (client can choose local audio cues).
+- ✅ Removed dependencies on Daily-managed sessions when user agent is `android_local_audio`.
+- Update `config.yaml` schema for device capability flags (e.g., `audio_mode: local` vs `cloud`).
+- Ensure conversation logging continues (store user/assistant text).
+
+Testing Strategy
+----------------
+High early priority: harnesses so we can run the app, inject and read all types of input/output (including sending sythesized audio and extracting synthesized audio leveraging [live_test_all_functions.py](tests/live_test_all_functions.py) as an example), reading all logs, etc. Stand up the harness alongside feature spikes and keep rerunning it as each step lands.
+- Unit tests:
+  - Android: isolate TTS/STT engine wrappers, VAD gating, token streaming client.
+  - Backend: websocket contract tests ensuring valid frame sequences for mobile mode.
+
+Migration & Rollout Considerations
+----------------------------------
+- ✅ Managed A/V removal: deleted legacy integrations and scrubbed remaining Daily references (telephony via Twilio ConversationRelay remains independent).
+- Model distribution: evaluate APK size; consider first-run download with checksum verification.
+- Observability: structured logs from handset (JSONL) to diagnose on-device pipeline; telemetry for latency, synthesis duration, ASR accuracy.
+- Security: ensure token streams are encrypted; sanitize logs to avoid leaking transcripts.
+- Offline mode: define expected behavior when network unreachable mid-turn (queue utterances? prompt user?). 
+- Battery usage: monitor and optimize; consider pausing STT when screen off or app backgrounded.
+
+Open Questions / Options
+------------------------
+- Transport: WebSocket is the baseline; keep an eye on whether gRPC streaming or MQTT warrants a follow-up spike for reliability or telemetry.
+- Model management: bundle baseline models vs dynamic download; compatibility with Play Store size limits.
+- Multi-agent support: does local engine need multi-language voices? plan for model switching per agent?
+- Tool audio cues: replicate “thinking” sound locally or rely on text prompts?
+- Backward compatibility: maintaining Twilio path for PSTN callers while handset uses local pipeline.
+- QA harness: adapt `tests/live/handset_audio_loop.py` for local audio capture (maybe bypass).
+
+Next Steps
+----------
+1. Prototype websocket text streaming endpoint + minimal Android client to echo tokens.
+2. Evaluate sherpa-onnx ASR/TTS performance on reference handset (Pixel 9).
+3. Draft detailed interface contracts for `TextSessionClient`, `LocalTtsEngine`, and `LocalAsrEngine`.
+4. Define migration plan: flag device to local mode, run smoke tests, iterate.

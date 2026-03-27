@@ -1,0 +1,164 @@
+Ringdown Android Client UX Specification
+Date: 2025-10-25
+
+1. Purpose
+- Deliver a personal, data-only Android interface for the existing Ringdown backend.
+- Prioritise hands-free voice use while enabling manual text chat as an alternate mode.
+- Maintain feature parity with the current Twilio voice experience (agents, tools, prompts) without expanding scope beyond flows discussed here.
+
+2. Core Assumptions
+- Single trusted user per phone and per bot, with only a handful of users total, but multiple preconfigured personas exist in backend config (mirrors caller-ID agents today).
+- Legacy Pipecat/Daily managed A/V transport has been retired; the Android client now relies exclusively on the local audio pipeline backed by the mobile text WebSocket.
+- Credentials are baked into the app build; no login or user-managed auth inside the UI.
+- Bluetooth audio accessories are commonly in use; the user may be driving and unable to interact with the screen once a session starts.
+
+3. Application States
+- Pending device approval (first run on an unregistered device).
+- Idle main screen (no active voice session).
+- Active voice session.
+- Chat session (voice suspended).
+- Automatic reconnection loop after an unexpected disconnect.
+
+4. Launch and Device Registration Flow
+→ See mockup: mockup-1-pending-approval.html
+
+- On first launch, the app generates or retrieves a stable device identifier and calls the backend registration endpoint.
+- If the backend recognises the device (enabled in config.yaml), the app proceeds directly into the standard voice flow described below.
+- If the backend does not recognize it, it auto-adds the device as disabled, and the app receives a pending response. Behaviour:
+  - Show a blocking modal dialog that explains approval is required.
+  - Provide a single primary action labeled Check again. Each tap re-issues the registration check.
+  - The dialog remains visible between checks. When the backend flips the entry to enabled, the next check immediately dismisses the dialog and transitions into voice call startup without returning to the idle screen.
+  - No other navigation or features are available while pending.
+
+5. Permissions Handling
+→ See mockup: mockup-7-permission-denied.html
+
+- Whenever the app attempts to start or resume a voice session (including automatic launch connect, manual reconnect, or background auto-retry), it first verifies RECORD_AUDIO and any required Bluetooth permissions.
+- If permissions are missing, surface the system permission sheet immediately.
+- If the user denies, treat it exactly like a user-initiated hangup: stop trying to connect, display the idle main screen, and surface inline text under the Reconnect button noting Voice permissions required. The next attempt to connect re-triggers the sheet.
+
+6. Idle Main Screen
+→ See mockup: mockup-2-idle-main.html
+
+- Visible only when no voice call and no pending approval dialog.
+- Layout: app background + two primary buttons stacked vertically or center-aligned: Reconnect (or Connect on first load) and Open Chat. No additional text, status, or chrome.
+- Motion: replicate button press states, hover/pressed elevation changes, and any idle-to-pending transitions shown in the mockup. Use your best judgment if animation timings are unspecified.
+- Tapping Reconnect initiates the voice session flow described below.
+- Tapping Open Chat switches to the chat session 3as described in Section 8.
+- **Implementation note:** Mirror the layout, spacing, typography, and button treatments in the referenced mockup exactly. Treat the HTML mockup as source of truth for paddings, corner radii, and type ramp.
+
+7. Voice Session Experience
+→ See mockups: mockup-3-voice-active.html (active session), mockup-4-voice-reconnecting.html (reconnecting state), mockup-8-background-notification.html (backgrounded)
+
+- Transport handshake (Local text WebSocket):
+  - After permissions and registration succeed, request `POST /v1/mobile/text/session` with the device id (and optional agent override) to obtain a session token, resume token, websocket path, heartbeat intervals, and TLS pin set.
+  - Instantiate `TextSessionClient` with the resolved websocket endpoint, attach structured logging, and connect using the provided session token. Persist the returned resume token after every successful handshake so reconnect attempts can rehydrate without user interaction.
+  - LocalVoiceSessionController owns reconnection loops: on heartbeat timeout or network loss, stop Sherpa engines, call `TextSessionStarter.startTextSession()` with the last agent hint, and resume playback once a new session is ready.
+- Conversation bridging and timing:
+  - The mobile text WebSocket is the source of truth for transcripts. Partial ASR hypotheses from Sherpa update on-screen captions; final transcripts invoke `sendUserToken`/`sendUserMessage` so the backend logs the turn (speaker=`user`, source=`android-local`).
+  - Assistant text arrives as `assistant_token` frames; LocalVoiceSessionController streams it into the transcript state and feeds local TTS. Preserve messageType markers (e.g., `greeting`, `tool_event`) so UI chips remain accurate.
+  - Track heartbeat and resume TTL values returned by the handshake. Begin reconnect attempts before TTL expiry to avoid the server invalidating the session token.
+- Model and voice selection:
+  - Agent configuration in `config.yaml` maps to local model identifiers (ASR + TTS). Switching voices/models remains a config-only change as long as assets are packaged via `prepare_local_models`.
+  - Maintain compatibility with future downloadable voices by funnelling overrides through the same agent metadata that seeds `TextSessionBootstrap`.
+- Screen: The voice UI still presents a single large Hang Up button centered vertically and horizontally occupying 50% of screen width; no additional chrome.
+- Audio routing: Request Bluetooth SCO routing as soon as `LocalVoiceSessionController` reports `Connected` and hold it while available. If Bluetooth drops, fall back to speakerphone automatically. No manual route picker.
+- Backgrounding: If the app loses foreground focus, leave `TextSessionClient` connected, keep the Sherpa ASR/TTS engines active, and persist an ongoing-call notification with only a Hang Up action. When the user taps Hang Up in the notification, stop the audio engines, disconnect the websocket, notify the backend to end the conversation turn, and return to the idle main screen.
+- Unexpected disconnects (network, backend error, heartbeat timeout):
+  - Immediately play the local reconnecting audio loop and surface the reconnect banner with contextual copy (include backend-provided reason if available).
+  - Kick off an automatic reconnect loop (up to 1 minute) that calls `TextSessionStarter.startTextSession()` to refresh session/resume tokens before reconnecting `TextSessionClient`. Backoff 3–5 seconds between attempts to avoid hammering the backend.
+  - The Hang Up button remains available at all times. When pressed, cancel any in-flight reconnect, close the peer connection, and return to idle.
+  - On successful reconnect, stop the local loop audio, clear banners, and resume normal audio playback where the conversation left off.
+- **Implementation note:** Maintain parity with mockup visuals (button dimensions, banner placement, notification copy). Log and track any deviations, especially around motion cues (reconnect banner animation, hang up press feedback), and record all session + handshake errors to the existing telemetry sink for backend tuning.
+
+8. Mode Switching Between Voice and Chat
+- Hang Up button (during active call) ends the current session and transitions to the idle main screen.
+- From the idle main screen, tapping Open Chat immediately enters chat mode.
+- Within chat mode, a persistent control labeled Voice sits in the header. Activating it closes chat and starts the voice connection flow (respecting permissions) without a separate confirmation.
+- The voice mode has a timeout where it reconnects to the same session by default if it's been less than 5 min. Use of the chat client is counted towards this timeout.
+- The chat system does not have a timeout; it always picks up the previous system.
+
+9. Chat Session Experience
+→ See mockups: mockup-5-chat-session.html (chat interface), mockup-6-chat-tool-expanded.html (expanded tool view)
+
+- Layout: full-height transcript view with newest messages at bottom, streaming updates as chunks arrive from the backend.
+- Content stream: includes assistant turns, user turns (captured via chat or prior voice transcription), system notifications, and tool activity markers sourced from the existing backend message log.
+- Tool visibility: each tool invocation renders as a collapsed pill (e.g., Tool: TavilySearch). Tapping expands an in-place panel showing a user-friendly version of the request/response payload and any structured output the backend surfaces today. Collapse toggles on second tap anywhere within the section.
+- Thinking tokens emitted by the backend render as collapsible blocks similar to tool pills.
+- All pills stack from left to right in the same line, wrapping as needed (not one per line).
+- Composer: single-line text input with Send icon. There is an attachment button which opens the device attachment dialogue; it can support up to 9 attachments.
+- There is a 'reset' button that wipes the conversation and creates a new one.
+- Model selector: header-level dropdown populated from the backend’s permitted models, ordered by most recently used (MRU first, updating whenever the user switches). Selection does not use the change-llm tool but instead innvokes the switch immediately and reflects in subsequent turns. The selector is only present in chat mode.
+
+10. Persistent Conversation Handling
+- The app relies on the backend’s existing message persistence (SQLite state, continue_conversation flag). Voice and chat modes share the same conversation state; ending voice or switching modes never purges history unless the reset tool is invoked via the assistant.
+- The first voice turn after a reset or new session uses the configured welcome greeting defined for the agent associated with the device.
+
+11. Device-to-Agent Mapping
+- Each device is mapped to an agent entry created in config.yaml when it first connects to the backend. The backend is responsible for adding a fully populated entry (device id, friendly label, agent name, enabled flag, and any other fields it requires) when a new device connects, with enabled defaulting to false.
+- The device id must be stable so repeated connections do not generate multiple config entries.
+- The key security mechanism is that no client can do anything except trigger its disabled addition to config.yaml without an admin modifying config.yaml by hand to enable it.
+- The Android app does not edit config.yaml; it simply surfaces pending status and polls until the backend reports the device as enabled.
+- When multiple agents exist for a single user (e.g., Dan, Ina, Elan), enabling the device entry determines which persona handles subsequent sessions. The app reflects whatever agent the backend returns; no in-app selector.
+
+12. Notification Behaviour
+→ See mockup: mockup-8-background-notification.html
+
+- While connected (foreground or background), a single ongoing notification is shown with hang up action only.
+- When the session ends (user hangup or backend disconnect with retries exhausted), remove the notification immediately.
+
+13. Audio Assets
+- The app bundles a reconnecting audio file (provided as an mp3 and converted as needed by the app) for when the reconnect loop starts.
+- No other status tones are introduced beyond whatever the backend streams today (thinking and completion chimes already originate server-side).
+
+14. Error Messaging Summary
+- Missing permissions: idle screen note Voice permissions required until the next connect attempt.
+- Pending approval: blocking dialog with device ID, Check again button, and brief copy instructions.
+- Unexpected disconnect: transient reason banner plus reconnecting audio, followed by silent retries.
+- Registration failure after approval (e.g., backend down): treat as unexpected disconnect with reason from backend.
+
+15. Out of Scope for This Spec
+- Any redesign of backend flows, tool surfaces, or agent prompts.
+- Additional UI beyond the elements described above (no call duration, no manual audio routing, no transcripts during live voice).
+- Scheduling, implementation estimates, or engineering choices (SDKs, LiveKit vs. WebRTC specifics) beyond what is already implemented server-side.
+
+16. Implementation Plan (Agent-Owned)
+- The same engineer (this agent) executes each phase sequentially, validating the build after every major change before moving forward. All repeatable work happens through bash commands that Codex CLI can execute without manual intervention beyond initial Android SDK configuration.
+- Priority: get a branded-but-minimal app rendering on a physical Android phone immediately, then iterate. Use `mobile-next/mobile-mcp` to drive the device from the CLI for every on-device validation.
+
+Phase 0 - Tooling & Project Bootstrap
+- Provision Android command-line tools and required SDKs inside the Codex CLI container using a reproducible script: `bash android/scripts/setup-sdk.sh --api 35 --build-tools 35.0.0` (script will install sdkmanager components and accept licenses non-interactively).
+- Initialise `android/app` with Kotlin + Jetpack Compose single-activity template via `bash android/scripts/init-project.sh` (scaffolds Gradle wrapper, module, package structure, ktlint, `.editorconfig`, and CI workflow stub).
+- Verify Gradle by running `bash android/scripts/gradle.sh ./gradlew tasks` (wrapper script sets JAVA_HOME, ANDROID_HOME, and caches dependencies). Deliverable: empty activity builds and installs on emulator using `bash android/scripts/emulator-smoke.sh`.
+- Connect to the tethered phone with `mobile-mcp` (from https://github.com/mobile-next/mobile-mcp) and push the initial debug build. Build the APK once via `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug`, then install it with `mobile-mcp install_app --device $ANDROID_SERIAL --path android/app/app/build/outputs/apk/debug/app-debug.apk` (wake/unlock the phone first). Because DrvFS can block Gradle's cache moves for `adb`, only fall back to the shell installer if necessary: `GRADLE_USER_HOME=$HOME/.gradle-ringdown bash android/scripts/install.sh --device $ANDROID_SERIAL`. After installation, launch the UI and capture proof via `mobile-mcp run android/scripts/mobile/sanity.mcp`, which drives the pending-approval placeholder and saves a screenshot. Deliverable: minimalist Compose screen visible on the physical phone within this phase.
+- Secrets & config hygiene: place runtime credentials under `android/config/.env` (backend base URL, API tokens) and signing artifacts inside `android/keys/` (e.g., `internal.keystore`, Play Developer service accounts). These paths are gitignored—check in example templates (e.g., `android/config/.env.example`) but never real secrets.
+
+Phase 1 - Core Architecture & Registration Skeleton
+- Implement base packages (`data`, `domain`, `ui`) and Dependency Injection graph (Hilt) via MCP-assisted Kotlin scaffolding commands embedded in `bash android/scripts/generate.sh`.
+- Add device ID persistence and registration API client stubs with Retrofit + OkHttp. Compose idle/pending approval layouts with state machine skeleton (StateFlow + reducers).
+- Declare `android.permission.INTERNET` in the manifest so Retrofit/OkHttp networking succeeds once real endpoints are enabled.
+- Automated checks: `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest`. Deploy to emulator for smoke via `bash android/scripts/install.sh --emulator`. Deliverable: app reaches pending dialog with stubbed backend responses.
+- Extend the `mobile-mcp` automation to run the pending approval flow on-device (launch app, trigger pending dialog, capture screenshot artifact) so every iteration still validates against real hardware.
+    * Current stub behaviour: `StubRegistrationInterceptor` approves on the third poll. Expect to see Attempts increment from 1 → 2 before the idle screen appears. Leave this threshold configurable when wiring real backend.
+    * Device IDs are persisted via `DataStore` under `ringdown_device.preferences_pb`; treat it as opaque and use the provided repository/UseCase plumbing instead of rolling your own.
+    * Hilt is now required for app startup; `RingdownApp` is registered in the manifest. Any new components should request dependencies through DI rather than manual singletons.
+    * **UI fidelity:** For every Compose surface introduced in this phase, replicate the matching mockup in `todo-android-spec/` (e.g., mockup-1-pending-approval.html). Use the document measurements for spacing, typography, and component hierarchy.
+
+Phase 2 – Backend Integration & Permission Handling
+- Connect registration flow to staging backend using environment-configured base URL (`android/config/.env`) loaded by Gradle. Replace stubs with real Retrofit services and WebSocket handshake to register device.
+- Source `BuildConfig.BACKEND_BASE_URL` from build-type or flavor configuration instead of a single hard-coded string so release builds target production.
+- Gate the stub interceptor behind a debug-only variant or feature flag to keep production traffic on the real backend.
+- Surface server-provided polling hints by plumbing `pollAfterSeconds` (or equivalent) from the Retrofit DTO through domain models and into the ViewModel retry strategy.
+- Wire permission manager (Accompanist) and ensure denied permissions revert to idle with inline messaging.
+- Track permission result transitions explicitly (e.g. observe status via `snapshotFlow` or keyed `LaunchedEffect`) so reconnect/error handlers run immediately after the system dialog closes.
+- `.env` contract: require `STAGING_BACKEND_BASE_URL`, `PRODUCTION_BACKEND_BASE_URL`, `DEBUG_USE_REGISTRATION_STUB`, and `DEBUG_STUB_APPROVAL_THRESHOLD` (all build variants read via Gradle at configuration time). Backend URLs must include the trailing slash so Retrofit base URLs resolve correctly.
+- Debug builds honour runtime overrides for the registration stub via `DebugFeatureFlags`; instrumentation switches the stub off while hijacking traffic to the local `MockWebServer`.
+- Provide an instrumentation-only Hilt module (or equivalent) that overrides the Retrofit base URL with `mockWebServer.url("/")` so registration polls never escape the test harness.
+- Automation: `bash android/scripts/mock-server.sh start` (spawns MockWebServer for CI), run integration tests `bash android/scripts/gradle.sh ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=...RegistrationSuite`, then stop mock server script.
+- Instrumented tests use `HiltTestApplication` (`src/androidTest/AndroidManifest.xml`) so any new instrumentation must stay compatible with Hilt injection.
+- `mock-server.sh` wraps `android/scripts/mock_server.py` so CI and local workflows get consistent behaviour (configurable port, approval threshold, and poll hint). Use the script instead of invoking the Python module directly.
+- Known gap: Gradle `:app:assembleDebug` currently fails under WSL due to AAPT2 spawn helper issues (`Failed to exec spawn helper`). Run the Phase 2 automation on native Linux/macOS until the WSL environment is configured with metadata or an ext4-backed workspace so AAPT2 can launch.
+- After resolving AAPT2, immediately run `bash android/scripts/gradle.sh ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest` followed by `bash android/scripts/gradle.sh ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.ringdown.registration.RegistrationSuite`.
+- Deploy to USB device with `bash android/scripts/install.sh --device $ANDROID_SERIAL` (Codex CLI sets serial). Deliverable: device auto-registers and transitions to idle when backend approval flips.
+
+Phase 3 (legacy Realtime Voice MVP) has been superseded by the local audio architecture; see current beads for remaining handset work.

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sherpa TTS Demo</string>
+    <string name="status_initial">Preparing to synthesize sample paragraph…</string>
+</resources>

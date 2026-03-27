@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Ringdown</string>
+    <string name="connect_button">Connect</string>
+    <string name="reconnect_button">Reconnect</string>
+    <string name="open_chat_button">Open chat</string>
+    <string name="voice_permissions_required">Voice permissions required.</string>
+    <string name="check_again">Check again</string>
+    <string name="pending_dialog_title">Approval required</string>
+    <string name="pending_dialog_body">Device ID %1$s is pending approval. Ask your admin to enable it in config.yaml.</string>
+    <string name="permission_rationale">Ringdown needs microphone access for voice calls.</string>
+    <string name="hang_up_button">Hang up</string>
+    <string name="voice_connecting_message">Connecting to your assistant...</string>
+    <string name="voice_reconnecting_message">Reconnecting… hold tight.</string>
+    <string name="voice_session_title">Live conversation</string>
+    <string name="voice_transcript_empty">Waiting for the first response...</string>
+    <string name="voice_notification_channel">Live assistant</string>
+    <string name="voice_notification_title">Ringdown</string>
+    <string name="voice_notification_connected">Live assistant active</string>
+    <string name="voice_notification_connecting">Connecting to your assistant…</string>
+    <string name="voice_notification_reconnecting">Reconnecting to your assistant…</string>
+    <string name="control_capture_notification_title">Harness capture active</string>
+    <string name="control_capture_notification_text">Capturing playback audio for debugging.</string>
+    <string name="control_capture_notification_channel">Debug audio capture</string>
+    <string name="chat_close_button">Close</string>
+    <string name="chat_voice_button">Voice</string>
+    <string name="chat_reset_button">Reset</string>
+    <string name="chat_input_placeholder">Type a message…</string>
+    <string name="chat_send_button">Send</string>
+    <string name="chat_connecting">Connecting to your assistant…</string>
+    <string name="chat_reconnecting">Reconnecting… we’ll restore your chat shortly.</string>
+    <string name="chat_empty_state">Start typing to chat with your assistant.</string>
+    <string name="chat_retry_button">Retry</string>
+    <string name="chat_tool_title">Tool: %1$s</string>
+    <string name="chat_tool_generic">Tool event</string>
+    <string name="chat_tool_expand_hint">Tap to view tool details</string>
+</resources>

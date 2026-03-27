@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+"""Manual harness for exercising the Android realtime voice flow.
+
+The harness is intentionally simple (stub) until automated mic loopback is wired.
+It ensures an adb-connected device is available, launches the Ringdown app,
+and streams relevant logcat output so the engineer can verify audio flowing
+in both directions.
+"""
+
+import argparse
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Optional, Sequence, TextIO
+
+
+DEFAULT_ACTIVITY = "com.ringdown.mobile.debug/com.ringdown.mobile.MainActivity"
+DEFAULT_FAIL_EVENTS = (
+    "local_voice.start_failed",
+    "local_voice.stop_job_timeout",
+    "local_voice.reconnect_failure",
+    "chat_session.start_failed",
+)
+DEFAULT_SUCCESS_EVENTS = (
+    "local_voice.start_requested",
+    "local_voice.stop_success",
+)
+
+
+def _run_adb(device: Optional[str], *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    cmd = ["adb"]
+    if device:
+        cmd.extend(["-s", device])
+    cmd.extend(args)
+    return subprocess.run(cmd, check=check, capture_output=True, text=True)
+
+
+def _ensure_device(device: Optional[str]) -> str:
+    try:
+        result = _run_adb(None, "devices")
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:  # pragma: no cover - defensive
+        raise RuntimeError("Failed to invoke adb. Is the Android SDK installed?") from exc
+
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    connected = [line.split("\t")[0] for line in lines[1:] if "\tdevice" in line]
+
+    if not connected:
+        raise RuntimeError("No adb devices connected. Plug in a handset or emulator.")
+
+    if device:
+        if device not in connected:
+            raise RuntimeError(f"Requested device '{device}' is not connected (found: {connected}).")
+        return device
+
+    if len(connected) > 1:
+        raise RuntimeError(
+            f"Multiple devices detected ({connected}). Pass --device to select one explicitly.",
+        )
+    return connected[0]
+
+
+def _wake_device(device: str) -> None:
+    _run_adb(device, "shell", "input", "keyevent", "KEYCODE_WAKEUP")
+    _run_adb(device, "shell", "input", "keyevent", "KEYCODE_MENU")
+
+
+def _launch_activity(device: str, component: str) -> None:
+    _run_adb(
+        device,
+        "shell",
+        "am",
+        "start",
+        "-n",
+        component,
+        "-a",
+        "android.intent.action.MAIN",
+        "-c",
+        "android.intent.category.LAUNCHER",
+    )
+
+
+def _tail_logcat(device: str) -> subprocess.Popen[str]:
+    cmd = [
+        "adb",
+        "-s",
+        device,
+        "logcat",
+        "-T",
+        "1",
+        "VoiceSession:D",
+        "RingdownApp:D",
+        "*:S",
+    ]
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+
+def _forward_logs(
+    process: subprocess.Popen[str],
+    log_fp: Optional[TextIO],
+    failure_event: threading.Event,
+    success_event: threading.Event,
+    fail_on_error: bool,
+    fail_events: Sequence[str],
+    success_events: Sequence[str],
+) -> threading.Thread:
+    def _reader() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            text = line.rstrip()
+            print(text)
+            if log_fp is not None:
+                log_fp.write(text + "\n")
+                log_fp.flush()
+            if fail_on_error and any(token in text for token in fail_events):
+                print(f"Detected failure event in logcat: {text}", file=sys.stderr)
+                failure_event.set()
+                break
+            if success_events and any(token in text for token in success_events):
+                success_event.set()
+                if not fail_on_error:
+                    # continue streaming in case user wants full session
+                    continue
+
+    thread = threading.Thread(target=_reader, daemon=True)
+    thread.start()
+    return thread
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Manual realtime voice harness")
+    parser.add_argument("--device", help="ADB device serial (optional)")
+    parser.add_argument(
+        "--activity",
+        default=DEFAULT_ACTIVITY,
+        help=f"Activity component to launch (default: {DEFAULT_ACTIVITY})",
+    )
+    parser.add_argument(
+        "--log-output",
+        type=Path,
+        help="Optional path to write captured logcat lines (overwrites if exists)",
+    )
+    parser.add_argument(
+        "--duration",
+        type=int,
+        help="Automatically stop after N seconds (default: run until Ctrl+C)",
+    )
+    parser.add_argument(
+        "--fail-event",
+        action="append",
+        default=[],
+        help="Additional log substrings that should stop the harness (repeatable).",
+    )
+    parser.add_argument(
+        "--no-fail-on-error",
+        action="store_true",
+        help="Do not stop the harness when failure events are observed.",
+    )
+    parser.add_argument(
+        "--success-event",
+        action="append",
+        default=[],
+        help="Log substrings that mark success; harness stops once observed (repeatable).",
+    )
+    return parser.parse_args(argv)
+
+
+def main() -> int:
+    if shutil.which("adb") is None:
+        print("adb not found on PATH. Install Android platform-tools.", file=sys.stderr)
+        return 2
+
+    args = parse_args()
+
+    try:
+        device = _ensure_device(args.device)
+    except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    print(f"Using adb device: {device}")
+    _wake_device(device)
+    _launch_activity(device, args.activity)
+
+    print()
+    print("=== Manual Voice Session Harness (stub) ===")
+    print("1. Verify the app is visible and approved.")
+    print("2. On the device, tap Reconnect to start the realtime session.")
+    print("3. Speak into the microphone; expect assistant audio playback.")
+    print("4. Press Hang up on the device or Ctrl+C here to stop.")
+    print()
+
+    log_fp: Optional[TextIO] = None
+    if args.log_output:
+        log_path = args.log_output.expanduser()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fp = log_path.open("w", encoding="utf-8")
+        print(f"Writing logcat output to {log_path}")
+
+    process = _tail_logcat(device)
+    failure_event = threading.Event()
+    success_event = threading.Event()
+    fail_events: list[str] = list(DEFAULT_FAIL_EVENTS)
+    fail_events.extend(args.fail_event or [])
+    success_events: list[str] = list(DEFAULT_SUCCESS_EVENTS)
+    success_events.extend(args.success_event or [])
+    thread = _forward_logs(
+        process,
+        log_fp,
+        failure_event,
+        success_event,
+        fail_on_error=not args.no_fail_on_error,
+        fail_events=fail_events,
+        success_events=success_events,
+    )
+
+    try:
+        if args.duration and args.duration > 0:
+            print(f"Harness will stop automatically after {args.duration} seconds...")
+            deadline = time.monotonic() + args.duration
+            while thread.is_alive():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or failure_event.is_set() or success_event.is_set():
+                    print("\nDuration elapsed; stopping harness...")
+                    break
+                thread.join(timeout=min(remaining, 1.0))
+        else:
+            while thread.is_alive():
+                thread.join(timeout=1.0)
+                if failure_event.is_set():
+                    print("\nFailure event detected; stopping harness...")
+                    break
+                if success_event.is_set():
+                    print("\nSuccess event detected; stopping harness...")
+                    break
+    except KeyboardInterrupt:
+        print("\nStopping harness...")
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:  # pragma: no cover - defensive cleanup
+            process.kill()
+        if log_fp is not None:
+            log_fp.close()
+
+    if failure_event.is_set() and not args.no_fail_on_error:
+        print("Harness exiting with failure status due to detected error.", file=sys.stderr)
+        return 1
+
+    if success_event.is_set():
+        print("Harness observed success event; exiting cleanly.")
+    else:
+        print("Harness completed without observing a success event.")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

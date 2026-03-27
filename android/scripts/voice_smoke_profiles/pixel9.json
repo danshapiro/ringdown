@@ -1,0 +1,12 @@
+{
+  "activity": "com.ringdown.mobile.debug/com.ringdown.mobile.MainActivity",
+  "duration": 180,
+  "logOutput": "logs/local_voice_smoke_pixel9.log",
+  "reconnectTap": [540, 1750],
+  "reconnectDelay": 3.0,
+  "hangupTap": [540, 2300],
+  "hangupDelay": 2.0,
+  "failEvents": ["local_voice.terminateWithFailure"],
+  "successEvents": ["local_voice.start_requested"],
+  "extraHarnessArgs": []
+}
