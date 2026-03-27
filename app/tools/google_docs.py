@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -38,10 +39,13 @@ logger = logging.getLogger(__name__)
 _agent_context = threading.local()
 
 # Google API scopes needed for Docs and Drive operations
+# - documents: Full access to Google Docs for create/read/edit operations
+# - drive.file: Create and manage files created by the app (for CreateGoogleDoc, AppendGoogleDoc)
+# - drive.readonly: Read any file in Drive (for ReadGoogleDoc, SearchGoogleDrive)
 SCOPES = [
     "https://www.googleapis.com/auth/documents",
     "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
 ]
 
 # Known MIME types for Markdown files stored in Google Drive
@@ -499,6 +503,7 @@ class SearchDriveArgs(BaseModel):
     query: str = Field(..., description="Text to match when searching Google Drive. Use defaults unless specified otherwise.")
     titles_only: bool = Field(True, description="Default true to only search file titles; false searches titles and content")
     docs_only: bool = Field(True, description="Default true to restrict results to Google Docs files; false includes sheets, pdfs, etc.")
+    max_results: int = Field(50, description="Maximum number of results to return.")
 
     @field_validator("query")
     @classmethod
@@ -507,6 +512,13 @@ class SearchDriveArgs(BaseModel):
         if not trimmed:
             raise ValueError("Search query cannot be empty.")
         return trimmed
+
+    @field_validator("max_results")
+    @classmethod
+    def validate_max_results(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("max_results must be greater than zero.")
+        return value
 
 
 @register_tool(
@@ -519,6 +531,13 @@ def search_google_drive(args: SearchDriveArgs) -> Dict[str, Any]:
     try:
         _, drive_service = _get_services()
 
+        runtime_limit_seconds = 30.0
+        start_time = time.monotonic()
+        max_results = args.max_results
+        page_count = 0
+        truncated = False
+        truncation_reason: Optional[str] = None
+
         escaped_term = _escape_drive_query_term(args.query)
 
         if args.titles_only:
@@ -530,38 +549,93 @@ def search_google_drive(args: SearchDriveArgs) -> Dict[str, Any]:
 
         if args.docs_only:
             query_parts.insert(1, "mimeType='application/vnd.google-apps.document'")
+        else:
+            # Exclude folders from search results
+            query_parts.insert(1, "mimeType!='application/vnd.google-apps.folder'")
 
         query = " and ".join(query_parts)
 
         results: List[Dict[str, str]] = []
         page_token: Optional[str] = None
+        elapsed = 0.0
 
         while True:
+            remaining_budget = max_results - len(results)
+            if remaining_budget <= 0:
+                truncated = True
+                truncation_reason = "max_results"
+                break
+
+            page_size = min(100, remaining_budget)
+            if page_size <= 0:
+                page_size = 1
+
             response = drive_service.files().list(
                 q=query,
                 spaces="drive",
-                fields="nextPageToken, files(id, name)",
+                fields="nextPageToken, files(id, name, mimeType)",
                 pageToken=page_token,
-                pageSize=100,
+                pageSize=page_size,
+                orderBy="modifiedTime desc",
             ).execute()
+            page_count += 1
 
             for file in response.get("files", []):
                 results.append({
                     "id": file.get("id", ""),
                     "name": file.get("name", ""),
+                    "mimeType": file.get("mimeType", ""),
                 })
+                if len(results) >= max_results:
+                    break
+
+            if len(results) >= max_results:
+                truncated = True
+                truncation_reason = "max_results"
+                break
 
             page_token = response.get("nextPageToken")
+            elapsed = time.monotonic() - start_time
+
+            if elapsed >= runtime_limit_seconds:
+                truncated = True
+                truncation_reason = "runtime_limit"
+                break
+
             if not page_token:
                 break
 
+        elapsed = time.monotonic() - start_time
+
+        if page_token and not truncated:
+            truncated = True
+            truncation_reason = "unconsumed_page"
+
+        logger.debug(
+            "SearchGoogleDrive telemetry query=%s titles_only=%s docs_only=%s "
+            "results=%d pages=%d elapsed=%.2fs truncated=%s reason=%s",
+            args.query,
+            args.titles_only,
+            args.docs_only,
+            len(results),
+            page_count,
+            elapsed,
+            truncated,
+            truncation_reason,
+        )
+
         return {
             "success": True,
-            "results": results,
+            "results": results[:max_results],
             "count": len(results),
             "query": args.query,
             "titles_only": args.titles_only,
             "docs_only": args.docs_only,
+            "max_results": max_results,
+            "truncated": truncated,
+            "truncation_reason": truncation_reason,
+            "runtime_seconds": round(elapsed, 2),
+            "pages_fetched": page_count,
         }
 
     except Exception as exc:

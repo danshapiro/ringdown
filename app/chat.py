@@ -7,6 +7,7 @@ import asyncio  # Needed for async tool execution with thinking sounds
 import inspect
 
 import litellm
+import openai  # For RateLimitError - litellm maps all 429s to this
 
 
 def acompletion(*args, **kwargs):
@@ -14,9 +15,11 @@ def acompletion(*args, **kwargs):
 
     return litellm.acompletion(*args, **kwargs)
 
+
 from log_love import setup_logging
 
 from . import tool_framework as tf
+
 # Tool orchestration
 from .tool_runner import ToolRunner, ToolEvent  # centralised tool handling
 from . import settings as _settings
@@ -29,6 +32,7 @@ import os
 # URLs for sound effects (absolute URLs provided via env vars when deployed)
 _THINKING_SOUND_URL = os.getenv("SOUND_THINKING_URL", "/sounds/thinking.mp3")
 _FINISHED_SOUND_URL = os.getenv("SOUND_FINISHED_URL", "/sounds/finished.mp3")
+
 
 # Classification of tools for usage limits
 def _classify_tool(name: str) -> str:
@@ -92,6 +96,7 @@ logger = setup_logging()
 # Utilities
 # ---------------------------------------------------------------------------
 
+
 def _json_default(obj: Any) -> Any:
     """Best-effort encoder for objects not naturally serialisable."""
 
@@ -137,6 +142,48 @@ def _safe_json_dumps(payload: Any) -> str:
         logger.error("Failed to serialise payload to JSON: %s", exc, exc_info=True)
         fallback = {"error": "serialization_failed", "repr": repr(payload)}
         return json.dumps(fallback, ensure_ascii=True)
+
+
+def _preview_text(text: str, limit: int = 160) -> str:
+    """Collapse whitespace and trim long strings for logging."""
+
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    if limit <= 3:
+        return collapsed[:limit]
+    return collapsed[: limit - 3] + "..."
+
+
+def _preview_payload(payload: Any, limit: int = 160) -> str:
+    """Return a string preview suitable for logging markers."""
+
+    if isinstance(payload, str):
+        return _preview_text(payload, limit=limit)
+    return _preview_text(_safe_json_dumps(payload), limit=limit)
+
+
+def _context_label(ctx: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Extract a stable identifier from *ctx* for log correlation."""
+
+    if not ctx:
+        return None
+    for key in ("conversation_id", "call_sid", "session_id", "request_id"):
+        value = ctx.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _log_marker(event: str, **fields: Any) -> None:
+    """Emit a structured log line that downstream tooling can detect."""
+
+    payload = {"event": event}
+    for key, value in fields.items():
+        if value is not None:
+            payload[key] = value
+    logger.info("RD_MARKER %s", _safe_json_dumps(payload))
+
 
 # ---------------------------------------------------------------------------
 # ToolRunner configuration (status + thinking sounds) – sourced from config.yaml
@@ -187,7 +234,7 @@ async def stream_response(
     the original single-turn behaviour.
 
     The underlying call is delegated to :pyfunc:`litellm.acompletion`.
-    
+
     Yields:
         str: Regular text tokens from the LLM response
         dict: Special markers (e.g., {"type": "tool_executing"}) to signal
@@ -196,7 +243,12 @@ async def stream_response(
               termination.
     """
 
-    logger.debug("LLM request (model=%s, tools enabled=%s): %s", agent["model"], bool(agent.get("tools")), user_text)
+    logger.debug(
+        "LLM request (model=%s, tools enabled=%s): %s",
+        agent["model"],
+        bool(agent.get("tools")),
+        user_text,
+    )
 
     # Propagate agent configuration to all tool modules (e.g., for greenlists)
     tf.set_agent_context(agent)
@@ -230,6 +282,7 @@ async def stream_response(
             # Vertex/Gemini models reject certain JSON-Schema keywords like
             # "exclusiveMinimum".  Strip them out when target model is Gemini.
             if any(k in agent["model"].lower() for k in ("gemini", "vertex")):
+
                 def _clean(d: dict):
                     if isinstance(d, dict):
                         # Remove problematic numeric-bound keywords
@@ -256,11 +309,34 @@ async def stream_response(
         # Legacy single-turn usage – build a fresh list each time.
         messages = [{"role": "system", "content": agent["prompt"]}]
 
+    context_label = _context_label(call_context)
+    existing_user_turns = sum(1 for m in messages if m.get("role") == "user")
+    turn_number = existing_user_turns + 1
+    system_prompt_logged = False
+    turn_finalised = False
+
     if messages and messages[0]["role"] == "system" and "_system_prompt_template" not in agent:
         agent["_system_prompt_template"] = agent.get("prompt") or messages[0]["content"]
 
     # Append current user turn (mutates caller-supplied list too)
     messages.append({"role": "user", "content": user_text})
+    _log_marker(
+        "TURN_START",
+        turn=turn_number,
+        role="user",
+        preview=_preview_text(user_text),
+        message_count=len(messages),
+        context_id=context_label,
+    )
+
+    def _mark_turn_end(role: str, **fields: Any) -> None:
+        nonlocal turn_finalised
+        if turn_finalised:
+            return
+        payload = {"turn": turn_number, "role": role, "context_id": context_label}
+        payload.update(fields)
+        _log_marker("TURN_END", **payload)
+        turn_finalised = True
 
     # Helper to refresh dynamic placeholders in the system prompt each time we
     # send a request to the LLM.  We mutate messages[0]['content'] in-place so
@@ -304,7 +380,9 @@ async def stream_response(
             if m.get("role") == "tool" and m.get("tool_call_id") and len(m["tool_call_id"]) > 40:
                 orig_id = m["tool_call_id"]
                 m["tool_call_id"] = orig_id[-40:]
-                logger.debug("Truncated OpenAI tool_call_id from %s… to …%s", orig_id[:6], m["tool_call_id"])
+                logger.debug(
+                    "Truncated OpenAI tool_call_id from %s… to …%s", orig_id[:6], m["tool_call_id"]
+                )
         return clipped
 
     # Convenience: wrap litellm.acompletion so we always request streaming.
@@ -360,6 +438,7 @@ async def stream_response(
 
         if not hasattr(iterator, "__aiter__"):
             if hasattr(iterator, "__anext__"):
+
                 class _AsyncIteratorWrapper:
                     def __init__(self, inner):
                         self._inner = inner
@@ -377,6 +456,56 @@ async def stream_response(
                 )
 
         return iterator
+
+    async def _stream_llm_with_rate_limit_retry(
+        msgs: list[dict[str, Any]],
+        *,
+        choice: str | None,
+        max_attempts: int = 4,
+        base_delay: float = 2.0,
+    ) -> Any:
+        """Call LLM with exponential backoff for rate limits.
+
+            Anthropic and other providers return 429 errors with a retry-after header.
+            LiteLLM's num_retries doesn't add meaningful delay, so we handle it here.
+
+        Args:
+                max_attempts: Total attempts (1 initial + N retries). Default 4 = 3 retries.
+                base_delay: Base delay in seconds, increments by 1s each retry (1s, 2s, 3s).
+
+            Returns the stream iterator on success.
+            Raises RateLimitError if all retries are exhausted.
+        """
+        last_error: Exception | None = None
+        for attempt in range(max_attempts):
+            try:
+                return await _stream_llm(msgs, choice=choice)
+            except openai.RateLimitError as e:
+                last_error = e
+                delay = base_delay + attempt
+
+                resp = getattr(e, "response", None)
+                if resp and hasattr(resp, "headers"):
+                    retry_after = resp.headers.get("retry-after")
+                    if retry_after:
+                        try:
+                            delay = max(delay, float(retry_after))
+                        except (ValueError, TypeError):
+                            pass
+
+                if attempt < max_attempts - 1:
+                    logger.warning(
+                        "Rate limit hit (model=%s), backing off %.1fs, attempt %d/%d: %s",
+                        agent["model"],
+                        delay,
+                        attempt + 1,
+                        max_attempts,
+                        str(e)[:200],
+                    )
+                    await asyncio.sleep(delay)
+
+        assert last_error is not None
+        raise last_error
 
     legacy_max = agent.get("max_tool_iterations")
     max_input_tools: int = int(agent.get("max_input_tool_iterations", 6))
@@ -412,7 +541,10 @@ async def stream_response(
 
         if tool_loops >= max_tool_loops and not tools_disabled and tools:
             # Disable tools to force text reply
-            logger.warning("Reached max tool iterations (%d); disabling tools for remainder of turn", max_tool_loops)
+            logger.warning(
+                "Reached max tool iterations (%d); disabling tools for remainder of turn",
+                max_tool_loops,
+            )
             tools = []  # Pass empty list to _stream_llm
             tools_disabled = True
 
@@ -421,14 +553,14 @@ async def stream_response(
         if tools and not tools_disabled:
             choice_mode = "auto"
         elif tools and tools_disabled:
-            choice_mode = "none"       # keep list but tell model not to call
+            choice_mode = "none"  # keep list but tell model not to call
         else:
-            choice_mode = None         # no tools parameter → omit tool_choice
+            choice_mode = None  # no tools parameter → omit tool_choice
 
         logger.debug(
             f"Calling LLM (tool_choice={choice_mode}, loops={tool_loops}, disabled={tools_disabled}, msg_count={len(messages)})"
         )
-        
+
         # Check for any pending async tool results and update messages
         for i, msg in enumerate(messages):
             if msg.get("role") == "tool" and msg.get("content"):
@@ -441,14 +573,22 @@ async def stream_response(
                             result = tf.get_async_result(async_id)
                             if result is not None:
                                 # Update the message with the actual result
-                                messages[i]["content"] = _safe_json_dumps(result)
-                                logger.info(
-                                    f"Updated pending async result for tool {content_data.get('tool_name')} at message {i}"
+                                serialised_result = _safe_json_dumps(result)
+                                messages[i]["content"] = serialised_result
+                                _log_marker(
+                                    "ASYNC_RESULT_POLLED",
+                                    turn=turn_number,
+                                    tool=content_data.get("tool_name"),
+                                    tool_call_id=msg.get("tool_call_id"),
+                                    async_id=async_id,
+                                    message_index=i,
+                                    preview=_preview_text(serialised_result),
+                                    context_id=context_label,
                                 )
                 except (json.JSONDecodeError, Exception):
                     # Not JSON or other issue, skip
                     pass
-        
+
         # DEBUG: Log message array for debugging reset issue
         logger.debug(
             "Message array content: %s",
@@ -466,6 +606,16 @@ async def stream_response(
         # Recompute dynamic placeholders just before each LLM call
         _refresh_dynamic_prompt()
 
+        if not system_prompt_logged and messages and messages[0].get("role") == "system":
+            _log_marker(
+                "TURN_CONTEXT",
+                turn=turn_number,
+                role="system",
+                preview=_preview_text(str(messages[0].get("content", ""))),
+                context_id=context_label,
+            )
+            system_prompt_logged = True
+
         # ---------------------- STREAMING ROUND ---------------------------
 
         # If we have a prefix to announce (because we switched models)
@@ -481,7 +631,28 @@ async def stream_response(
                 yield start_payload
 
             _t_llm_start = time.perf_counter()
-            resp_stream = await _stream_llm(messages, choice=choice_mode)
+            resp_stream = await _stream_llm_with_rate_limit_retry(messages, choice=choice_mode)
+        except openai.RateLimitError as exc:
+            # Rate limit retries exhausted – try backup model
+            logger.warning(
+                "Rate limit retries exhausted for model %s, trying backup: %s",
+                agent["model"],
+                str(exc)[:200],
+            )
+            if not used_backup and backup_model and backup_model != agent["model"]:
+                logger.warning("Falling back to backup model: %s", backup_model)
+                agent["model"] = backup_model
+                if "backup_temperature" in agent:
+                    agent["temperature"] = agent["backup_temperature"]
+                if "backup_max_tokens" in agent:
+                    agent["max_tokens"] = agent["backup_max_tokens"]
+                used_backup = True
+                announce_prefix = f"{backup_model} says:\n"
+                continue
+            thinking_audio.stop()
+            yield f"RateLimitError: {exc}"
+            _mark_turn_end("assistant", reason="rate_limit_exhausted", error=str(exc))
+            return
         except Exception as exc:  # noqa: BLE001 – propagate after trying backup
             logger.exception("LLM call failed for model %s: %s", agent["model"], exc)
 
@@ -502,6 +673,7 @@ async def stream_response(
             # No fallback or already failed backup – surface the error downstream
             thinking_audio.stop()
             yield f"{type(exc).__name__}: {exc}"
+            _mark_turn_end("assistant", reason="llm_exception", error=str(exc))
             return
 
         # Diagnostics ----------------------------------------------------
@@ -554,7 +726,11 @@ async def stream_response(
                         idx: int = tc.get("index", 0)
                         current = tool_call_parts.setdefault(
                             idx,
-                            {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                            {
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            },
                         )
 
                         if tc.get("id"):
@@ -578,12 +754,18 @@ async def stream_response(
                 last_finish_reason = finish_reason or last_finish_reason
                 if len(_diag_chunks) < 5:
                     try:
-                        _diag_chunks.append(chunk.model_dump(mode="json") if hasattr(chunk, "model_dump") else repr(chunk)[:500])
+                        _diag_chunks.append(
+                            chunk.model_dump(mode="json")
+                            if hasattr(chunk, "model_dump")
+                            else repr(chunk)[:500]
+                        )
                     except Exception:
                         _diag_chunks.append(repr(chunk)[:500])
 
         except Exception as exc:  # noqa: BLE001 – propagate after trying backup
-            logger.exception("LLM stream failed mid-iteration for model %s: %s", agent["model"], exc)
+            logger.exception(
+                "LLM stream failed mid-iteration for model %s: %s", agent["model"], exc
+            )
 
             # Attempt fallback model once if configured
             if not used_backup and backup_model and backup_model != agent["model"]:
@@ -601,7 +783,12 @@ async def stream_response(
 
             # No fallback or already failed backup – surface the error downstream
             thinking_audio.stop()
-            yield f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, openai.RateLimitError):
+                yield f"RateLimitError: {exc}"
+                _mark_turn_end("assistant", reason="stream_rate_limit", error=str(exc))
+            else:
+                yield f"{type(exc).__name__}: {exc}"
+                _mark_turn_end("assistant", reason="stream_exception", error=str(exc))
             return
 
         # ---------------- Finished streaming this round ------------------
@@ -620,7 +807,10 @@ async def stream_response(
 
             # Try the backup model once if we haven't already.
             if not used_backup and backup_model and backup_model != agent["model"]:
-                logger.warning("Primary model returned zero tokens – retrying with backup model '%s'", backup_model)
+                logger.warning(
+                    "Primary model returned zero tokens – retrying with backup model '%s'",
+                    backup_model,
+                )
 
                 # Switch to backup model and apply optional overrides.
                 agent["model"] = backup_model
@@ -635,22 +825,31 @@ async def stream_response(
             # Even the backup model failed (or none configured) – notify caller.
             thinking_audio.stop()
             yield f"No tokens were produced by {agent['model']}"
+            _mark_turn_end("assistant", reason="no_tokens", model=agent["model"])
             return
 
         if tool_call_parts:
             # Model invoked at least one tool – execute them and iterate again.
             input_calls = sum(
-                1 for tc in tool_call_parts.values() if _classify_tool(tc.get("function", {}).get("name", "")) == "input"
+                1
+                for tc in tool_call_parts.values()
+                if _classify_tool(tc.get("function", {}).get("name", "")) == "input"
             )
             output_calls = sum(
-                1 for tc in tool_call_parts.values() if _classify_tool(tc.get("function", {}).get("name", "")) == "output"
+                1
+                for tc in tool_call_parts.values()
+                if _classify_tool(tc.get("function", {}).get("name", "")) == "output"
             )
 
             limit_issues: list[str] = []
-            if input_calls and (input_tools_used >= max_input_tools or input_tools_used + input_calls > max_input_tools):
+            if input_calls and (
+                input_tools_used >= max_input_tools
+                or input_tools_used + input_calls > max_input_tools
+            ):
                 limit_issues.append(f"input tool limit ({max_input_tools})")
             if output_calls and (
-                output_tools_used >= max_output_tools or output_tools_used + output_calls > max_output_tools
+                output_tools_used >= max_output_tools
+                or output_tools_used + output_calls > max_output_tools
             ):
                 limit_issues.append(f"output tool limit ({max_output_tools})")
 
@@ -658,12 +857,16 @@ async def stream_response(
                 thinking_audio.stop()
                 logger.warning("Tool usage limits reached: %s", ", ".join(limit_issues))
                 yield f" [System: Reached {' and '.join(limit_issues)}. Unable to complete the request.]"
+                _mark_turn_end("system", reason="tool_limit", detail=", ".join(limit_issues))
                 return
 
             if tool_loops >= max_tool_loops:
-                logger.warning("Reached max tool iterations (%d); aborting tool loop", max_tool_loops)
+                logger.warning(
+                    "Reached max tool iterations (%d); aborting tool loop", max_tool_loops
+                )
                 thinking_audio.stop()
                 yield f" [System: Reached maximum of {max_tool_loops} tool uses. Unable to complete the request.]"
+                _mark_turn_end("system", reason="max_tool_iterations", detail=str(max_tool_loops))
                 return  # give up
 
             tool_loops += 1
@@ -672,18 +875,20 @@ async def stream_response(
 
             tcs = [tool_call_parts[i] for i in sorted(tool_call_parts)]
 
-            messages.append({
-                "role": "assistant",
-                "tool_calls": tcs,
-                "content": None if not assistant_tokens else "".join(assistant_tokens),
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "tool_calls": tcs,
+                    "content": None if not assistant_tokens else "".join(assistant_tokens),
+                }
+            )
 
             # Inject tool-specific status messages and execute via ToolRunner
             runner = ToolRunner(
-                    status_messages=TOOL_STATUS_MESSAGES,
-                    thinking_sounds={"default": []},  # disable periodic thinking chatter
-                    interval_sec=2.0,
-                )
+                status_messages=TOOL_STATUS_MESSAGES,
+                thinking_sounds={"default": []},  # disable periodic thinking chatter
+                interval_sec=2.0,
+            )
 
             for tc in tcs:
                 name = tc["function"]["name"]
@@ -693,8 +898,18 @@ async def stream_response(
                 except json.JSONDecodeError:
                     logger.error("Malformed tool args: %s", args_json)
                     args = {}
-
-                logger.info(f"⚙️⚙️⚙️ Tool call requested: {name}({args})")
+                call_id = tc.get("id")
+                classification = _classify_tool(name)
+                _log_marker(
+                    "TOOL_QUEUED",
+                    turn=turn_number,
+                    tool=name,
+                    call_id=call_id,
+                    classification=classification,
+                    args_preview=_preview_payload(args),
+                    context_id=context_label,
+                )
+                logger.info("Tool call requested: %s args=%s", name, args)
 
                 # Tool announcement is handled by ToolRunner as first thinking event
 
@@ -704,7 +919,14 @@ async def stream_response(
 
                 first_event = True
                 _tool_start = time.perf_counter()
-                async for ev in runner.run(name, tc.get("id", ""), args, _exec_tool):
+                _log_marker(
+                    "TOOL_EXEC_START",
+                    turn=turn_number,
+                    tool=name,
+                    call_id=call_id,
+                    context_id=context_label,
+                )
+                async for ev in runner.run(name, call_id or "", args, _exec_tool):
                     if ev.kind == "thinking":
                         if first_event:
                             start_payload = thinking_audio.start_payload()
@@ -725,61 +947,102 @@ async def stream_response(
                         except Exception as _exc:
                             logger.error("Failed to serialise tool result for logging: %s", _exc)
 
+                        _log_marker(
+                            "TOOL_RESULT",
+                            turn=turn_number,
+                            tool=name,
+                            call_id=call_id,
+                            elapsed_seconds=round(_tool_elapsed, 3),
+                            preview=_preview_payload(ev.data, limit=200),
+                            context_id=context_label,
+                        )
+
                         # Special handling for reset tool
-                        if (name == "reset" and isinstance(ev.data, dict) 
-                            and ev.data.get("action") == "reset_conversation"):
+                        if (
+                            name == "reset"
+                            and isinstance(ev.data, dict)
+                            and ev.data.get("action") == "reset_conversation"
+                        ):
                             logger.info("Reset tool executed - clearing conversation history")
-                            
+
                             # Add the tool result to messages for logging purposes (old conversation)
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc.get("id"),
-                                "content": _safe_json_dumps(ev.data),
-                            })
-                            
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc.get("id"),
+                                    "content": _safe_json_dumps(ev.data),
+                                }
+                            )
+
                             # Yield a special marker to trigger full reset in WebSocket handler
                             # The WebSocket handler will send the reset message as the new conversation's greeting
                             thinking_audio.stop()
                             yield {"type": "reset_conversation", "message": ev.data["message"]}
-                            
+
                             # End this conversation turn - the old conversation is complete
+                            _mark_turn_end("system", reason="reset_conversation")
                             return
-                            
+
                         # Special handling for change_llm tool
-                        if (name == "change_llm" and isinstance(ev.data, dict)
-                            and ev.data.get("action") == "model_changed"):
-                            logger.info("Change LLM tool executed - switching model from %s to %s", 
-                                       ev.data.get("previous_model"), ev.data.get("new_model"))
+                        if (
+                            name == "change_llm"
+                            and isinstance(ev.data, dict)
+                            and ev.data.get("action") == "model_changed"
+                        ):
+                            logger.info(
+                                "Change LLM tool executed - switching model from %s to %s",
+                                ev.data.get("previous_model"),
+                                ev.data.get("new_model"),
+                            )
 
                             # Update agent configuration with new model settings
                             agent["model"] = ev.data["new_model"]
-                            agent["temperature"] = ev.data["settings"]["temperature"]  
+                            agent["temperature"] = ev.data["settings"]["temperature"]
                             # Note: max_tokens is not changed during model switch
-                            
-                            logger.info("Agent configuration updated: model=%s, temperature=%s", 
-                                       agent["model"], agent["temperature"])
-                            
+
+                            logger.info(
+                                "Agent configuration updated: model=%s, temperature=%s",
+                                agent["model"],
+                                agent["temperature"],
+                            )
+
                             # Add the tool call and result to messages
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc.get("id"), 
-                                "content": _safe_json_dumps(ev.data),
-                            })
-                            
-                            # Return the confirmation message directly 
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc.get("id"),
+                                    "content": _safe_json_dumps(ev.data),
+                                }
+                            )
+
+                            # Return the confirmation message directly
                             thinking_audio.stop()
-                            yield ev.data.get("message", "Changed to %s" % ev.data.get("new_model"))
+                            confirmation = ev.data.get(
+                                "message", "Changed to %s" % ev.data.get("new_model")
+                            )
+                            yield confirmation
+                            _mark_turn_end(
+                                "assistant",
+                                reason="change_llm_confirmation",
+                                preview=_preview_text(confirmation),
+                                detail=ev.data.get("new_model"),
+                            )
                             return  # End the conversation turn with the confirmation message
 
-                        if (name == "hang_up" and isinstance(ev.data, dict)
-                            and ev.data.get("action") == "hangup_call"):
+                        if (
+                            name == "hang_up"
+                            and isinstance(ev.data, dict)
+                            and ev.data.get("action") == "hangup_call"
+                        ):
                             logger.info("Hang up tool executed - terminating call")
 
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc.get("id"),
-                                "content": _safe_json_dumps(ev.data),
-                            })
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc.get("id"),
+                                    "content": _safe_json_dumps(ev.data),
+                                }
+                            )
 
                             thinking_audio.stop()
                             say_text = ev.data.get("message")
@@ -790,42 +1053,82 @@ async def stream_response(
                                 "message": ev.data.get("message"),
                                 "reason": ev.data.get("status"),
                             }
+                            _mark_turn_end(
+                                "system",
+                                reason="hang_up",
+                                preview=_preview_text(say_text or ""),
+                                detail=ev.data.get("status"),
+                            )
                             return
-                        
+
                         # Normal tool result handling
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.get("id"),
-                            "content": _safe_json_dumps(ev.data),
-                        })
-                        
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.get("id"),
+                                "content": _safe_json_dumps(ev.data),
+                            }
+                        )
+
                         # Check if this is an async tool result placeholder
                         if isinstance(ev.data, dict) and ev.data.get("async_execution"):
                             async_id = ev.data.get("async_id")
                             if async_id:
                                 # Find the message we just added
                                 msg_index = len(messages) - 1
-                                
+                                _log_marker(
+                                    "ASYNC_PENDING",
+                                    turn=turn_number,
+                                    tool=name,
+                                    call_id=call_id,
+                                    async_id=async_id,
+                                    message_index=msg_index,
+                                    preview=_preview_payload(ev.data),
+                                    context_id=context_label,
+                                )
+
                                 # Define callback to update the message when async completes
-                                def update_message(aid: str, result: Dict[str, Any], idx: int = msg_index) -> None:
+                                def update_message(
+                                    aid: str,
+                                    result: Dict[str, Any],
+                                    idx: int = msg_index,
+                                    _call_id: str | None = call_id,
+                                    _tool_name: str = name,
+                                ) -> None:
                                     """Update the message at index with the async result."""
-                                    logger.info(f"Async tool completed, updating message at index {idx}")
                                     try:
                                         if idx < len(messages):
                                             # Update the content with the actual result
                                             serialised_result = _safe_json_dumps(result)
                                             messages[idx]["content"] = serialised_result
-                                            logger.debug(
-                                                f"Updated message {idx} with async result: {serialised_result[:200]}"
+                                            _log_marker(
+                                                "ASYNC_COMPLETE",
+                                                turn=turn_number,
+                                                tool=_tool_name,
+                                                call_id=_call_id,
+                                                async_id=aid,
+                                                message_index=idx,
+                                                preview=_preview_text(serialised_result),
+                                                context_id=context_label,
                                             )
                                         else:
-                                            logger.error(f"Message index {idx} out of range (len={len(messages)})")
+                                            logger.error(
+                                                f"Message index {idx} out of range (len={len(messages)})"
+                                            )
                                     except Exception as e:
                                         logger.error(f"Failed to update async message: {e}")
-                                
+
                                 # Register the callback
                                 tf.register_async_callback(async_id, update_message)
-                                logger.debug(f"Registered callback for async tool {name} with id {async_id}")
+                                _log_marker(
+                                    "ASYNC_REGISTERED",
+                                    turn=turn_number,
+                                    tool=name,
+                                    call_id=call_id,
+                                    async_id=async_id,
+                                    message_index=msg_index,
+                                    context_id=context_label,
+                                )
                 # end for ev
             # Loop again to let the LLM generate a textual response
             continue
@@ -834,8 +1137,14 @@ async def stream_response(
 
         assistant_content = "".join(assistant_tokens)
         if assistant_content:
-            logger.info(f"🤖🤖🤖 Assistant reply: {assistant_content}")
+            logger.info("Assistant reply: %s", assistant_content)
 
         messages.append({"role": "assistant", "content": assistant_content})
+        _mark_turn_end(
+            "assistant",
+            preview=_preview_text(assistant_content),
+            tokens=len(assistant_tokens),
+            tool_iterations=tool_loops,
+        )
         thinking_audio.stop()
         return  # done

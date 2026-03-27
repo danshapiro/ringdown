@@ -1,10 +1,11 @@
+import json
+import logging
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 
-import logging
-
-from sqlmodel import SQLModel, create_engine, Field, Session
-import json
+from sqlalchemy.exc import OperationalError
+from sqlmodel import Field, Session, SQLModel, create_engine
 
 from log_love import setup_logging
 from .settings import get_env
@@ -25,13 +26,44 @@ class Turn(SQLModel, table=True):
     ts: datetime = Field(default_factory=datetime.utcnow)
     who: str = Field(index=True)  # "user" | "bot"
     text: str
+    source: str | None = Field(default=None, index=True)
 
 
-def log_turn(who: str, text: str) -> None:
+_TURN_SOURCE_COLUMN_READY = False
+
+
+def _ensure_turn_source_column() -> None:
+    """Ensure the ``turn`` table has a ``source`` column (adds it lazily)."""
+
+    global _TURN_SOURCE_COLUMN_READY
+    if _TURN_SOURCE_COLUMN_READY:
+        return
+
+    _ensure_schema()
+
+    table_name = Turn.__tablename__ or "turn"
+
+    with engine.connect() as connection:  # type: ignore[no-redef]
+        result = connection.exec_driver_sql(f"PRAGMA table_info({table_name})")
+        columns = {row[1] for row in result.fetchall()}
+        if "source" not in columns:
+            try:
+                connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN source TEXT")
+            except OperationalError as exc:  # pragma: no cover - defensive
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+
+    _TURN_SOURCE_COLUMN_READY = True
+
+
+def log_turn(who: str, text: str, *, source: str | None = None) -> None:
     """Persist a single conversational turn."""
 
+    _ensure_schema()
+    _ensure_turn_source_column()
+
     with Session(engine) as sess:
-        turn = Turn(who=who, text=text)
+        turn = Turn(who=who, text=text, source=source)
         sess.add(turn)
         sess.commit()
 
@@ -56,11 +88,31 @@ class AgentState(SQLModel, table=True):
 # -------- helper API --------------------------------------------------------
 
 
+_SCHEMA_LOCK = Lock()
+_SCHEMA_READY = False
+
+
+def _ensure_schema() -> None:
+    """Create the SQLite schema if it is missing."""
+
+    global _SCHEMA_READY
+    if _SCHEMA_READY:
+        return
+
+    with _SCHEMA_LOCK:
+        if _SCHEMA_READY:
+            return
+        SQLModel.metadata.create_all(engine)
+        _SCHEMA_READY = True
+
+
 _STATE_MAX_AGE_SEC: int = 5 * 60  # 5 minutes freshness window
 
 
 def load_state(agent_name: str) -> tuple[dict | None, list | None]:
     """Return (settings_dict, messages_list) if state exists and is fresh (<5 min)."""
+
+    _ensure_schema()
 
     with Session(engine) as sess:
         st = sess.get(AgentState, agent_name)
@@ -77,6 +129,8 @@ def load_state(agent_name: str) -> tuple[dict | None, list | None]:
 
 def save_state(agent_name: str, settings: dict, messages: list) -> None:
     """Upsert the latest *settings* and *messages* snapshot for *agent_name*."""
+
+    _ensure_schema()
 
     rec = AgentState(
         agent_name=agent_name,
@@ -99,8 +153,13 @@ def save_state(agent_name: str, settings: dict, messages: list) -> None:
 def delete_state(agent_name: str) -> None:
     """Remove any stored state for *agent_name* (no-op if absent)."""
 
+    _ensure_schema()
+
     with Session(engine) as sess:
         st = sess.get(AgentState, agent_name)
         if st:
             sess.delete(st)
             sess.commit() 
+
+
+_ensure_schema()
