@@ -7,6 +7,7 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - optional dependency
+
     def load_dotenv(*_: object, **__: object) -> None:
         return None
 

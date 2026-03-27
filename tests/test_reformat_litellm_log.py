@@ -70,7 +70,7 @@ def test_normalize_content_handles_json_string():
 
     assert "\n" in normalized
     assert '"foo"' in normalized
-    assert '1' in normalized
+    assert "1" in normalized
 
 
 def test_main_end_to_end(tmp_path, monkeypatch):
@@ -78,7 +78,7 @@ def test_main_end_to_end(tmp_path, monkeypatch):
     entries = [
         {
             "timestamp": "2025-11-09T00:00:00Z",
-            "textPayload": "Message array content: [{\"role\": \"user\", \"content\": \"Hi\"}]",
+            "textPayload": 'Message array content: [{"role": "user", "content": "Hi"}]',
         },
         {
             "timestamp": "2025-11-09T00:01:00Z",

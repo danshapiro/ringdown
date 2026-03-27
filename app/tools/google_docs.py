@@ -23,12 +23,12 @@ import os
 import re
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-from google.oauth2 import service_account
+from pydantic import BaseModel, Field, field_validator
 
 from ..tool_framework import register_tool
 from .email import EmailArgs, send_email
@@ -52,7 +52,7 @@ SCOPES = [
 MARKDOWN_MIME_TYPES = {"text/markdown", "text/x-markdown"}
 
 
-def _iter_text_runs(doc: Dict[str, Any]):
+def _iter_text_runs(doc: dict[str, Any]):
     """Yield textRun entries from a Docs API document response."""
     for element in doc.get("body", {}).get("content", []):
         paragraph = element.get("paragraph")
@@ -64,19 +64,20 @@ def _iter_text_runs(doc: Dict[str, Any]):
                 yield text_run
 
 
-def _collect_plain_text(doc: Dict[str, Any]) -> str:
+def _collect_plain_text(doc: dict[str, Any]) -> str:
     """Return concatenated text content for a Docs API response."""
     return "".join(run.get("content", "") for run in _iter_text_runs(doc))
 
-def set_agent_context(agent_config: Dict[str, Any] | None) -> None:
+
+def set_agent_context(agent_config: dict[str, Any] | None) -> None:
     """Set the current agent configuration in thread-local storage."""
     logger.debug(f"Google Docs: set_agent_context called with config: {agent_config}")
     _agent_context.config = agent_config
 
 
-def get_agent_context() -> Dict[str, Any] | None:
+def get_agent_context() -> dict[str, Any] | None:
     """Get the current agent configuration from thread-local storage."""
-    ctx = getattr(_agent_context, 'config', None)
+    ctx = getattr(_agent_context, "config", None)
     logger.debug(f"Google Docs: get_agent_context returning: {ctx}")
     return ctx
 
@@ -85,23 +86,23 @@ def _get_allowed_folders() -> list[str]:
     """Get allowed folders for the current agent."""
     agent_config = get_agent_context()
     logger.debug(f"Google Docs: _get_allowed_folders called, agent_config: {agent_config}")
-    
+
     if not agent_config:
         logger.error("Google Docs: No agent context available in _get_allowed_folders")
         raise ValueError("Agent context is required for Google Docs folder access")
-    
+
     # Check for docs_folder_greenlist in agent config
-    folder_list = agent_config.get('docs_folder_greenlist')
+    folder_list = agent_config.get("docs_folder_greenlist")
     if folder_list:
         logger.debug(f"Google Docs: Using custom folder greenlist: {folder_list}")
         return folder_list
-    
+
     # Generate default folder list based on agent's bot_name
-    bot_name = agent_config.get('bot_name')
+    bot_name = agent_config.get("bot_name")
     if not bot_name:
         logger.error("Google Docs: No bot_name in agent config")
         raise ValueError("Agent configuration must include 'bot_name' for Google Docs access")
-    
+
     default_folders = [
         f"{bot_name}-default",  # Dynamic folder name based on bot_name
     ]
@@ -112,7 +113,7 @@ def _get_allowed_folders() -> list[str]:
 def _is_folder_allowed(folder_name: str) -> bool:
     """Check if folder name matches any greenlist pattern for the current agent."""
     allowed = _get_allowed_folders()
-        
+
     for candidate in allowed:
         if _is_regex_pattern(candidate):
             try:
@@ -128,12 +129,13 @@ def _is_folder_allowed(folder_name: str) -> bool:
 
 def _get_services() -> tuple[Any, Any]:
     """Get authenticated Google Docs and Drive services.
-    
+
     Returns:
         Tuple of (docs_service, drive_service)
     """
     key_path = os.getenv("GMAIL_SA_KEY_PATH")
     from app.settings import get_default_email as _get_default_email
+
     impersonate = os.getenv("GMAIL_IMPERSONATE_EMAIL", _get_default_email())
 
     if not key_path:
@@ -142,14 +144,13 @@ def _get_services() -> tuple[Any, Any]:
     if not os.path.exists(key_path):
         raise FileNotFoundError(f"GMAIL_SA_KEY_PATH points to missing file: {key_path}")
 
-    creds = (
-        service_account.Credentials.from_service_account_file(key_path, scopes=SCOPES)
-        .with_subject(impersonate)
-    )
+    creds = service_account.Credentials.from_service_account_file(
+        key_path, scopes=SCOPES
+    ).with_subject(impersonate)
 
     docs_service = build("docs", "v1", credentials=creds, cache_discovery=False)
     drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
-    
+
     return docs_service, drive_service
 
 
@@ -167,15 +168,19 @@ def _find_folder_by_pattern(pattern: str, drive_service: Any) -> tuple[str | Non
     except re.error as exc:  # pragma: no cover - configuration error surfaced at runtime
         raise ValueError(f"Invalid folder regex '{pattern}': {exc}") from exc
 
-    page_token: Optional[str] = None
+    page_token: str | None = None
     while True:
-        response = drive_service.files().list(
-            q="mimeType='application/vnd.google-apps.folder' and trashed=false",
-            spaces="drive",
-            fields="nextPageToken, files(id, name)",
-            pageToken=page_token,
-            pageSize=100,
-        ).execute()
+        response = (
+            drive_service.files()
+            .list(
+                q="mimeType='application/vnd.google-apps.folder' and trashed=false",
+                spaces="drive",
+                fields="nextPageToken, files(id, name)",
+                pageToken=page_token,
+                pageSize=100,
+            )
+            .execute()
+        )
 
         for folder in response.get("files", []):
             name = folder.get("name", "")
@@ -191,42 +196,36 @@ def _find_folder_by_pattern(pattern: str, drive_service: Any) -> tuple[str | Non
 
 def _find_or_create_folder(folder_name: str, drive_service: Any | None = None) -> str:
     """Find a folder by name or create it if it doesn't exist.
-    
+
     Returns:
         Folder ID
     """
     if drive_service is None:
         _, drive_service = _get_services()
-    
+
     # Search for existing folder
     escaped_name = _escape_drive_query_term(folder_name)
     query = (
         f"name='{escaped_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
     )
-    results = drive_service.files().list(
-        q=query,
-        spaces='drive',
-        fields='files(id, name)',
-        pageSize=1
-    ).execute()
-    
-    files = results.get('files', [])
+    results = (
+        drive_service.files()
+        .list(q=query, spaces="drive", fields="files(id, name)", pageSize=1)
+        .execute()
+    )
+
+    files = results.get("files", [])
     if files:
-        return files[0]['id']
-    
+        return files[0]["id"]
+
     # Create new folder
-    file_metadata = {
-        'name': folder_name,
-        'mimeType': 'application/vnd.google-apps.folder'
-    }
-    folder = drive_service.files().create(body=file_metadata, fields='id').execute()
+    file_metadata = {"name": folder_name, "mimeType": "application/vnd.google-apps.folder"}
+    folder = drive_service.files().create(body=file_metadata, fields="id").execute()
     logger.info(f"Created new folder '{folder_name}' with ID: {folder['id']}")
-    return folder['id']
+    return folder["id"]
 
 
-def _resolve_allowed_folder(
-    candidate: str, drive_service: Any
-) -> tuple[str | None, str | None]:
+def _resolve_allowed_folder(candidate: str, drive_service: Any) -> tuple[str | None, str | None]:
     """Resolve a greenlisted entry to a specific Drive folder."""
     if _is_regex_pattern(candidate):
         folder_id, resolved_name = _find_folder_by_pattern(candidate, drive_service)
@@ -237,9 +236,7 @@ def _resolve_allowed_folder(
                 resolved_name,
             )
             return folder_id, resolved_name
-        raise ValueError(
-            f"No folder found matching regex pattern '{candidate}'"
-        )
+        raise ValueError(f"No folder found matching regex pattern '{candidate}'")
 
     folder_id = _find_or_create_folder(candidate, drive_service=drive_service)
     return folder_id, candidate
@@ -247,32 +244,32 @@ def _resolve_allowed_folder(
 
 def _extract_doc_id(doc_input: str) -> str:
     """Extract document ID from various input formats.
-    
+
     Accepts:
     - Direct document ID
     - Full Google Docs URL
     - Docs sharing URL
-    
+
     Returns:
         Document ID
     """
     # If it's already just an ID (alphanumeric and underscore/hyphen)
-    if re.match(r'^[a-zA-Z0-9_-]+$', doc_input):
+    if re.match(r"^[a-zA-Z0-9_-]+$", doc_input):
         return doc_input
-    
+
     # Extract from various URL formats
     patterns = [
-        r'docs\.google\.com/document/d/([a-zA-Z0-9_-]+)',
-        r'docs\.google\.com/.*[?&]id=([a-zA-Z0-9_-]+)',
-        r'drive\.google\.com/file/d/([a-zA-Z0-9_-]+)',
-        r'drive\.google\.com/.*[?&]id=([a-zA-Z0-9_-]+)',
+        r"docs\.google\.com/document/d/([a-zA-Z0-9_-]+)",
+        r"docs\.google\.com/.*[?&]id=([a-zA-Z0-9_-]+)",
+        r"drive\.google\.com/file/d/([a-zA-Z0-9_-]+)",
+        r"drive\.google\.com/.*[?&]id=([a-zA-Z0-9_-]+)",
     ]
-    
+
     for pattern in patterns:
         match = re.search(pattern, doc_input)
         if match:
             return match.group(1)
-    
+
     raise ValueError(f"Could not extract document ID from: {doc_input}")
 
 
@@ -287,20 +284,14 @@ def _is_document_in_default_folder(doc_id: str) -> bool:
 
     allowed_folders = _get_allowed_folders()
 
-    doc_info = drive_service.files().get(
-        fileId=doc_id,
-        fields='parents'
-    ).execute()
+    doc_info = drive_service.files().get(fileId=doc_id, fields="parents").execute()
 
-    parent_ids = doc_info.get('parents', [])
+    parent_ids = doc_info.get("parents", [])
 
     for parent_id in parent_ids:
-        folder_info = drive_service.files().get(
-            fileId=parent_id,
-            fields='name'
-        ).execute()
+        folder_info = drive_service.files().get(fileId=parent_id, fields="name").execute()
 
-        folder_name = folder_info.get('name', '')
+        folder_name = folder_info.get("name", "")
         if _is_folder_allowed(folder_name):
             return True
 
@@ -389,8 +380,6 @@ def _notify_doc_created(
 class CreateDocArgs(BaseModel):
     title: str = Field(..., description="Document title")
     content: str = Field("", description="Document content formatted nicely in markdown")
-    
-
 
 
 @register_tool(
@@ -400,29 +389,29 @@ class CreateDocArgs(BaseModel):
     async_execution=True,  # Changed back to async
     category="output",
 )
-def create_google_doc(args: CreateDocArgs) -> Dict[str, Any]:
+def create_google_doc(args: CreateDocArgs) -> dict[str, Any]:
     """Create a new Google Doc."""
     logger.info(f"CreateGoogleDoc called with args: {args}")
     logger.debug(f"Current thread ID: {threading.get_ident()}")
-    
+
     # Check agent context right at the start
     ctx = get_agent_context()
     logger.info(f"CreateGoogleDoc: Agent context at start: {ctx}")
-    
+
     try:
         allowed_folders = _get_allowed_folders()
         if not allowed_folders:
             logger.error("No allowed folders configured for CreateGoogleDoc")
             return {
                 "success": False,
-                "error": "No allowed folders configured for document creation"
+                "error": "No allowed folders configured for document creation",
             }
 
         docs_service, drive_service = _get_services()
 
         # Resolve the first usable folder from the greenlist
-        target_folder_id: Optional[str] = None
-        target_folder_name: Optional[str] = None
+        target_folder_id: str | None = None
+        target_folder_name: str | None = None
         for candidate in allowed_folders:
             try:
                 resolved_id, resolved_name = _resolve_allowed_folder(candidate, drive_service)
@@ -437,7 +426,7 @@ def create_google_doc(args: CreateDocArgs) -> Dict[str, Any]:
             logger.error("Unable to resolve any allowed folder for CreateGoogleDoc")
             return {
                 "success": False,
-                "error": "Unable to resolve an allowed folder for document creation"
+                "error": "Unable to resolve an allowed folder for document creation",
             }
 
         markdown_content = args.content or ""
@@ -453,11 +442,15 @@ def create_google_doc(args: CreateDocArgs) -> Dict[str, Any]:
                 mimetype="text/markdown",
                 resumable=False,
             )
-            created_file = drive_service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields="id, parents",
-            ).execute()
+            created_file = (
+                drive_service.files()
+                .create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields="id, parents",
+                )
+                .execute()
+            )
             doc_id = created_file["id"]
             logger.info("Uploaded markdown document '%s' with ID: %s", args.title, doc_id)
         else:
@@ -490,19 +483,31 @@ def create_google_doc(args: CreateDocArgs) -> Dict[str, Any]:
             "title": args.title,
             "url": doc_url,
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to create document: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 
 class SearchDriveArgs(BaseModel):
-    query: str = Field(..., description="Text to match when searching Google Drive. Use defaults unless specified otherwise.")
-    titles_only: bool = Field(True, description="Default true to only search file titles; false searches titles and content")
-    docs_only: bool = Field(True, description="Default true to restrict results to Google Docs files; false includes sheets, pdfs, etc.")
+    query: str = Field(
+        ...,
+        description=(
+            "Text to match when searching Google Drive. Use defaults unless "
+            "specified otherwise."
+        ),
+    )
+    titles_only: bool = Field(
+        True,
+        description="Default true to only search file titles; false searches titles and content",
+    )
+    docs_only: bool = Field(
+        True,
+        description=(
+            "Default true to restrict results to Google Docs files; false "
+            "includes sheets, pdfs, etc."
+        ),
+    )
     max_results: int = Field(50, description="Maximum number of results to return.")
 
     @field_validator("query")
@@ -526,7 +531,7 @@ class SearchDriveArgs(BaseModel):
     description="Search Google Drive by title or content",
     param_model=SearchDriveArgs,
 )
-def search_google_drive(args: SearchDriveArgs) -> Dict[str, Any]:
+def search_google_drive(args: SearchDriveArgs) -> dict[str, Any]:
     """Search Google Drive and return matching file names and IDs."""
     try:
         _, drive_service = _get_services()
@@ -536,14 +541,16 @@ def search_google_drive(args: SearchDriveArgs) -> Dict[str, Any]:
         max_results = args.max_results
         page_count = 0
         truncated = False
-        truncation_reason: Optional[str] = None
+        truncation_reason: str | None = None
 
         escaped_term = _escape_drive_query_term(args.query)
 
         if args.titles_only:
             search_clause = f"name contains '{escaped_term}'"
         else:
-            search_clause = f"(name contains '{escaped_term}' or fullText contains '{escaped_term}')"
+            search_clause = (
+                f"(name contains '{escaped_term}' or fullText contains '{escaped_term}')"
+            )
 
         query_parts = ["trashed=false", search_clause]
 
@@ -555,8 +562,8 @@ def search_google_drive(args: SearchDriveArgs) -> Dict[str, Any]:
 
         query = " and ".join(query_parts)
 
-        results: List[Dict[str, str]] = []
-        page_token: Optional[str] = None
+        results: list[dict[str, str]] = []
+        page_token: str | None = None
         elapsed = 0.0
 
         while True:
@@ -570,22 +577,28 @@ def search_google_drive(args: SearchDriveArgs) -> Dict[str, Any]:
             if page_size <= 0:
                 page_size = 1
 
-            response = drive_service.files().list(
-                q=query,
-                spaces="drive",
-                fields="nextPageToken, files(id, name, mimeType)",
-                pageToken=page_token,
-                pageSize=page_size,
-                orderBy="modifiedTime desc",
-            ).execute()
+            response = (
+                drive_service.files()
+                .list(
+                    q=query,
+                    spaces="drive",
+                    fields="nextPageToken, files(id, name, mimeType)",
+                    pageToken=page_token,
+                    pageSize=page_size,
+                    orderBy="modifiedTime desc",
+                )
+                .execute()
+            )
             page_count += 1
 
             for file in response.get("files", []):
-                results.append({
-                    "id": file.get("id", ""),
-                    "name": file.get("name", ""),
-                    "mimeType": file.get("mimeType", ""),
-                })
+                results.append(
+                    {
+                        "id": file.get("id", ""),
+                        "name": file.get("name", ""),
+                        "mimeType": file.get("mimeType", ""),
+                    }
+                )
                 if len(results) >= max_results:
                     break
 
@@ -640,10 +653,7 @@ def search_google_drive(args: SearchDriveArgs) -> Dict[str, Any]:
 
     except Exception as exc:
         logger.error(f"Failed to search Google Drive: {exc}")
-        return {
-            "success": False,
-            "error": str(exc)
-        }
+        return {"success": False, "error": str(exc)}
 
 
 class ReadDocArgs(BaseModel):
@@ -654,9 +664,9 @@ class ReadDocArgs(BaseModel):
 @register_tool(
     name="ReadGoogleDoc",
     description="Read the content of a Google Doc or Markdown file",
-    param_model=ReadDocArgs
+    param_model=ReadDocArgs,
 )
-def read_google_doc(args: ReadDocArgs) -> Dict[str, Any]:
+def read_google_doc(args: ReadDocArgs) -> dict[str, Any]:
     """Read document content."""
     try:
         docs_service, drive_service = _get_services()
@@ -665,12 +675,11 @@ def read_google_doc(args: ReadDocArgs) -> Dict[str, Any]:
         try:
             doc = docs_service.documents().get(documentId=doc_id).execute()
         except Exception as doc_exc:
-            metadata: Dict[str, Any] = {}
+            metadata: dict[str, Any] = {}
             try:
-                raw_metadata = drive_service.files().get(
-                    fileId=doc_id,
-                    fields="id, name, mimeType"
-                ).execute()
+                raw_metadata = (
+                    drive_service.files().get(fileId=doc_id, fields="id, name, mimeType").execute()
+                )
                 if isinstance(raw_metadata, dict):
                     metadata = raw_metadata
             except Exception as meta_exc:  # pragma: no cover - metadata fetch is best effort
@@ -678,9 +687,7 @@ def read_google_doc(args: ReadDocArgs) -> Dict[str, Any]:
 
             mime_type = metadata.get("mimeType")
             title = metadata.get("name", "Untitled")
-            is_markdown = (
-                (mime_type in MARKDOWN_MIME_TYPES) or title.lower().endswith(".md")
-            )
+            is_markdown = (mime_type in MARKDOWN_MIME_TYPES) or title.lower().endswith(".md")
             if is_markdown:
                 request = drive_service.files().get_media(fileId=doc_id)
                 buffer = io.BytesIO()
@@ -702,9 +709,9 @@ def read_google_doc(args: ReadDocArgs) -> Dict[str, Any]:
             raise doc_exc
 
         if args.include_formatting:
-            content_parts: List[Dict[str, Any]] = []
+            content_parts: list[dict[str, Any]] = []
             for text_run in _iter_text_runs(doc):
-                entry: Dict[str, Any] = {"text": text_run.get("content", "")}
+                entry: dict[str, Any] = {"text": text_run.get("content", "")}
                 style = text_run.get("textStyle", {})
                 if style:
                     entry["style"] = style
@@ -712,7 +719,7 @@ def read_google_doc(args: ReadDocArgs) -> Dict[str, Any]:
             content = content_parts
         else:
             content = _collect_plain_text(doc)
-        title = doc.get('title', 'Untitled')
+        title = doc.get("title", "Untitled")
         url = f"https://docs.google.com/document/d/{doc_id}/edit"
 
         return {
@@ -725,16 +732,13 @@ def read_google_doc(args: ReadDocArgs) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Failed to read document: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 
 class AppendDocArgs(BaseModel):
     document_id_or_url: str = Field(..., description="Document ID or Google Docs URL")
     content: str = Field(..., description="Content to append to the document")
-    
+
     # No action field needed since only 'append' is allowed
 
 
@@ -745,59 +749,55 @@ class AppendDocArgs(BaseModel):
     async_execution=True,  # Changed back to async
     category="output",
 )
-def append_google_doc(args: AppendDocArgs) -> Dict[str, Any]:
+def append_google_doc(args: AppendDocArgs) -> dict[str, Any]:
     """Append content to a document (only in default folder for security)."""
     logger.info(f"AppendGoogleDoc called with args: {args}")
     logger.debug(f"Current thread ID: {threading.get_ident()}")
-    
+
     # Check agent context right at the start
     ctx = get_agent_context()
     logger.info(f"AppendGoogleDoc: Agent context at start: {ctx}")
-    
+
     try:
         docs_service, _ = _get_services()
         doc_id = _extract_doc_id(args.document_id_or_url)
-        
+
         # Security check: only allow updates to documents in the default folder
         if not _is_document_in_default_folder(doc_id):
             agent_config = get_agent_context()
-            bot_name = agent_config.get('bot_name', 'unknown') if agent_config else 'unknown'
+            bot_name = agent_config.get("bot_name", "unknown") if agent_config else "unknown"
             default_folder = f"{bot_name}-default"
             return {
                 "success": False,
-                "error": f"Document updates are only allowed for documents in the '{default_folder}' folder"
+                "error": (
+                    "Document updates are only allowed for documents in the "
+                    f"'{default_folder}' folder"
+                ),
             }
-        
+
         # Get current document to find content boundaries
         doc = docs_service.documents().get(documentId=doc_id).execute()
-        
+
         # Only append operation - find the end of the document
-        end_index = doc['body']['content'][-1].get('endIndex', 1) - 1
-        requests = [{
-            'insertText': {
-                'location': {'index': end_index},
-                'text': '\n\n' + args.content
-            }
-        }]
-        
+        end_index = doc["body"]["content"][-1].get("endIndex", 1) - 1
+        requests = [
+            {"insertText": {"location": {"index": end_index}, "text": "\n\n" + args.content}}
+        ]
+
         # Execute the update
         docs_service.documents().batchUpdate(
-            documentId=doc_id,
-            body={'requests': requests}
+            documentId=doc_id, body={"requests": requests}
         ).execute()
-        
+
         logger.info(f"Appended content to document {doc_id}")
-        
+
         return {
             "success": True,
             "document_id": doc_id,
             "action": "append",
-            "url": f"https://docs.google.com/document/d/{doc_id}/edit"
+            "url": f"https://docs.google.com/document/d/{doc_id}/edit",
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to update document: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}

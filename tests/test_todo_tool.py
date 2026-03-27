@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.tools import todo
 from app import tool_framework as tf
+from app.tools import todo
 
 
 def _make_document(text: str, end_index: int | None = None) -> dict[str, object]:
@@ -67,7 +67,9 @@ def test_todo_add_appends_with_blank_line(mock_get_services: MagicMock):
     mock_get_services.return_value = (mock_docs, mock_drive)
 
     mock_drive.files().list().execute.return_value = {"files": [{"id": "doc123"}]}
-    documents_resource.get.return_value.execute.return_value = _make_document("Existing todo", end_index=15)
+    documents_resource.get.return_value.execute.return_value = _make_document(
+        "Existing todo", end_index=15
+    )
 
     result = todo.todo_add(todo.TodoAddArgs(text="# Todo\n\nDetails"))
 
@@ -95,7 +97,9 @@ def test_todo_add_creates_document_when_missing(mock_get_services: MagicMock):
     assert result["success"] is True
     documents_resource.create.assert_called_once_with(body={"title": todo.TODO_TITLE})
     assert result["created_document"] is True
-    inserted_text = documents_resource.batchUpdate.call_args.kwargs["body"]["requests"][0]["insertText"]["text"]
+    inserted_text = documents_resource.batchUpdate.call_args.kwargs["body"]["requests"][0][
+        "insertText"
+    ]["text"]
     assert inserted_text == "# Todo\n\nDescription"
 
 

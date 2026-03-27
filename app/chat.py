@@ -1,33 +1,30 @@
-# Logging first so we capture import-time failures too
-from typing import AsyncIterator, Dict, Any, Optional
-import json
-
-import logging
 import asyncio  # Needed for async tool execution with thinking sounds
+import contextlib
+import copy
 import inspect
+import json
+import os
+import time
+from collections.abc import AsyncIterator
+from datetime import UTC, date, datetime
+from typing import Any
 
 import litellm
 import openai  # For RateLimitError - litellm maps all 429s to this
+
+from log_love import setup_logging
+
+from . import settings as _settings
+from . import tool_framework as tf
+
+# Tool orchestration
+from .tool_runner import ToolRunner  # centralised tool handling
 
 
 def acompletion(*args, **kwargs):
     """Proxy to :func:`litellm.acompletion` so tests can monkeypatch us."""
 
     return litellm.acompletion(*args, **kwargs)
-
-
-from log_love import setup_logging
-
-from . import tool_framework as tf
-
-# Tool orchestration
-from .tool_runner import ToolRunner, ToolEvent  # centralised tool handling
-from . import settings as _settings
-
-from datetime import datetime, timezone, date
-import copy
-import time
-import os
 
 # URLs for sound effects (absolute URLs provided via env vars when deployed)
 _THINKING_SOUND_URL = os.getenv("SOUND_THINKING_URL", "/sounds/thinking.mp3")
@@ -163,7 +160,7 @@ def _preview_payload(payload: Any, limit: int = 160) -> str:
     return _preview_text(_safe_json_dumps(payload), limit=limit)
 
 
-def _context_label(ctx: Optional[Dict[str, Any]]) -> Optional[str]:
+def _context_label(ctx: dict[str, Any] | None) -> str | None:
     """Extract a stable identifier from *ctx* for log correlation."""
 
     if not ctx:
@@ -222,9 +219,9 @@ def get_tool_status_message(tool_name: str) -> str:
 
 async def stream_response(
     user_text: str,
-    agent: Dict[str, Any],
+    agent: dict[str, Any],
     messages: list[dict[str, Any]] | None = None,
-    call_context: Optional[Dict[str, Any]] = None,
+    call_context: dict[str, Any] | None = None,
 ) -> AsyncIterator[str | dict[str, Any]]:
     """Stream an LLM reply for *user_text*.
 
@@ -350,12 +347,14 @@ async def stream_response(
                 agent["_system_prompt_template"] = template
 
             if "{time_utc}" in template:
-                ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
                 messages[0]["content"] = template.replace("{time_utc}", ts)
             else:
                 messages[0]["content"] = template
 
-    # Trim very old context to mitigate runaway prompt growth.  We retain the system prompt plus the *n* most recent messages.  This naive strategy works well enough for voice calls that rarely exceed a dozen turns.
+    # Trim very old context to mitigate runaway prompt growth. We retain the
+    # system prompt plus the *n* most recent messages, which is sufficient for
+    # the short voice-call sessions this app handles.
     max_history = int(agent["max_history"])  # Required - no fallback
     if len(messages) > max_history:
         # Preserve system prompt (index 0) and last (max_history-1) others.
@@ -488,10 +487,8 @@ async def stream_response(
                 if resp and hasattr(resp, "headers"):
                     retry_after = resp.headers.get("retry-after")
                     if retry_after:
-                        try:
+                        with contextlib.suppress(ValueError, TypeError):
                             delay = max(delay, float(retry_after))
-                        except (ValueError, TypeError):
-                            pass
 
                 if attempt < max_attempts - 1:
                     logger.warning(
@@ -532,7 +529,8 @@ async def stream_response(
             and output_tools_used >= max_output_tools
         ):
             logger.warning(
-                "All tool usage limits reached (input=%d, output=%d); disabling tools for remainder of turn",
+                "All tool usage limits reached (input=%d, output=%d); "
+                "disabling tools for remainder of turn",
                 max_input_tools,
                 max_output_tools,
             )
@@ -558,7 +556,11 @@ async def stream_response(
             choice_mode = None  # no tools parameter → omit tool_choice
 
         logger.debug(
-            f"Calling LLM (tool_choice={choice_mode}, loops={tool_loops}, disabled={tools_disabled}, msg_count={len(messages)})"
+            "Calling LLM (tool_choice=%s, loops=%d, disabled=%s, msg_count=%d)",
+            choice_mode,
+            tool_loops,
+            tools_disabled,
+            len(messages),
         )
 
         # Check for any pending async tool results and update messages
@@ -795,7 +797,10 @@ async def stream_response(
 
         _t_llm_elapsed = time.perf_counter() - _t_llm_start
         logger.debug(
-            f"LLM stream completed – tokens={len(assistant_tokens)}, finish_reason={last_finish_reason}, elapsed={_t_llm_elapsed:.1f}s"
+            "LLM stream completed - tokens=%d, finish_reason=%s, elapsed=%.1fs",
+            len(assistant_tokens),
+            last_finish_reason,
+            _t_llm_elapsed,
         )
 
         if not assistant_tokens and not tool_call_parts:
@@ -856,7 +861,8 @@ async def stream_response(
             if limit_issues:
                 thinking_audio.stop()
                 logger.warning("Tool usage limits reached: %s", ", ".join(limit_issues))
-                yield f" [System: Reached {' and '.join(limit_issues)}. Unable to complete the request.]"
+                limit_message = " and ".join(limit_issues)
+                yield f" [System: Reached {limit_message}. Unable to complete the request.]"
                 _mark_turn_end("system", reason="tool_limit", detail=", ".join(limit_issues))
                 return
 
@@ -865,7 +871,10 @@ async def stream_response(
                     "Reached max tool iterations (%d); aborting tool loop", max_tool_loops
                 )
                 thinking_audio.stop()
-                yield f" [System: Reached maximum of {max_tool_loops} tool uses. Unable to complete the request.]"
+                yield (
+                    f" [System: Reached maximum of {max_tool_loops} tool uses. "
+                    "Unable to complete the request.]"
+                )
                 _mark_turn_end("system", reason="max_tool_iterations", detail=str(max_tool_loops))
                 return  # give up
 
@@ -935,14 +944,19 @@ async def stream_response(
                             # Keep stream alive while tool executes
                             yield {"type": "tool_executing", "tool_count": len(tcs)}
                             first_event = False
-                        # Subsequent thinking events are ignored – media continues looping client-side.
+                        # Subsequent thinking events are ignored because media
+                        # continues looping client-side.
                         continue
                     elif ev.kind == "result":
                         _tool_elapsed = time.perf_counter() - _tool_start
                         try:
                             _tool_str = _safe_json_dumps(ev.data)
                             logger.debug(
-                                f"Tool '{name}' result bytes={len(_tool_str)} elapsed={_tool_elapsed:.1f}s preview={_tool_str[:2048]}"
+                                "Tool %r result bytes=%d elapsed=%.1fs preview=%s",
+                                name,
+                                len(_tool_str),
+                                _tool_elapsed,
+                                _tool_str[:2048],
                             )
                         except Exception as _exc:
                             logger.error("Failed to serialise tool result for logging: %s", _exc)
@@ -965,7 +979,8 @@ async def stream_response(
                         ):
                             logger.info("Reset tool executed - clearing conversation history")
 
-                            # Add the tool result to messages for logging purposes (old conversation)
+                            # Add the tool result to messages for logging
+                            # purposes in the old conversation.
                             messages.append(
                                 {
                                     "role": "tool",
@@ -974,8 +989,8 @@ async def stream_response(
                                 }
                             )
 
-                            # Yield a special marker to trigger full reset in WebSocket handler
-                            # The WebSocket handler will send the reset message as the new conversation's greeting
+                            # Yield a marker so the WebSocket handler can reset
+                            # state and speak the new greeting itself.
                             thinking_audio.stop()
                             yield {"type": "reset_conversation", "message": ev.data["message"]}
 
@@ -1018,7 +1033,7 @@ async def stream_response(
                             # Return the confirmation message directly
                             thinking_audio.stop()
                             confirmation = ev.data.get(
-                                "message", "Changed to %s" % ev.data.get("new_model")
+                                "message", "Changed to {}".format(ev.data.get("new_model"))
                             )
                             yield confirmation
                             _mark_turn_end(
@@ -1090,7 +1105,7 @@ async def stream_response(
                                 # Define callback to update the message when async completes
                                 def update_message(
                                     aid: str,
-                                    result: Dict[str, Any],
+                                    result: dict[str, Any],
                                     idx: int = msg_index,
                                     _call_id: str | None = call_id,
                                     _tool_name: str = name,
@@ -1113,7 +1128,9 @@ async def stream_response(
                                             )
                                         else:
                                             logger.error(
-                                                f"Message index {idx} out of range (len={len(messages)})"
+                                                "Message index %d out of range (len=%d)",
+                                                idx,
+                                                len(messages),
                                             )
                                     except Exception as e:
                                         logger.error(f"Failed to update async message: {e}")

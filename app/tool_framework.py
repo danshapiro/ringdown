@@ -26,11 +26,11 @@ import logging
 import os
 import threading
 import traceback
+from collections.abc import Callable, Sequence
 from functools import wraps
-from typing import Any, Callable, Dict, List, Sequence, Type
+from typing import Any
 
 from pydantic import BaseModel, ValidationError
-from pydantic.json_schema import models_json_schema
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +38,13 @@ logger = logging.getLogger(__name__)
 # Registry internals
 # ---------------------------------------------------------------------------
 
+
 class _ToolSpec(BaseModel):
     """Metadata for a registered tool."""
 
     name: str
     description: str
-    param_model: Type[BaseModel]
+    param_model: type[BaseModel]
     func: Callable[[BaseModel], Any]
     prompt: str | None = None
     async_execution: bool = False
@@ -53,9 +54,9 @@ class _ToolSpec(BaseModel):
         "arbitrary_types_allowed": True,
     }
 
-    def openai_schema(self) -> Dict[str, Any]:
+    def openai_schema(self) -> dict[str, Any]:
         """Return OpenAI-compatible JSON schema dict for this tool.
-        
+
         Uses JSON Schema draft 2020-12 compatible format with $defs instead of
         the legacy $components/schemas format. This ensures compatibility with:
         - OpenAI (supports both formats)
@@ -64,20 +65,20 @@ class _ToolSpec(BaseModel):
         """
         # Use JSON Schema draft 2020-12 compatible $defs format for maximum compatibility
         schema = self.param_model.model_json_schema(ref_template="#/$defs/{model}")
-        
+
         # Add JSON Schema draft identifier for maximum compatibility
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-        
+
         # Ensure basic required fields
         if "type" not in schema:
             schema["type"] = "object"
         if "properties" not in schema:
             schema["properties"] = {}
-        
+
         # Set strict validation for better provider compatibility
         if "additionalProperties" not in schema:
             schema["additionalProperties"] = False
-        
+
         return {
             "type": "function",
             "function": {
@@ -89,36 +90,40 @@ class _ToolSpec(BaseModel):
 
 
 # Global mapping name -> ToolSpec
-TOOL_REGISTRY: Dict[str, _ToolSpec] = {}
+TOOL_REGISTRY: dict[str, _ToolSpec] = {}
 
 # Global storage for current agent context to support async execution
-_current_agent_context: Dict[str, Any] | None = None
-_current_call_context: Dict[str, Any] | None = None
+_current_agent_context: dict[str, Any] | None = None
+_current_call_context: dict[str, Any] | None = None
 
 # Global registry for async tool results and callbacks
-_async_tool_registry: Dict[str, Dict[str, Any]] = {}
+_async_tool_registry: dict[str, dict[str, Any]] = {}
+
 
 # Function to register a callback for async tool completion
 def register_async_callback(async_id: str, callback: Any) -> None:
     """Register a callback to be called when an async tool completes."""
     if async_id not in _async_tool_registry:
         _async_tool_registry[async_id] = {}
-    _async_tool_registry[async_id]['callback'] = callback
+    _async_tool_registry[async_id]["callback"] = callback
+
 
 # Function to get the result of an async tool
-def get_async_result(async_id: str) -> Dict[str, Any] | None:
+def get_async_result(async_id: str) -> dict[str, Any] | None:
     """Get the result of an async tool execution if available."""
-    return _async_tool_registry.get(async_id, {}).get('result')
+    return _async_tool_registry.get(async_id, {}).get("result")
+
 
 # ---------------------------------------------------------------------------
 # Public decorator
 # ---------------------------------------------------------------------------
 
+
 def register_tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    param_model: Type[BaseModel],
+    param_model: type[BaseModel],
     prompt: str | None = None,
     async_execution: bool = False,
     category: str = "input",
@@ -149,7 +154,9 @@ def register_tool(
 
         cat_value = category.lower()
         if cat_value not in {"input", "output"}:
-            raise ValueError(f"Tool '{name}' category must be 'input' or 'output', got '{category}'")
+            raise ValueError(
+                f"Tool '{name}' category must be 'input' or 'output', got '{category}'"
+            )
 
         TOOL_REGISTRY[name] = _ToolSpec(
             name=name,
@@ -175,13 +182,14 @@ def register_tool(
 # Helper APIs
 # ---------------------------------------------------------------------------
 
-def list_tools() -> List[str]:
+
+def list_tools() -> list[str]:
     """Return available tool names."""
 
     return list(TOOL_REGISTRY.keys())
 
 
-def get_tool_schema(name: str) -> Dict[str, Any]:
+def get_tool_schema(name: str) -> dict[str, Any]:
     """Return OpenAI-compatible JSON schema for a tool by name."""
     if name not in TOOL_REGISTRY:
         raise ValueError(f"Tool '{name}' not found")
@@ -196,7 +204,7 @@ def get_tool_prompt(name: str) -> str:
     return spec.prompt or f"Tool '{name}' has no prompt documentation."
 
 
-def get_tools_for_agent(agent_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+def get_tools_for_agent(agent_cfg: dict[str, Any]) -> list[dict[str, Any]]:
     """Return list of OpenAI tool schemas enabled for this agent.
 
     `agent_cfg` should contain an optional `tools` key: list[str].  If
@@ -204,7 +212,7 @@ def get_tools_for_agent(agent_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
 
     names: Sequence[str] = agent_cfg.get("tools", [])
-    schemas: List[Dict[str, Any]] = []
+    schemas: list[dict[str, Any]] = []
 
     for n in names:
         if n not in TOOL_REGISTRY:
@@ -219,33 +227,39 @@ def _truncate_tool_response(result: Any) -> Any:
     try:
         # Convert result to JSON string to check length
         result_json = json.dumps(result, ensure_ascii=False)
-        
+
         # Check if truncation is needed
         if len(result_json) <= 200000:
             return result
-        
+
         # Calculate how many characters were removed
         chars_removed = len(result_json) - 200000
-        
+
         # Create truncation notice
-        truncation_notice = f"[TRUNCATED: {chars_removed} more characters removed; be sure to mention this to the user.]"
-        
+        truncation_notice = (
+            "[TRUNCATED: "
+            f"{chars_removed} more characters removed; "
+            "be sure to mention this to the user.]"
+        )
+
         # Try to be smarter about truncation for different data types
         if isinstance(result, str):
             # For strings, truncate the original string and add notice
             # Account for JSON quotes and escape sequences
-            max_content_length = 200000 - len(json.dumps("")) - len(truncation_notice) - 10  # safety buffer
+            max_content_length = (
+                200000 - len(json.dumps("")) - len(truncation_notice) - 10
+            )  # safety buffer
             if max_content_length > 0:
                 truncated_str = result[:max_content_length]
                 return truncated_str + "\n\n" + truncation_notice
             else:
                 return truncation_notice
-        
+
         elif isinstance(result, dict):
             # For dicts, try to preserve structure by truncating string values
             truncated_dict = {}
             remaining_chars = 200000 - len(truncation_notice) - 100  # safety buffer
-            
+
             for key, value in result.items():
                 key_json = json.dumps({key: value})
                 if len(json.dumps(truncated_dict)) + len(key_json) < remaining_chars:
@@ -256,17 +270,19 @@ def _truncate_tool_response(result: Any) -> Any:
                         truncated_value = value[:100] + "..."
                         truncated_dict[key] = truncated_value
                     elif not truncated_dict:  # Ensure we have at least one key
-                        truncated_dict[key] = str(value)[:100] + "..." if len(str(value)) > 100 else value
+                        truncated_dict[key] = (
+                            str(value)[:100] + "..." if len(str(value)) > 100 else value
+                        )
                     break
-            
+
             truncated_dict["_truncation_notice"] = truncation_notice
             return truncated_dict
-        
+
         elif isinstance(result, list):
             # For lists, include as many complete items as possible
             truncated_list = []
             remaining_chars = 200000 - len(truncation_notice) - 100  # safety buffer
-            
+
             for item in result:
                 item_json = json.dumps(item)
                 if len(json.dumps(truncated_list)) + len(item_json) < remaining_chars:
@@ -276,12 +292,14 @@ def _truncate_tool_response(result: Any) -> Any:
                     if isinstance(item, str) and len(item) > 100:
                         truncated_list.append(item[:100] + "...")
                     elif not truncated_list:  # Ensure we have at least one item
-                        truncated_list.append(str(item)[:100] + "..." if len(str(item)) > 100 else item)
+                        truncated_list.append(
+                            str(item)[:100] + "..." if len(str(item)) > 100 else item
+                        )
                     break
-            
+
             truncated_list.append(truncation_notice)
             return truncated_list
-        
+
         else:
             # For other types, convert to string and truncate
             str_result = str(result)
@@ -290,7 +308,7 @@ def _truncate_tool_response(result: Any) -> Any:
                 return str_result[:max_content_length] + "\n\n" + truncation_notice
             else:
                 return truncation_notice
-            
+
     except Exception as exc:
         # If anything goes wrong with truncation, log and return original
         logger.error(f"Failed to truncate tool response: {exc}")
@@ -300,22 +318,23 @@ def _truncate_tool_response(result: Any) -> Any:
 def _get_default_error_email() -> str:
     """Get the default email address for error reporting."""
     from app.settings import get_default_email as _get_email
+
     return _get_email()
 
 
-def _send_error_email(tool_name: str, raw_args: Dict[str, Any], error: Exception) -> None:
+def _send_error_email(tool_name: str, raw_args: dict[str, Any], error: Exception) -> None:
     """Send an email about a tool execution error."""
     try:
         # Import here to avoid circular imports
-        from .tools.email import send_email, EmailArgs, _is_recipient_allowed
-        
+        from .tools.email import EmailArgs, _is_recipient_allowed, send_email
+
         error_email = _get_default_error_email()
-        
+
         # Check if we can send to this email address
         if not _is_recipient_allowed(error_email):
             logger.error(f"Cannot send error email to {error_email} - not in greenlist")
             return
-        
+
         # Format the error message
         error_msg = (
             f"Tool Execution Error\n\n"
@@ -324,25 +343,26 @@ def _send_error_email(tool_name: str, raw_args: Dict[str, Any], error: Exception
             f"Error: {str(error)}\n\n"
             f"Full traceback:\n{traceback.format_exc()}"
         )
-        
+
         # Send the error email
         from app.settings import get_default_bot_name as _bot_default
+
         email_args = EmailArgs(
             to=error_email,
             subject=f"[{_bot_default()}] Async Tool Error: {tool_name}",
-            body=error_msg
+            body=error_msg,
         )
-        
+
         send_email(email_args)
         logger.info(f"Sent error email for tool {tool_name} to {error_email}")
-        
+
     except Exception as e:
         logger.error(f"Failed to send error email for tool {tool_name}: {e}")
 
 
 def _execute_tool_async(
     name: str,
-    raw_args: Dict[str, Any],
+    raw_args: dict[str, Any],
     spec: _ToolSpec,
     async_id: str,
     preflight_payload: Any | None,
@@ -350,12 +370,12 @@ def _execute_tool_async(
     """Execute a tool asynchronously in a background thread."""
     # Capture the current agent context from module-level storage
     current_agent_context = _current_agent_context
-    
+
     if current_agent_context is None:
         logger.warning(f"No agent context available for async tool {name}")
     else:
         logger.debug(f"Captured agent context for async tool {name}: {current_agent_context}")
-    
+
     def async_execution():
         try:
             # Restore agent context in the new thread by calling set_agent_context
@@ -366,60 +386,57 @@ def _execute_tool_async(
                 set_agent_context(current_agent_context)
             else:
                 logger.warning(f"No agent context to restore for async tool {name}")
-            
+
             # Validate and execute the tool
             args_obj = spec.param_model(**raw_args)
             if preflight_payload is not None:
                 try:
                     object.__setattr__(args_obj, "_preflight_payload", preflight_payload)
                 except Exception:
-                    setattr(args_obj, "_preflight_payload", preflight_payload)
+                    args_obj._preflight_payload = preflight_payload
             logger.info(f"Executing tool {name} asynchronously with args={args_obj}")
             result = spec.func(args_obj)
             logger.info(f"Async tool {name} completed successfully")
-            
+
             # Log result preview for debugging
             try:
                 preview = json.dumps(result)[:500]
             except Exception:
                 preview = str(result)[:500]
             logger.debug(f"Async tool {name} result preview: {preview}")
-            
+
             # Store the result in the registry
             if async_id not in _async_tool_registry:
                 _async_tool_registry[async_id] = {}
-            _async_tool_registry[async_id]['result'] = result
-            _async_tool_registry[async_id]['status'] = 'completed'
-            
+            _async_tool_registry[async_id]["result"] = result
+            _async_tool_registry[async_id]["status"] = "completed"
+
             # Call the callback if registered
-            callback = _async_tool_registry.get(async_id, {}).get('callback')
+            callback = _async_tool_registry.get(async_id, {}).get("callback")
             if callback:
                 try:
                     callback(async_id, result)
                 except Exception as e:
                     logger.error(f"Error calling async callback for {name}: {e}")
-            
+
         except Exception as e:
             logger.error(f"Async tool {name} failed: {e}")
             _send_error_email(name, raw_args, e)
-            
+
             # Store the error in the registry
             if async_id not in _async_tool_registry:
                 _async_tool_registry[async_id] = {}
-            _async_tool_registry[async_id]['result'] = {
-                "success": False,
-                "error": str(e)
-            }
-            _async_tool_registry[async_id]['status'] = 'failed'
-            
+            _async_tool_registry[async_id]["result"] = {"success": False, "error": str(e)}
+            _async_tool_registry[async_id]["status"] = "failed"
+
             # Call the callback with error
-            callback = _async_tool_registry.get(async_id, {}).get('callback')
+            callback = _async_tool_registry.get(async_id, {}).get("callback")
             if callback:
                 try:
                     callback(async_id, {"success": False, "error": str(e)})
                 except Exception as cb_e:
                     logger.error(f"Error calling async error callback for {name}: {cb_e}")
-    
+
     # Start the async execution in a background thread
     thread = threading.Thread(target=async_execution, daemon=True)
     thread.start()
@@ -434,7 +451,7 @@ def _execute_tool_async(
         thread.join(wait_hint)
 
 
-def execute_tool(name: str, raw_args: Dict[str, Any]) -> Any:
+def execute_tool(name: str, raw_args: dict[str, Any]) -> Any:
     """Validate *raw_args* against tool schema and execute the tool."""
 
     if name not in TOOL_REGISTRY:
@@ -449,7 +466,7 @@ def execute_tool(name: str, raw_args: Dict[str, Any]) -> Any:
             logger.error(f"Failed to propagate agent context in execute_tool: {exc}")
 
     spec = TOOL_REGISTRY[name]
-    
+
     # Handle async execution
     if spec.async_execution:
         try:
@@ -488,11 +505,12 @@ def execute_tool(name: str, raw_args: Dict[str, Any]) -> Any:
 
         # Generate a unique ID for this async execution
         import uuid
+
         async_id = str(uuid.uuid4())
 
         # Start async execution with the ID
         _execute_tool_async(name, raw_args, spec, async_id, preflight_payload)
-        
+
         # Return immediately with a pending status that includes the ID
         return {
             "success": True,  # Immediate acknowledgement for caller
@@ -501,9 +519,9 @@ def execute_tool(name: str, raw_args: Dict[str, Any]) -> Any:
             "status": "pending",
             "tool_name": name,
             # Tests expect this exact phrase for quick validation
-            "message": f"Tool '{name}' started asynchronously (id={async_id})."
+            "message": f"Tool '{name}' started asynchronously (id={async_id}).",
         }
-    
+
     # Handle synchronous execution (existing behavior)
     try:
         args_obj = spec.param_model(**raw_args)
@@ -572,11 +590,11 @@ def _auto_import_app_tools() -> None:
 _auto_import_app_tools()
 
 # ---------------------------------------------------------------------------
-# Agent context propagation                                                     
+# Agent context propagation
 # ---------------------------------------------------------------------------
 
 
-def set_agent_context(agent_cfg: Dict[str, Any] | None) -> None:
+def set_agent_context(agent_cfg: dict[str, Any] | None) -> None:
     """Propagate *agent_cfg* to all registered tools that expose a
     ``set_agent_context`` callable.
 
@@ -587,11 +605,11 @@ def set_agent_context(agent_cfg: Dict[str, Any] | None) -> None:
     tools without importing them individually.  New tools therefore get the
     context automatically – no core-loop changes required.
     """
-    
+
     # Store the context at module level for async tools
     global _current_agent_context
     _current_agent_context = agent_cfg
-    
+
     # Log agent context details
     if agent_cfg:
         logger.info(f"Setting agent context with bot_name: {agent_cfg.get('bot_name', 'NOT SET')}")
@@ -609,10 +627,10 @@ def set_agent_context(agent_cfg: Dict[str, Any] | None) -> None:
                 setter(agent_cfg)
                 logger.debug(f"Set agent context on module {mod.__name__}")
             except Exception as exc:  # noqa: BLE001 – do not fail app for one tool
-                logger.exception("%s.set_agent_context failed: %s", mod.__name__, exc) 
+                logger.exception("%s.set_agent_context failed: %s", mod.__name__, exc)
 
 
-def set_call_context(call_ctx: Dict[str, Any] | None) -> None:
+def set_call_context(call_ctx: dict[str, Any] | None) -> None:
     """Propagate *call_ctx* (e.g., Twilio metadata) to tools that opt in."""
 
     global _current_call_context

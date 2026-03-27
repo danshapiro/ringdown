@@ -1,7 +1,6 @@
 defaults:
   timezone: America/Los_Angeles
-  model: claude-opus-4-6
-  model: claude-opus-4-6
+  model: claude-sonnet-4-20250514
   temperature: 1.0
   max_tokens: 20000
   language: en-US
@@ -13,7 +12,7 @@ defaults:
     - team@example.com
   project_name: ringdown
   calendar_user_name: Ringdown Operator
-  backup_model: gemini/gemini-3-flash-preview
+  backup_model: gemini/gemini-2.5-flash
   backup_temperature: 1.0
   backup_max_tokens: 20000
   max_history: 40
@@ -78,6 +77,8 @@ agents:
       - CreateGoogleDoc
       - ReadGoogleDoc
       - AppendGoogleDoc
+      - TodoRead
+      - TodoAdd
       - change_llm
       - reset
     email_greenlist_enforced: true

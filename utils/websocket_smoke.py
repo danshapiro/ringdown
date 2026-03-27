@@ -93,7 +93,7 @@ async def _run(config: SmokeConfig) -> int:
             for idx in range(config.receive_messages):
                 try:
                     raw = await asyncio.wait_for(ws.recv(), timeout=config.timeout)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     _json_log("WARNING", "Timed out waiting for WebSocket response", index=idx)
                     break
                 try:

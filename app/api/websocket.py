@@ -6,8 +6,9 @@ import asyncio
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
+
 import litellm
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from fastapi.concurrency import run_in_threadpool
@@ -120,14 +121,19 @@ async def websocket_endpoint(ws: WebSocket):
                 if connection_elapsed >= 3300 and not ws.scope.get("reconnection_sent"):
                     # Send reconnection message to client
                     logger.warning(
-                        "Connection approaching timeout (%.1fs), initiating graceful reconnection (55-minute cutoff)",
+                        "Connection approaching timeout (%.1fs), "
+                        "initiating graceful reconnection (55-minute cutoff)",
                         connection_elapsed,
                     )
 
                     # Send reconnection notification to Twilio
                     reconnect_msg = {
                         "type": "text",
-                        "token": "I need to briefly reconnect our call to maintain quality. You'll hear a short beep and we'll continue right where we left off.",
+                        "token": (
+                            "I need to briefly reconnect our call to maintain "
+                            "quality. You'll hear a short beep and we'll "
+                            "continue right where we left off."
+                        ),
                         "last": False,
                     }
                     await safe_send_json(reconnect_msg)
@@ -210,7 +216,7 @@ async def websocket_endpoint(ws: WebSocket):
 
                 # Log visually distinct header for new call
                 caller_display = caller_number or "unknown"
-                timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
                 logger.info("=" * 80)
                 logger.info("🚀 NEW CALL from %s at %s", caller_display, timestamp)
                 logger.info("=" * 80)
@@ -358,7 +364,12 @@ async def websocket_endpoint(ws: WebSocket):
                         ws.scope["messages"].append(
                             {
                                 "role": "user",
-                                "content": "[[Note: The user has disconnected, so while further tool calls are possible if needed to complete their request, no further interaction is possible.]]",
+                                "content": (
+                                    "[[Note: The user has disconnected, so "
+                                    "while further tool calls are possible if "
+                                    "needed to complete their request, no "
+                                    "further interaction is possible.]]"
+                                ),
                             }
                         )
 
@@ -428,8 +439,9 @@ async def websocket_endpoint(ws: WebSocket):
                                     except Exception as exc:
                                         logger.error("token_counter failed: %s", exc)
 
-                                    # Clear buffer & reset timer; no pending chunk at the moment – the next
-                                    # tokens from the LLM will establish a new one.
+                                    # Clear buffer and reset timer. The next
+                                    # tokens from the LLM will establish a new
+                                    # pending chunk.
                                     pending_chunk = None
                                     buffer.clear()
                                     start = time.perf_counter()
@@ -461,12 +473,13 @@ async def websocket_endpoint(ws: WebSocket):
 
                                 # Get the caller info to look up fresh agent config
                                 # We need to determine which agent should be used
-                                # In the WebSocket context, we don't have the original caller number,
-                                # but we can use the agent name from the current config
+                                # In the WebSocket context, we don't have the
+                                # original caller number, but we can use the
+                                # agent name from the current config.
                                 current_agent = ws.scope.get("agent_config", {})
 
                                 # Find which agent this is by checking phone numbers
-                                from app.settings import get_agent_for_number, _load_config
+                                from app.settings import _load_config
 
                                 config = _load_config()
                                 agent_name = None
@@ -512,12 +525,14 @@ async def websocket_endpoint(ws: WebSocket):
                                 tf.set_agent_context(fresh_agent)
                                 tf.set_call_context(ws.scope.get("call_context"))
 
-                                # Log the reset in memory (marks boundary between old and new conversation)
+                                # Log the reset in memory to mark the boundary
+                                # between the old and new conversation.
                                 await run_in_threadpool(
                                     log_turn, "system", "--- CONVERSATION RESET ---"
                                 )
 
-                                # Refresh runtime settings so subsequent turns use the new agent profile
+                                # Refresh runtime settings so subsequent turns
+                                # use the new agent profile.
                                 agent_cfg = fresh_agent
                                 voice_name = agent_cfg.get("voice", "")
                                 provider_name = agent_cfg.get("tts_provider", "")
@@ -559,7 +574,8 @@ async def websocket_endpoint(ws: WebSocket):
                                     reset_message,
                                 )
 
-                                # Break out of the token processing loop since we've completed the stream
+                                # Break out of the token processing loop since
+                                # we've completed the stream.
                                 break
                             elif token.get("type") == "hangup_call":
                                 hangup_marker = token
@@ -599,13 +615,17 @@ async def websocket_endpoint(ws: WebSocket):
                             has_word = re.search(r"[A-Za-z]{2,}", payload) is not None
 
                             # More aggressive thresholds so speech starts sooner
-                            if len(payload) >= 60:
-                                flush = True
-                            elif sentence_end and len(payload) >= 30 and has_word:
-                                flush = True
-                            elif elapsed > 0.25 and has_word:
-                                flush = True
-                            elif pending_chunk is None and has_word and len(payload) >= 15:
+                            if (
+                                len(payload) >= 60
+                                or sentence_end
+                                and len(payload) >= 30
+                                and has_word
+                                or elapsed > 0.25
+                                and has_word
+                                or pending_chunk is None
+                                and has_word
+                                and len(payload) >= 15
+                            ):
                                 flush = True
                         else:
                             if len(buffer) >= 8 or elapsed > 0.06:
@@ -702,9 +722,11 @@ async def websocket_endpoint(ws: WebSocket):
                     else:
                         if pending_chunk is None:
                             # We flushed the last spoken chunk earlier (e.g. before tool execution).
-                            # If we still have additional text (final_chunk), send it and close properly.
+                            # If we still have additional text (final_chunk),
+                            # send it and close properly.
                             if final_chunk is None:
-                                # Extreme corner case: nothing left – send whitespace to close conversation.
+                                # Extreme corner case: nothing left. Send
+                                # whitespace to close the conversation.
                                 await safe_send_json({"type": "text", "token": " ", "last": True})
                                 if allow_ssml:
                                     logger.info("SSML final → <blank whitespace>")
@@ -746,7 +768,8 @@ async def websocket_endpoint(ws: WebSocket):
                                 except Exception as exc:
                                     logger.error("token_counter failed: %s", exc)
                             else:
-                                # We have both: send reserved chunk (no close yet), then final chunk (adds </speak>).
+                                # We have both: send the reserved chunk first,
+                                # then the final chunk with the closing tag.
                                 await safe_send_json(
                                     {"type": "text", "token": pending_chunk, "last": False}
                                 )
@@ -773,7 +796,8 @@ async def websocket_endpoint(ws: WebSocket):
                                 except Exception as exc:
                                     logger.error("token_counter failed: %s", exc)
 
-                    # Play finished sound after AI completes speaking unless we are hanging up immediately
+                    # Play the finished sound after the AI completes speaking
+                    # unless we are hanging up immediately.
                     if hangup_marker is None:
                         await send_finished_sound()
 
@@ -804,7 +828,8 @@ async def websocket_endpoint(ws: WebSocket):
                             logger.warning("Failed to close WebSocket during hangup: %s", exc)
                         break
 
-                    # Signal end-of-turn for easier tracing – we are now idle until the next user prompt.
+                    # Signal end-of-turn for easier tracing. We are now idle
+                    # until the next user prompt.
                     logger.debug("Waiting for user")
 
                     # If user disconnected, exit the message loop
@@ -946,7 +971,8 @@ def _log_call_summary(ws: WebSocket) -> None:
     total_cost = llm_cost + twilio_cost
 
     logger.info(
-        "CALL SUMMARY – duration %s, tokens prompt=%d, completion=%d, LLM cost=$%.4f, Twilio cost=$%.4f, TOTAL=$%.4f",
+        "CALL SUMMARY - duration %s, tokens prompt=%d, completion=%d, "
+        "LLM cost=$%.4f, Twilio cost=$%.4f, TOTAL=$%.4f",
         hhmmss,
         prompt_tokens,
         completion_tokens,

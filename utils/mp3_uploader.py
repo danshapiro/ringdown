@@ -3,6 +3,7 @@
 Moved from ``app/utils`` to a top-level ``utils`` package so it can be imported
 with ``import utils.mp3_uploader`` throughout the project.
 """
+
 from __future__ import annotations
 
 import logging
@@ -28,8 +29,7 @@ def _run_cmd(cmd: str, *, check: bool = True) -> str:
         cmd,
         shell=True,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         encoding="utf-8",
     )
 
@@ -48,6 +48,7 @@ def _run_cmd(cmd: str, *, check: bool = True) -> str:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def upload_mp3_to_twilio(client: Client, mp3_path: Path) -> str:  # noqa: D401
     """Upload *mp3_path* to GCS and return a publicly accessible URL."""

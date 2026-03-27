@@ -1,14 +1,13 @@
 """Tests for the hang_up tool."""
 
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.chat import stream_response
 from app.tool_framework import TOOL_REGISTRY, execute_tool
 from app.tools import hang_up
-from app.chat import stream_response
 
 
 def _stub_env(account_sid: str = "AC123", auth_token: str = "auth") -> SimpleNamespace:
@@ -26,11 +25,13 @@ def test_hang_up_invokes_twilio(monkeypatch):
     called = {}
 
     def fake_complete(account_sid: str, auth_token: str, call_sid: str) -> None:
-        called.update({
-            "account_sid": account_sid,
-            "auth_token": auth_token,
-            "call_sid": call_sid,
-        })
+        called.update(
+            {
+                "account_sid": account_sid,
+                "auth_token": auth_token,
+                "call_sid": call_sid,
+            }
+        )
 
     monkeypatch.setattr(hang_up, "_complete_call_via_twilio", fake_complete)
     monkeypatch.setattr(hang_up, "get_env", lambda: _stub_env())

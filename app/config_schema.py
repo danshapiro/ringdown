@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -17,8 +17,8 @@ class ToolRunnerConfig(BaseModel):
     """Configuration for the audible tool runner loop."""
 
     interval_sec: int = Field(2, ge=0)
-    status_messages: Dict[str, str] = Field(default_factory=dict)
-    thinking_sounds: Dict[str, List[str]] = Field(default_factory=dict)
+    status_messages: dict[str, str] = Field(default_factory=dict)
+    thinking_sounds: dict[str, list[str]] = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="allow")
 
@@ -34,31 +34,31 @@ class DefaultsConfig(BaseModel):
     bot_name: str = Field(..., min_length=1)
     default_email: str = Field(..., min_length=3)
     email_greenlist_enforced: bool = False
-    admin_emails: List[str] = Field(default_factory=list)
+    admin_emails: list[str] = Field(default_factory=list)
     project_name: str = Field(..., min_length=1)
     calendar_user_name: str = Field(..., min_length=1)
 
-    backup_model: Optional[str] = None
-    backup_temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
-    backup_max_tokens: Optional[int] = Field(default=None, gt=0)
+    backup_model: str | None = None
+    backup_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    backup_max_tokens: int | None = Field(default=None, gt=0)
 
     max_history: int = Field(20, ge=1)
 
-    voice: Optional[str] = None
-    tts_provider: Optional[str] = None
+    voice: str | None = None
+    tts_provider: str | None = None
     max_disconnect_seconds: int = Field(60, ge=0)
     welcome_greeting: str = Field(..., min_length=1)
 
-    tts_prosody: Dict[str, str] = Field(default_factory=dict)
+    tts_prosody: dict[str, str] = Field(default_factory=dict)
     tool_runner: ToolRunnerConfig = Field(default_factory=ToolRunnerConfig)
     tool_header: str = ""
-    tools: List[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
     max_tool_iterations: int = Field(6, ge=1)
 
     transcription_provider: str = Field(..., min_length=1)
     speech_model: str = Field(..., min_length=1)
 
-    tool_prompts: Dict[str, str] = Field(default_factory=dict)
+    tool_prompts: dict[str, str] = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="allow")
 
@@ -67,33 +67,33 @@ class AgentConfig(BaseModel):
     """Per-agent configuration overlaying :class:`DefaultsConfig`."""
 
     bot_name: str = Field(..., min_length=1)
-    prompt: Optional[str] = None
-    phone_numbers: Optional[List[str]] = None
+    prompt: str | None = None
+    phone_numbers: list[str] | None = None
     continue_conversation: bool = False
-    continuation_greeting: Optional[str] = None
-    welcome_greeting: Optional[str] = None
-    max_disconnect_seconds: Optional[int] = Field(default=None, ge=0)
-    max_history: Optional[int] = Field(default=None, ge=1)
-    tools: Optional[List[str]] = None
-    email_greenlist_enforced: Optional[bool] = None
-    email_greenlist: Optional[List[str]] = None
-    docs_folder_greenlist: Optional[List[str]] = None
-    tool_header: Optional[str] = None
-    tool_prompts: Dict[str, str] = Field(default_factory=dict)
+    continuation_greeting: str | None = None
+    welcome_greeting: str | None = None
+    max_disconnect_seconds: int | None = Field(default=None, ge=0)
+    max_history: int | None = Field(default=None, ge=1)
+    tools: list[str] | None = None
+    email_greenlist_enforced: bool | None = None
+    email_greenlist: list[str] | None = None
+    docs_folder_greenlist: list[str] | None = None
+    tool_header: str | None = None
+    tool_prompts: dict[str, str] = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="allow")
 
     @model_validator(mode="before")
     def _validate_phone_numbers(
         cls,
-        data: "AgentConfig" | Dict[str, Any] | object,
-    ) -> "AgentConfig" | Dict[str, Any] | object:
+        data: AgentConfig | dict[str, Any] | object,
+    ) -> AgentConfig | dict[str, Any] | object:
         if isinstance(data, AgentConfig):
             payload = data.model_dump()
         elif isinstance(data, dict):
             payload = data
         elif hasattr(data, "data"):
-            payload = getattr(data, "data") or {}
+            payload = data.data or {}
         else:
             payload = {}
 
@@ -105,14 +105,14 @@ class AgentConfig(BaseModel):
     @model_validator(mode="before")
     def _validate_tools(
         cls,
-        data: "AgentConfig" | Dict[str, Any] | object,
-    ) -> "AgentConfig" | Dict[str, Any] | object:
+        data: AgentConfig | dict[str, Any] | object,
+    ) -> AgentConfig | dict[str, Any] | object:
         if isinstance(data, AgentConfig):
             payload = data.model_dump()
         elif isinstance(data, dict):
             payload = data
         elif hasattr(data, "data"):
-            payload = getattr(data, "data") or {}
+            payload = data.data or {}
         else:
             payload = {}
 
@@ -126,23 +126,23 @@ class ConfigModel(BaseModel):
     """Complete Ringdown configuration schema."""
 
     defaults: DefaultsConfig
-    agents: Dict[str, AgentConfig]
+    agents: dict[str, AgentConfig]
 
     allow_ssml: bool = True
     debug: str | None = None
     hints: str | None = None
-    docs_folder_greenlist_defaults: List[str] = Field(default_factory=list)
+    docs_folder_greenlist_defaults: list[str] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="allow")
 
     @model_validator(mode="before")
-    def _check_agents(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+    def _check_agents(cls, values: dict[str, Any]) -> dict[str, Any]:
         agents = values.get("agents") or {}
 
         if "unknown-caller" not in agents:
             raise ValueError("Configuration must include an 'unknown-caller' agent")
 
-        seen: Dict[str, str] = {}
+        seen: dict[str, str] = {}
         for agent_name, agent_cfg in agents.items():
             if isinstance(agent_cfg, dict):
                 numbers = agent_cfg.get("phone_numbers") or []

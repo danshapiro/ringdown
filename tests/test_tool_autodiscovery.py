@@ -8,10 +8,8 @@ import of all modules in *app.tools* so that their calls to
 
 from __future__ import annotations
 
-import importlib
-
-from app import tool_framework as tf
 from app import settings
+from app import tool_framework as tf
 
 
 def test_auto_import_registry_contains_tools():
@@ -38,9 +36,11 @@ def test_get_tools_for_demo_agent():
     agent_cfg = settings.get_agent_config("ringdown-demo")
     schemas = tf.get_tools_for_agent(agent_cfg)
     fn_names = {s["function"]["name"] for s in schemas}
-    
+
     # Get expected tools from the actual agent configuration
     expected_tools = set(agent_cfg.get("tools", []))
-    
+
     # The function names should match the tool names from config exactly
-    assert fn_names == expected_tools, f"Tool mismatch - Expected: {expected_tools}, Got: {fn_names}" 
+    assert fn_names == expected_tools, (
+        f"Tool mismatch - Expected: {expected_tools}, Got: {fn_names}"
+    )

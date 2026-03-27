@@ -1,7 +1,7 @@
-import asyncio
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from app import memory
 from app import tool_framework as tf
@@ -12,7 +12,7 @@ def test_log_turn_persists_id(tmp_path, monkeypatch):
     """log_turn should commit a row with a non-null id and log it."""
 
     # Swap the persistent DB for an in-memory one
-    from sqlmodel import SQLModel, create_engine, Session, select
+    from sqlmodel import Session, SQLModel, create_engine, select
 
     engine = create_engine("sqlite:///:memory:")
     SQLModel.metadata.create_all(engine)
@@ -33,7 +33,7 @@ def test_log_turn_persists_id(tmp_path, monkeypatch):
 def test_log_turn_records_source(tmp_path, monkeypatch):
     """log_turn should persist the provided source label."""
 
-    from sqlmodel import SQLModel, create_engine, Session, select
+    from sqlmodel import Session, SQLModel, create_engine, select
 
     engine = create_engine("sqlite:///:memory:")
     SQLModel.metadata.create_all(engine)
@@ -73,7 +73,7 @@ def test_log_turn_bootstraps_schema(tmp_path, monkeypatch):
 def test_execute_tool_invalid_args_raises():
     """execute_tool must raise ValidationError when args fail validation."""
 
-    with pytest.raises(Exception):
+    with pytest.raises((ValueError, ValidationError)):
         tf.execute_tool("TavilySearch", {"topic": "news"})  # missing required 'query'
 
 
@@ -81,7 +81,8 @@ def test_execute_tool_invalid_args_raises():
 async def test_stream_response_handles_tool_error(monkeypatch):
     """stream_response should not raise even when tool execution validates bad args."""
 
-    # Prepare two fake LLM responses: one that requests a tool with bad args, then a plain text reply.
+    # Prepare two fake LLM responses: one that requests a tool with bad args,
+    # then a plain text reply.
     first_msg = {
         "role": "assistant",
         "content": "Searching…",
@@ -90,7 +91,7 @@ async def test_stream_response_handles_tool_error(monkeypatch):
                 "id": "call_1",
                 "function": {
                     "name": "TavilySearch",
-                    "arguments": "{\"topic\": \"news\"}",
+                    "arguments": '{"topic": "news"}',
                 },
                 "type": "function",
             }
@@ -123,18 +124,20 @@ async def test_stream_response_handles_tool_error(monkeypatch):
 
         return _gen()
 
-    import litellm, app.chat as chat_module
+    import litellm
+
+    import app.chat as chat_module
 
     monkeypatch.setattr(litellm, "acompletion", fake_acompletion, raising=True)
     monkeypatch.setattr(chat_module, "acompletion", fake_acompletion, raising=True)
 
     agent_cfg = {
-            "model": "gpt-5-mini",
-            "temperature": 0.1,
-            "max_tokens": 16,
-            "max_history": 1000,
-            "tools": ["TavilySearch"],
-        }
+        "model": "gpt-5-mini",
+        "temperature": 0.1,
+        "max_tokens": 16,
+        "max_history": 1000,
+        "tools": ["TavilySearch"],
+    }
 
     token_list = []
     async for tok in stream_response("search the news", agent_cfg, []):
@@ -142,4 +145,4 @@ async def test_stream_response_handles_tool_error(monkeypatch):
 
     # We should have streamed both the pre-tool content and the final apology.
     assert any("Searching" in t for t in token_list)
-    assert any("Sorry" in t for t in token_list) 
+    assert any("Sorry" in t for t in token_list)

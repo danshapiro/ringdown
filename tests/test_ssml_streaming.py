@@ -16,4 +16,4 @@ def test_streamed_ssml_valid_after_fix():
     chunks = ["Hello ", "world"]
 
     for ssml_chunk in _simulate_stream(chunks, prosody_cfg):
-        ET.fromstring(ssml_chunk)  # should not raise 
+        ET.fromstring(ssml_chunk)  # should not raise

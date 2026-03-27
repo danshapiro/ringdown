@@ -2,15 +2,16 @@
 """Tests for Tavily tools (search & extract). Requires TAVILY_API_KEY env."""
 
 import os
+
 import pytest
+
+from app import tool_framework as tf
+from app.tools import tavily  # noqa: F401 – ensures registration
 
 pytestmark = pytest.mark.integration
 
-from app.tools import tavily  # noqa: F401 – ensures registration
-from app import tool_framework as tf
-
-
 HAS_KEY = bool(os.getenv("TAVILY_API_KEY"))
+
 
 def _skip_if_no_key():
     if not HAS_KEY:
@@ -32,4 +33,4 @@ def test_extract_live():
     url = search["results"][0]["url"]
     res = tf.execute_tool("TavilyExtract", {"urls": url})
     assert "results" in res
-    assert res["results"], res 
+    assert res["results"], res

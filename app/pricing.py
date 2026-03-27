@@ -4,18 +4,15 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Tuple
 
 import litellm
 
 logger = logging.getLogger(__name__)
 
-_TWILIO_INBOUND_PER_MIN: float = float(
-    os.getenv("RINGDOWN_TWILIO_INBOUND_PER_MIN", "0.0085")
-)
+_TWILIO_INBOUND_PER_MIN: float = float(os.getenv("RINGDOWN_TWILIO_INBOUND_PER_MIN", "0.0085"))
 
 
-def get_token_prices(model: str) -> Tuple[float, float]:
+def get_token_prices(model: str) -> tuple[float, float]:
     """Return (input_cost, output_cost) USD per token for *model*."""
 
     try:

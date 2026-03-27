@@ -1,17 +1,14 @@
 import datetime
-from unittest.mock import patch, MagicMock
-import pytest
 import time
+from unittest.mock import MagicMock, patch
 
-from app.tools import google_calendar
 from app import tool_framework as tf
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
 from app.tool_framework import get_async_result  # after TF import for type clarity
+from app.tools import google_calendar
 
 
 def _mock_service():
@@ -69,6 +66,7 @@ def _mock_service():
 
     return service
 
+
 # ---------------------------------------------------------------------------
 # Helpers for async-tool tests
 # ---------------------------------------------------------------------------
@@ -90,9 +88,11 @@ def _wait_for_async(async_id: str, timeout: float = 1.0):
             raise TimeoutError(f"Async result {async_id} not ready in {timeout}s")
         time.sleep(0.01)
 
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_calendar_tools_registered():
     assert "CreateCalendarEvent" in tf.TOOL_REGISTRY
@@ -109,7 +109,7 @@ def test_create_event_normal(mock_get_service):
     # set agent context with bot name
     google_calendar.set_agent_context({"bot_name": "Ringdown"})
 
-    start = datetime.datetime(2025, 1, 1, 15, 0, 0, tzinfo=datetime.timezone.utc).isoformat()
+    start = datetime.datetime(2025, 1, 1, 15, 0, 0, tzinfo=datetime.UTC).isoformat()
 
     pending = tf.execute_tool(
         "CreateCalendarEvent",
@@ -195,4 +195,4 @@ def test_delete_event_bot(mock_get_service):
     # ensure delete called
     service = mock_get_service.return_value
     service.events.return_value.delete.assert_called()
-    google_calendar.set_agent_context(None) 
+    google_calendar.set_agent_context(None)

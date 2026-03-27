@@ -7,6 +7,7 @@ These tests verify that different agents use the correct recipient greenlist
 """
 
 import pytest
+
 from app import settings
 from app.tools import email
 
@@ -14,13 +15,16 @@ from app.tools import email
 # Helper
 # ---------------------------------------------------------------------------
 
+
 def _validate(addr: str) -> None:
     """Helper to run the EmailArgs validator only (no network calls)."""
     email.EmailArgs(to=addr, subject="test", body="body")
 
+
 # ---------------------------------------------------------------------------
 # Fixtures clean up agent context to avoid cross-test leakage
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def _reset_agent_context():
@@ -29,9 +33,11 @@ def _reset_agent_context():
     yield
     email.set_agent_context(None)
 
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_greenlist_for_ringdown_demo():
     """ringdown-demo agent should respect its configured recipients."""
@@ -78,4 +84,4 @@ def test_greenlist_fallback_for_unknown_caller():
 
     for addr in blocked:
         with pytest.raises(ValueError):
-            _validate(addr) 
+            _validate(addr)

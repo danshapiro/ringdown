@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Tuple
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -25,11 +25,7 @@ class TodoAddArgs(BaseModel):
 
     text: str = Field(
         ...,
-        description=(
-            "Markdown todo entry formatted exactly as:\n\n"
-            "# Todo name\n\n"
-            "description"
-        ),
+        description=("Markdown todo entry formatted exactly as:\n\n# Todo name\n\ndescription"),
     )
 
     @field_validator("text")
@@ -52,12 +48,16 @@ def _find_existing_todo_document(drive_service: Any) -> str | None:
         "'root' in parents"
     )
 
-    response = drive_service.files().list(
-        q=query,
-        spaces="drive",
-        fields="files(id, name)",
-        pageSize=1,
-    ).execute()
+    response = (
+        drive_service.files()
+        .list(
+            q=query,
+            spaces="drive",
+            fields="files(id, name)",
+            pageSize=1,
+        )
+        .execute()
+    )
 
     files = response.get("files", []) if isinstance(response, dict) else []
     if not files:
@@ -76,7 +76,7 @@ def _ensure_document_in_root(doc_id: str, drive_service: Any) -> None:
         return
 
     remove_parents = ",".join(parents) if parents else None
-    update_kwargs: Dict[str, Any] = {
+    update_kwargs: dict[str, Any] = {
         "fileId": doc_id,
         "addParents": "root",
         "fields": "id, parents",
@@ -99,7 +99,7 @@ def _create_todo_document(docs_service: Any, drive_service: Any) -> str:
     return doc_id
 
 
-def _ensure_todo_document(docs_service: Any, drive_service: Any) -> Tuple[str, bool]:
+def _ensure_todo_document(docs_service: Any, drive_service: Any) -> tuple[str, bool]:
     """Return the todo document ID, creating the document if necessary."""
 
     existing = _find_existing_todo_document(drive_service)
@@ -125,7 +125,7 @@ Use this tool to read the shared Ringdown todo list stored in Google Docs.
 Call this when you need the latest todos before making updates or summaries.
 """.strip(),
 )
-def todo_read(_: TodoReadArgs) -> Dict[str, Any]:
+def todo_read(_: TodoReadArgs) -> dict[str, Any]:
     """Read the Ringdown todo document and return its text content."""
 
     try:
@@ -163,7 +163,7 @@ Provide markdown in the form:
 description
 """.strip(),
 )
-def todo_add(args: TodoAddArgs) -> Dict[str, Any]:
+def todo_add(args: TodoAddArgs) -> dict[str, Any]:
     """Append a todo entry to the Ringdown todo document."""
 
     try:

@@ -9,8 +9,6 @@ These tests ensure that:
 
 from xml.etree import ElementTree as ET
 
-import pytest
-
 from app.main import _build_prosody_tag, _merge_prosody
 
 
@@ -41,4 +39,4 @@ def test_single_chunk_parses_validly():
     chunk = _build_prosody_tag("Hi there", prosody_cfg)
 
     # Direct output should parse without error.
-    ET.fromstring(chunk) 
+    ET.fromstring(chunk)

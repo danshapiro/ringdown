@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """Tests for Gmail email tool."""
 
-from unittest.mock import patch, MagicMock
-
-import time
 import base64
+import time
 from email import message_from_bytes
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.tools import email  # noqa: F401 – ensures registration
 from app import tool_framework as tf
 from app.settings import get_default_bot_name
+from app.tools import email  # noqa: F401 – ensures registration
 
 
 def test_email_registration():
@@ -83,9 +82,12 @@ def test_email_sending_mock():
     mock_users = MagicMock(return_value=MagicMock(messages=MagicMock(return_value=mock_messages)))
     mock_service = MagicMock(users=mock_users)
 
-    with patch("app.tools.email._get_gmail_service", return_value=mock_service), patch(
-        "app.tools.email._send_gmail", return_value={"id": "test_message_123"}
-    ) as mocked_send:
+    with (
+        patch("app.tools.email._get_gmail_service", return_value=mock_service),
+        patch(
+            "app.tools.email._send_gmail", return_value={"id": "test_message_123"}
+        ) as mocked_send,
+    ):
         result = tf.execute_tool(
             "SendEmail",
             {"to": "team@example.com", "subject": "Test Subject", "body": "This is a test email."},

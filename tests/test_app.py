@@ -33,6 +33,7 @@ from app.settings import _load_config  # local import to avoid circular
 # Signature is validated later – we hit fallback path.
 auth_header = {"X-Twilio-Signature": "dummy"}
 
+
 # Patch Twilio signature validator so we can focus on application logic.
 @contextlib.contextmanager
 def _twilio_ok():
@@ -53,9 +54,9 @@ _PRIMARY_AGENT_NAME = next(
     (name for name, cfg in _AGENT_MAP.items() if (cfg.get("phone_numbers") or [])),
     None,
 )
-assert (
-    _PRIMARY_AGENT_NAME is not None
-), "Test configuration must define at least one agent with a phone number"
+assert _PRIMARY_AGENT_NAME is not None, (
+    "Test configuration must define at least one agent with a phone number"
+)
 
 _PRIMARY_AGENT_CFG = app_settings.get_agent_config(_PRIMARY_AGENT_NAME)
 PRIMARY_NUMBER = _PRIMARY_AGENT_CFG["phone_numbers"][0]
@@ -67,6 +68,7 @@ UNKNOWN_NUM = "+19999990000"
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_twilml_agent_selection():
     """Calling /twiml with a known number should embed the agent greeting and voice."""
@@ -194,9 +196,9 @@ def test_missing_api_keys_raise(monkeypatch):
 
 def test_max_history_config():
     """Test that max_history is properly configured in config.yaml."""
-    
+
     from app.settings import get_agent_config
-    
+
     defaults = _CONFIG.get("defaults", {})
     default_max_history = defaults.get("max_history")
     assert default_max_history >= 1

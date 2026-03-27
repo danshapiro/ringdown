@@ -79,12 +79,8 @@ def test_config_model_accepts_mobile_device_keys_as_extras():
                 "bot_name": "Unknown Caller",
             }
         },
-        "mobile_devices": {
-            "device-1": {"agent": "unknown-caller", "label": "Primary"}
-        },
-        "mobileDevices": {
-            "device-2": {"agent": "unknown-caller", "label": "Secondary"}
-        },
+        "mobile_devices": {"device-1": {"agent": "unknown-caller", "label": "Primary"}},
+        "mobileDevices": {"device-2": {"agent": "unknown-caller", "label": "Secondary"}},
     }
 
     cfg = ConfigModel.model_validate(payload)

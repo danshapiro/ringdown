@@ -12,26 +12,25 @@ associated Artifact Registry repository when --purge-images is supplied.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
-import logging
-
-from pathlib import Path
 
 # Re-use helpers from the deploy script to avoid duplication
 from cloudrun_deploy import (
-    _run_cmd,
-    _ensure_gcloud_on_path,
-    _verify_gcloud_auth,
-    _confirm_once,
     DEFAULT_PROJECT_ID,
     DEFAULT_REGION,
     DEFAULT_SERVICE,
+    _confirm_once,
+    _ensure_gcloud_on_path,
+    _run_cmd,
+    _verify_gcloud_auth,
 )
 
 try:
     from dotenv import load_dotenv  # type: ignore
 except ImportError:  # Graceful fallback if python-dotenv absent
+
     def load_dotenv(*_: object, **__: object) -> None:  # type: ignore
         return None
 
@@ -47,6 +46,7 @@ log = logging.getLogger("cloudrun-deactivate")
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _delete_service(project_id: str, region: str, service: str) -> None:
     """Delete *service* in *project_id*/*region* (idempotent)."""
@@ -99,11 +99,16 @@ def _delete_artifact_repo(project_id: str, region: str, repo: str) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Deactivate Cloud Run service")
     parser.add_argument("--project-id", help="GCP project ID (default: gcloud config value)")
-    parser.add_argument("--region", default=None, help="GCP region (default: gcloud config or us-west1)")
-    parser.add_argument("--service", default=DEFAULT_SERVICE, help="Cloud Run service name (default: %(default)s)")
+    parser.add_argument(
+        "--region", default=None, help="GCP region (default: gcloud config or us-west1)"
+    )
+    parser.add_argument(
+        "--service", default=DEFAULT_SERVICE, help="Cloud Run service name (default: %(default)s)"
+    )
 
     parser.add_argument(
         "--purge-images",
@@ -111,7 +116,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Also delete the Artifact Registry repository containing built images",
     )
 
-    parser.add_argument("--yes", action="store_true", help="Skip interactive confirmations (assume yes)")
+    parser.add_argument(
+        "--yes", action="store_true", help="Skip interactive confirmations (assume yes)"
+    )
     return parser.parse_args(argv)
 
 
@@ -134,9 +141,7 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     region = (
-        args.region
-        or os.environ.get("DEPLOY_REGION")
-        or os.environ.get("LIVE_TEST_SERVICE_REGION")
+        args.region or os.environ.get("DEPLOY_REGION") or os.environ.get("LIVE_TEST_SERVICE_REGION")
     )
     if not region:
         try:
@@ -149,7 +154,8 @@ def main(argv: list[str] | None = None) -> None:
 
     # Confirm destructive action
     _confirm_once(
-        f"About to delete Cloud Run service '{args.service}' in project '{project_id}' (region {region})."
+        "About to delete Cloud Run service "
+        f"'{args.service}' in project '{project_id}' (region {region})."
     )
 
     # Delete Cloud Run service
@@ -157,9 +163,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # Optionally delete Artifact Registry repo (same name as service)
     if args.purge_images:
-        _confirm_once(
-            f"Also delete Artifact Registry repo '{args.service}' in {region}?"
-        )
+        _confirm_once(f"Also delete Artifact Registry repo '{args.service}' in {region}?")
         _delete_artifact_repo(project_id, region, args.service)
 
     log.info("Deactivation complete.")
@@ -169,4 +173,4 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        sys.exit(1) 
+        sys.exit(1)

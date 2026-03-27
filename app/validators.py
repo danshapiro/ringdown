@@ -7,18 +7,14 @@ Rely on the helper in *twilio-python* so we stay in sync with future
 algorithm tweaks.
 """
 
-import logging
-
-from urllib.parse import parse_qsl, urlsplit
-
-from twilio.request_validator import RequestValidator
+from urllib.parse import parse_qsl
 
 from fastapi import WebSocket
+from twilio.request_validator import RequestValidator
 
 from log_love import setup_logging
 
 from .settings import get_env
-
 
 # Set up module logger
 logger = setup_logging()
@@ -66,17 +62,16 @@ def is_from_twilio(ws: WebSocket) -> bool:
         for h in host_variants:
             full = f"{p}://{h}{ws.url.path}"
             no_q = full
-            if ws.url.query:
-                full_q = f"{full}?{ws.url.query}"
-            else:
-                full_q = full
+            full_q = f"{full}?{ws.url.query}" if ws.url.query else full
 
-            attempts.extend([
-                (full_q, params),
-                (full_q, {}),
-                (no_q, params),
-                (no_q, {}),
-            ])
+            attempts.extend(
+                [
+                    (full_q, params),
+                    (full_q, {}),
+                    (no_q, params),
+                    (no_q, {}),
+                ]
+            )
 
     for u, p in attempts:
         if validator.validate(u, p, signature):
@@ -93,4 +88,4 @@ def is_from_twilio(ws: WebSocket) -> bool:
         signature,
     )
 
-    return False 
+    return False

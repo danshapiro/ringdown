@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Utility to execute tools while streaming announcement and thinking sounds.
 
 Motivation
@@ -24,11 +22,14 @@ Design
   front-end expects (e.g. WebSocket `{"type":"thinking_sound", …}`).
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
 import random
-from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, NamedTuple
+from collections.abc import AsyncIterator, Callable, Mapping
+from typing import Any, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -48,17 +49,17 @@ class ToolRunner:
         self,
         *,
         status_messages: Mapping[str, str] | None = None,
-        thinking_sounds: Mapping[str, List[str] | None] | None = None,
+        thinking_sounds: Mapping[str, list[str] | None] | None = None,
         interval_sec: float = 2.0,
     ) -> None:
         self._interval = max(interval_sec, 0.2)
 
         # Defaults – callers may override via kwargs
-        self._status_messages: Dict[str, str] = {
+        self._status_messages: dict[str, str] = {
             "default": "Processing…",
             **(status_messages or {}),
         }
-        self._thinking_sounds: Dict[str, List[str] | None] = {
+        self._thinking_sounds: dict[str, list[str] | None] = {
             "default": [
                 "hmm…",
                 "checking…",
@@ -75,7 +76,7 @@ class ToolRunner:
     def status_message(self, tool_name: str) -> str:
         return self._status_messages.get(tool_name, self._status_messages["default"])
 
-    def sound_list(self, tool_name: str) -> List[str]:
+    def sound_list(self, tool_name: str) -> list[str]:
         sounds = self._thinking_sounds.get(tool_name, self._thinking_sounds["default"])
         # Normalise: None → [], copy so callers can't mutate internal list.
         return list(sounds or [])
@@ -88,8 +89,8 @@ class ToolRunner:
         self,
         tool_name: str,
         call_id: str,
-        args: Dict[str, Any],
-        exec_fn: Callable[[Dict[str, Any]], Any],
+        args: dict[str, Any],
+        exec_fn: Callable[[dict[str, Any]], Any],
     ) -> AsyncIterator[ToolEvent]:
         """Execute *exec_fn(args)* while yielding :class:`ToolEvent` objects.
 
@@ -125,7 +126,7 @@ class ToolRunner:
                     await asyncio.wait_for(asyncio.shield(tool_task), timeout=self._interval)
                     # Reached if task completed without Timing out – success or error
                     break
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Task still running.
                     if thinking_sounds:
                         sound = random.choice(thinking_sounds)
@@ -155,4 +156,4 @@ class ToolRunner:
             if not tool_task.done():
                 tool_task.cancel()
                 with contextlib.suppress(Exception):
-                    await tool_task 
+                    await tool_task

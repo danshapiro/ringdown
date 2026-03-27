@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Google Calendar integration tools.
 
 Implements Create/Read/Search/Update/Delete operations that comply with the
@@ -16,22 +14,26 @@ Key design points
 * Reminder handling for *reminder* mode (duration==30 & reminders==0).
 """
 
+from __future__ import annotations
+
+import json
 import logging
 import os
 import re
 import threading
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from functools import lru_cache
+from typing import Any
 
-from pydantic import BaseModel, Field, field_validator, validator
 from google.oauth2 import service_account  # type: ignore
 from googleapiclient.discovery import build  # type: ignore
 from googleapiclient.errors import HttpError  # type: ignore
-import json
-from functools import lru_cache
+from pydantic import BaseModel, Field, field_validator
+
+from app import settings as _app_settings  # to fetch config defaults
+from app.settings import get_calendar_user_name as _get_cal_name
 
 from ..tool_framework import register_tool
-from app import settings as _app_settings  # to fetch config defaults
 
 logger = logging.getLogger(__name__)
 
@@ -39,24 +41,26 @@ logger = logging.getLogger(__name__)
 class CalendarIntegrationDisabled(RuntimeError):
     """Raised when Google Calendar credentials are unavailable."""
 
+
 # ---------------------------------------------------------------------------
 # Thread-local agent context
 # ---------------------------------------------------------------------------
 
 _agent_context = threading.local()
 
-def set_agent_context(agent_config: Dict[str, Any] | None) -> None:
+
+def set_agent_context(agent_config: dict[str, Any] | None) -> None:
     """Store agent config (contains bot_name, etc.) in thread-local."""
     _agent_context.config = agent_config
 
-def get_agent_context() -> Dict[str, Any] | None:
+
+def get_agent_context() -> dict[str, Any] | None:
     return getattr(_agent_context, "config", None)
+
 
 # ---------------------------------------------------------------------------
 # Config-driven constants
 # ---------------------------------------------------------------------------
-
-from app.settings import get_calendar_user_name as _get_cal_name
 
 _CAL_USER_NAME = _get_cal_name()
 
@@ -93,19 +97,16 @@ def _get_calendar_service():
             f"environment variables are not set: {', '.join(missing)}."
         )
     if not os.path.exists(key_path):
-        raise CalendarIntegrationDisabled(
-            f"Service-account key file not found at {key_path}."
-        )
+        raise CalendarIntegrationDisabled(f"Service-account key file not found at {key_path}.")
 
-    creds = (
-        service_account.Credentials.from_service_account_file(key_path, scopes=_SCOPES)
-        .with_subject(impersonate)
-    )
+    creds = service_account.Credentials.from_service_account_file(
+        key_path, scopes=_SCOPES
+    ).with_subject(impersonate)
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
 
 @lru_cache(maxsize=1)
-def _get_service_account_identity() -> Dict[str, str | None]:
+def _get_service_account_identity() -> dict[str, str | None]:
     """Return identifying fields for the configured service account."""
 
     key_path = os.getenv("GMAIL_SA_KEY_PATH")
@@ -113,7 +114,7 @@ def _get_service_account_identity() -> Dict[str, str | None]:
         return {"client_email": None, "client_id": None}
 
     try:
-        with open(key_path, "r", encoding="utf-8") as handle:
+        with open(key_path, encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, ValueError):
         return {"client_email": None, "client_id": None}
@@ -145,7 +146,7 @@ def _append_suffix(title: str) -> str:
     return f"{title}{_suffix()}"
 
 
-def _is_bot_event(event: Dict[str, Any]) -> bool:
+def _is_bot_event(event: dict[str, Any]) -> bool:
     return event.get("summary", "").endswith(_suffix())
 
 
@@ -154,9 +155,11 @@ def _strip_suffix_from_title(title: str) -> str:
         return title[: -len(_suffix())]
     return title
 
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
+
 
 class _BaseArgs(BaseModel):
     """Shared configuration for all arg models."""
@@ -170,10 +173,12 @@ class CreateEventArgs(_BaseArgs):
     title: str = Field(..., description="Event summary/title")
     start_time: datetime = Field(..., description="RFC3339 start time")
     duration_minutes: int = Field(60, gt=0, le=_MAX_DURATION, description="Event length in minutes")
-    description: Optional[str] = Field(None, description="Event description")
-    location: Optional[str] = Field(None, description="Physical or virtual location")
-    attendees: Optional[List[str]] = Field(None, description="List of attendee email addresses")
-    reminders: Optional[int] = Field(10, ge=0, le=1440, description="Popup reminder minutes before start")
+    description: str | None = Field(None, description="Event description")
+    location: str | None = Field(None, description="Physical or virtual location")
+    attendees: list[str] | None = Field(None, description="List of attendee email addresses")
+    reminders: int | None = Field(
+        10, ge=0, le=1440, description="Popup reminder minutes before start"
+    )
     calendar_id: str = Field("primary", description="Target calendar ID")
 
     @field_validator("attendees")
@@ -203,9 +208,9 @@ class ReadEventArgs(_BaseArgs):
 
 class SearchEventsArgs(_BaseArgs):
     calendar_id: str = Field("primary", description="Calendar ID or 'all'")
-    starting_after: Optional[datetime] = Field(None, description="Start of window (RFC3339)")
-    starting_before: Optional[datetime] = Field(None, description="End of window (RFC3339)")
-    query: Optional[str] = Field(None, description="Search text")
+    starting_after: datetime | None = Field(None, description="Start of window (RFC3339)")
+    starting_before: datetime | None = Field(None, description="End of window (RFC3339)")
+    query: str | None = Field(None, description="Search text")
     created_by_bot: bool = Field(False, description="Return only bot-created events")
 
 
@@ -213,15 +218,15 @@ class UpdateEventArgs(_BaseArgs):
     event_id: str
     calendar_id: str = Field("primary")
     # Optional fields for modifications
-    title: Optional[str] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    duration_minutes: Optional[int] = Field(None, gt=0, le=_MAX_DURATION)
-    description: Optional[str] = None
-    location: Optional[str] = None
-    add_attendees: Optional[List[str]] = None
-    remove_attendees: Optional[List[str]] = None
-    reminders: Optional[int] = Field(None, ge=0, le=1440)
+    title: str | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    duration_minutes: int | None = Field(None, gt=0, le=_MAX_DURATION)
+    description: str | None = None
+    location: str | None = None
+    add_attendees: list[str] | None = None
+    remove_attendees: list[str] | None = None
+    reminders: int | None = Field(None, ge=0, le=1440)
 
 
 class DeleteEventArgs(_BaseArgs):
@@ -229,22 +234,20 @@ class DeleteEventArgs(_BaseArgs):
     calendar_id: str = Field("primary")
     send_notifications: bool = Field(True)
 
+
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
 
+
 def _dt_to_rfc3339(dt: datetime) -> str:
     if dt.tzinfo is None:
         # Assume default timezone from config
-        if _DEFAULT_TZ.upper() == "UTC":
-            dt = dt.replace(tzinfo=timezone.utc)
-        else:
-            # Fallback: naive dt interpreted as local offset 0; RFC3339 requires tz.
-            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.isoformat()
 
 
-def _build_reminders(minutes: int) -> Dict[str, Any]:
+def _build_reminders(minutes: int) -> dict[str, Any]:
     return {
         "useDefault": False,
         "overrides": [{"method": "popup", "minutes": minutes}],
@@ -253,12 +256,16 @@ def _build_reminders(minutes: int) -> Dict[str, Any]:
 
 @register_tool(
     name="CreateCalendarEvent",
-    description=f"Create a calendar event (or reminder). Use {_DEFAULT_TZ} unless you know {_CAL_USER_NAME} is somewhere else or they say otherwise.",
+    description=(
+        "Create a calendar event (or reminder). Use "
+        f"{_DEFAULT_TZ} unless you know {_CAL_USER_NAME} is somewhere else or "
+        "they say otherwise."
+    ),
     param_model=CreateEventArgs,
     async_execution=True,
     category="output",
 )
-def create_calendar_event(args: CreateEventArgs) -> Dict[str, Any]:
+def create_calendar_event(args: CreateEventArgs) -> dict[str, Any]:
     try:
         svc = _get_calendar_service()
     except CalendarIntegrationDisabled as exc:
@@ -273,7 +280,7 @@ def create_calendar_event(args: CreateEventArgs) -> Dict[str, Any]:
     # Build event body
     end_time = args.start_time + timedelta(minutes=args.duration_minutes)
 
-    event_body: Dict[str, Any] = {
+    event_body: dict[str, Any] = {
         "summary": _append_suffix(args.title),
         "start": {"dateTime": _dt_to_rfc3339(args.start_time)},
         "end": {"dateTime": _dt_to_rfc3339(end_time)},
@@ -334,7 +341,7 @@ def create_calendar_event(args: CreateEventArgs) -> Dict[str, Any]:
         except (ValueError, AttributeError):
             parsed_error = {}
 
-        response: Dict[str, Any] = {
+        response: dict[str, Any] = {
             "success": False,
             "error": error_message,
             "status_code": getattr(e, "status_code", None),
@@ -367,7 +374,7 @@ def create_calendar_event(args: CreateEventArgs) -> Dict[str, Any]:
     description="Read a calendar event's details.",
     param_model=ReadEventArgs,
 )
-def read_calendar_event(args: ReadEventArgs) -> Dict[str, Any]:
+def read_calendar_event(args: ReadEventArgs) -> dict[str, Any]:
     try:
         svc = _get_calendar_service()
     except CalendarIntegrationDisabled as exc:
@@ -409,7 +416,7 @@ def read_calendar_event(args: ReadEventArgs) -> Dict[str, Any]:
     description="Search calendar events within a time window.",
     param_model=SearchEventsArgs,
 )
-def search_calendar_events(args: SearchEventsArgs) -> Dict[str, Any]:
+def search_calendar_events(args: SearchEventsArgs) -> dict[str, Any]:
     try:
         svc = _get_calendar_service()
     except CalendarIntegrationDisabled as exc:
@@ -427,7 +434,7 @@ def search_calendar_events(args: SearchEventsArgs) -> Dict[str, Any]:
             c["id"]
             for c in svc.calendarList().list(minAccessRole="reader").execute().get("items", [])
         ]
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for cid in cal_ids:
         try:
             resp = (
@@ -435,11 +442,11 @@ def search_calendar_events(args: SearchEventsArgs) -> Dict[str, Any]:
                 .list(
                     calendarId=cid,
                     timeMin=_dt_to_rfc3339(
-                        args.starting_after or datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                        args.starting_after
+                        or datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
                     ),
                     timeMax=_dt_to_rfc3339(
-                        args.starting_before
-                        or (datetime.now(timezone.utc) + timedelta(days=30))
+                        args.starting_before or (datetime.now(UTC) + timedelta(days=30))
                     ),
                     q=args.query or None,
                     singleEvents=True,
@@ -476,7 +483,7 @@ def search_calendar_events(args: SearchEventsArgs) -> Dict[str, Any]:
     async_execution=True,
     category="output",
 )
-def update_calendar_event(args: UpdateEventArgs) -> Dict[str, Any]:
+def update_calendar_event(args: UpdateEventArgs) -> dict[str, Any]:
     try:
         svc = _get_calendar_service()
     except CalendarIntegrationDisabled as exc:
@@ -519,8 +526,11 @@ def update_calendar_event(args: UpdateEventArgs) -> Dict[str, Any]:
             # adjust duration preserving start
             def _parse_rfc3339(s: str) -> datetime:
                 return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
             start_dt = _parse_rfc3339(event["start"]["dateTime"])
-            event["end"]["dateTime"] = _dt_to_rfc3339(start_dt + timedelta(minutes=args.duration_minutes))
+            event["end"]["dateTime"] = _dt_to_rfc3339(
+                start_dt + timedelta(minutes=args.duration_minutes)
+            )
         if args.description is not None:
             event["description"] = args.description
         if args.location is not None:
@@ -531,13 +541,17 @@ def update_calendar_event(args: UpdateEventArgs) -> Dict[str, Any]:
                 if em not in existing:
                     event.setdefault("attendees", []).append({"email": em})
         if args.remove_attendees and event.get("attendees"):
-            event["attendees"] = [a for a in event["attendees"] if a["email"] not in args.remove_attendees]
+            event["attendees"] = [
+                a for a in event["attendees"] if a["email"] not in args.remove_attendees
+            ]
         if args.reminders is not None:
             event["reminders"] = _build_reminders(args.reminders)
 
         updated = (
             svc.events()
-            .update(calendarId=args.calendar_id, eventId=args.event_id, body=event, sendUpdates="none")
+            .update(
+                calendarId=args.calendar_id, eventId=args.event_id, body=event, sendUpdates="none"
+            )
             .execute()
         )
         return {"success": True, "event_id": updated["id"], "htmlLink": updated.get("htmlLink")}
@@ -552,7 +566,7 @@ def update_calendar_event(args: UpdateEventArgs) -> Dict[str, Any]:
     async_execution=True,
     category="output",
 )
-def delete_calendar_event(args: DeleteEventArgs) -> Dict[str, Any]:
+def delete_calendar_event(args: DeleteEventArgs) -> dict[str, Any]:
     try:
         svc = _get_calendar_service()
     except CalendarIntegrationDisabled as exc:
@@ -577,4 +591,4 @@ def delete_calendar_event(args: DeleteEventArgs) -> Dict[str, Any]:
         ).execute()
         return {"success": True}
     except HttpError as e:
-        return {"success": False, "error": str(e)} 
+        return {"success": False, "error": str(e)}

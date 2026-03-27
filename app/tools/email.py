@@ -22,21 +22,21 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import threading
 from email.message import EmailMessage
-from typing import Any, Dict, Optional
-import os
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
-
-from ..tool_framework import register_tool
 
 # Third-party helper – handles sleep & concurrency for rate limiting
 from ratelimit import limits, sleep_and_retry
 
-from app.settings import get_admin_emails, get_default_email, get_default_bot_name
 from app import settings as _settings
+from app.settings import get_admin_emails, get_default_bot_name, get_default_email
+
+from ..tool_framework import register_tool
 
 
 class GmailIntegrationDisabled(RuntimeError):
@@ -50,8 +50,9 @@ _DEFAULT_ENFORCED = bool(
 )
 
 
-def _get_agent_context() -> Dict[str, Any] | None:
-    return getattr(_agent_context, 'config', None)
+def _get_agent_context() -> dict[str, Any] | None:
+    return getattr(_agent_context, "config", None)
+
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ _RATE_LIMIT_SECONDS = int(os.getenv("RINGDOWN_EMAIL_RATE_LIMIT_SECONDS", "10"))
 # We wrap the Gmail API execute call with this limiter so the blocking happens
 # only around the network request – not the local processing time.
 
+
 @sleep_and_retry
 @limits(calls=1, period=_RATE_LIMIT_SECONDS)
 def _send_gmail(service, raw: str):
@@ -69,16 +71,17 @@ def _send_gmail(service, raw: str):
 
     return service.users().messages().send(userId="me", body={"raw": raw}).execute()
 
+
 # Thread-local storage for agent context
 _agent_context = threading.local()
 
 
-def set_agent_context(agent_config: Dict[str, Any] | None) -> None:
+def set_agent_context(agent_config: dict[str, Any] | None) -> None:
     """Set the current agent configuration in thread-local storage."""
     _agent_context.config = agent_config
 
 
-def get_agent_context() -> Dict[str, Any] | None:
+def get_agent_context() -> dict[str, Any] | None:
     """Get the current agent configuration from thread-local storage."""
     return _get_agent_context()
 
@@ -95,7 +98,7 @@ def _resolve_greenlist() -> tuple[list[str] | None, bool]:
     if not enforce:
         return None, False
 
-    greenlist = agent_config.get('email_greenlist')
+    greenlist = agent_config.get("email_greenlist")
     if greenlist:
         return list(greenlist), True
 
@@ -129,7 +132,12 @@ def _integration_preflight() -> tuple[bool, str | None, Any | None]:
         return False, message, None
 
     try:
-        _resolve_service_account_credentials(key_path, impersonate, scopes=["https://www.googleapis.com/auth/gmail.send"], dry_run=True)
+        _resolve_service_account_credentials(
+            key_path,
+            impersonate,
+            scopes=["https://www.googleapis.com/auth/gmail.send"],
+            dry_run=True,
+        )
     except GmailIntegrationDisabled as exc:
         if _get_gmail_service is not _ORIGINAL_GET_GMAIL_SERVICE:
             try:
@@ -163,7 +171,7 @@ def _get_gmail_service():
     Uses a delegated service-account credential built from the JSON key file and
     impersonating the given mailbox. This is the recommended production path for
     Cloud Run when the Gmail API scope has been granted via domain-wide delegation.
-    
+
     Required env vars:
     - GMAIL_SA_KEY_PATH: Path to service account JSON key file
     - GMAIL_IMPERSONATE_EMAIL: Email address to impersonate
@@ -225,7 +233,8 @@ def _resolve_service_account_credentials(
             key_data = json.loads(key_reference)
         except json.JSONDecodeError as exc:  # pragma: no cover - defensive branch
             raise GmailIntegrationDisabled(
-                f"GMAIL_SA_KEY_PATH points to missing file or invalid JSON; value begins with {key_reference[:32]!r}."
+                "GMAIL_SA_KEY_PATH points to missing file or invalid JSON; "
+                f"value begins with {key_reference[:32]!r}."
             ) from exc
         credentials = service_account.Credentials.from_service_account_info(
             key_data, scopes=scopes
@@ -247,26 +256,30 @@ class EmailArgs(BaseModel):
         if not _is_recipient_allowed(value):
             raise ValueError("recipient not permitted for this agent")
         return value
-    
 
 
 @register_tool(
     name="SendEmail",
     description="Send an email.",
     param_model=EmailArgs,
-    prompt=f"## send_email\nIf asked to email something, use send_email. Choose an appropriate subject. Default recipient is {get_default_email()} unless otherwise specified.",
+    prompt=(
+        "## send_email\n"
+        "If asked to email something, use send_email. Choose an appropriate "
+        "subject. Default recipient is "
+        f"{get_default_email()} unless otherwise specified."
+    ),
     async_execution=True,
     category="output",
 )
-def send_email(args: EmailArgs) -> Dict[str, Any]:
+def send_email(args: EmailArgs) -> dict[str, Any]:
     """Send email via Gmail API with rate limiting."""
-    
+
     try:
         # Create message
         message = EmailMessage()
-        message['To'] = args.to
+        message["To"] = args.to
         # Prepend bot name to subject if provided in the agent configuration.
-        agent_cfg: Dict[str, Any] | None = get_agent_context()
+        agent_cfg: dict[str, Any] | None = get_agent_context()
         bot_name: str | None = None
         if agent_cfg is not None:
             bot_name = agent_cfg.get("bot_name")
@@ -289,13 +302,13 @@ def send_email(args: EmailArgs) -> Dict[str, Any]:
         else:
             subject = prefix
 
-        message['Subject'] = subject
+        message["Subject"] = subject
         message.set_content(args.body)
-        
+
         # In production, the 'From' will be the service account email
         # You may want to set a friendly from address if your service account
         # has send-as permissions configured
-        
+
         # Enforce recipient policy AFTER building the message so we can return
         # consistent response objects.
         if not _is_recipient_allowed(args.to):
@@ -338,18 +351,13 @@ def send_email(args: EmailArgs) -> Dict[str, Any]:
             }
 
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        
+
         result = _send_gmail(service, raw)
-        
+
         logger.info(f"Email sent successfully to {args.to}, id: {result['id']}")
-        
-        return {
-            "success": True,
-            "message_id": result['id'],
-            "to": args.to,
-            "subject": subject
-        }
-        
+
+        return {"success": True, "message_id": result["id"], "to": args.to, "subject": subject}
+
     except GmailIntegrationDisabled as exc:
         logger.warning("Email integration disabled: %s", exc)
         return {
@@ -361,10 +369,7 @@ def send_email(args: EmailArgs) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 
 # Allow the tool framework to run configuration preflight checks before queuing

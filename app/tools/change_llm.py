@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _agent_context = threading.local()
 
+
 def set_agent_context(agent_config: dict[str, Any] | None) -> None:
     """Store the current agent configuration in thread-local storage.
 
@@ -171,13 +172,12 @@ class ChangeLLMArgs(BaseModel):
     ),
     param_model=ChangeLLMArgs,
 )
-
 def change_llm(args: ChangeLLMArgs) -> dict[str, Any]:
     """Change the underlying LLM model for the conversation.
-    
+
     Args:
         args: ChangeLLMArgs containing model choice
-        
+
     Returns:
         Dict containing the model change confirmation and new settings
     """
@@ -202,9 +202,7 @@ def change_llm(args: ChangeLLMArgs) -> dict[str, Any]:
             "temperature": config["temperature"],
             "max_tokens": config["max_tokens"],
         },
-        "message": (
-            f"Switched to {config['label']}.\n\n"
-        ),
+        "message": (f"Switched to {config['label']}.\n\n"),
     }
 
     thinking_level = config.get("thinking_level")

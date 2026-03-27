@@ -93,11 +93,9 @@ class TestChangeLLMTool:
     def test_custom_parameters(self):
         """Test change_llm with custom temperature and max_tokens."""
         # Even if user supplies custom params, the tool now keeps built-in defaults
-        result = execute_tool("change_llm", {
-            "model_choice": "gpt-5",
-            "temperature": 0.3,
-            "max_tokens": 500
-        })
+        result = execute_tool(
+            "change_llm", {"model_choice": "gpt-5", "temperature": 0.3, "max_tokens": 500}
+        )
 
         assert result["settings"]["temperature"] == 1.0
         assert result["settings"]["max_tokens"] == 16000
@@ -113,32 +111,20 @@ class TestChangeLLMTool:
     def test_temperature_bounds(self):
         """Test temperature parameter bounds."""
         # Valid temperature
-        result = execute_tool("change_llm", {
-            "model_choice": "gpt-5", 
-            "temperature": 0.1
-        })
+        result = execute_tool("change_llm", {"model_choice": "gpt-5", "temperature": 0.1})
         assert result["settings"]["temperature"] == 1.0
-        
+
         # Test boundary values
-        result = execute_tool("change_llm", {
-            "model_choice": "gpt-5", 
-            "temperature": 2.0
-        })
+        result = execute_tool("change_llm", {"model_choice": "gpt-5", "temperature": 2.0})
         assert result["settings"]["temperature"] == 1.0
 
     def test_max_tokens_bounds(self):
         """Test max_tokens parameter bounds."""
         # Valid max_tokens
-        result = execute_tool("change_llm", {
-            "model_choice": "gpt-5", 
-            "max_tokens": 100
-        })
+        result = execute_tool("change_llm", {"model_choice": "gpt-5", "max_tokens": 100})
         assert result["settings"]["max_tokens"] == 16000
-        
-        result = execute_tool("change_llm", {
-            "model_choice": "gpt-5", 
-            "max_tokens": 4000
-        })
+
+        result = execute_tool("change_llm", {"model_choice": "gpt-5", "max_tokens": 4000})
         assert result["settings"]["max_tokens"] == 16000
 
     def test_agent_configuration_includes_change_llm(self):
@@ -152,8 +138,12 @@ class TestChangeLLMTool:
         result = execute_tool("change_llm", {"model_choice": "gpt-5"})
 
         required_fields = [
-            "action", "previous_model", "new_model", "model_label", 
-            "settings", "message"
+            "action",
+            "previous_model",
+            "new_model",
+            "model_label",
+            "settings",
+            "message",
         ]
 
         for field in required_fields:

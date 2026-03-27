@@ -11,6 +11,7 @@ Example usage:
 This intentionally uses a direct HTTP request (via *requests*) instead of the
 `openai` Python client so it works even when that package is absent or broken.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -165,4 +166,4 @@ def _main() -> None:  # noqa: C901,E501
 
 
 if __name__ == "__main__":  # pragma: no cover
-    _main() 
+    _main()

@@ -10,8 +10,9 @@ import argparse
 import ast
 import json
 import textwrap
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,12 +46,12 @@ def read_log(path: Path) -> Sequence[dict[str, Any]]:
     return data
 
 
-def _slice_list_literal(text: str) -> Optional[str]:
+def _slice_list_literal(text: str) -> str | None:
     start = text.find("[")
     if start == -1:
         return None
     depth = 0
-    in_string: Optional[str] = None
+    in_string: str | None = None
     escape = False
     for idx in range(start, len(text)):
         ch = text[idx]
@@ -74,15 +75,15 @@ def _slice_list_literal(text: str) -> Optional[str]:
     return None
 
 
-def _extract_partial_messages(text: str) -> Tuple[List[dict[str, Any]], bool]:
+def _extract_partial_messages(text: str) -> tuple[list[dict[str, Any]], bool]:
     start = text.find("[")
     if start == -1:
         return [], False
-    parsed_messages: List[dict[str, Any]] = []
-    in_string: Optional[str] = None
+    parsed_messages: list[dict[str, Any]] = []
+    in_string: str | None = None
     escape = False
     brace_depth = 0
-    dict_start: Optional[int] = None
+    dict_start: int | None = None
     truncated = False
     idx = start
     while idx < len(text):
@@ -125,7 +126,7 @@ def _extract_partial_messages(text: str) -> Tuple[List[dict[str, Any]], bool]:
     return parsed_messages, truncated
 
 
-def extract_messages(text_payload: str) -> Optional[Tuple[List[dict[str, Any]], bool]]:
+def extract_messages(text_payload: str) -> tuple[list[dict[str, Any]], bool] | None:
     marker = "Message array content:"
     marker_index = text_payload.find(marker)
     if marker_index == -1:
@@ -191,8 +192,8 @@ def shorten_text(text: str, limit: int = 120) -> str:
 MARKER_PREFIX = "RD_MARKER "
 
 
-def extract_markers(text_payload: str) -> List[dict[str, Any]]:
-    markers: List[dict[str, Any]] = []
+def extract_markers(text_payload: str) -> list[dict[str, Any]]:
+    markers: list[dict[str, Any]] = []
     for line in text_payload.splitlines():
         pos = line.find(MARKER_PREFIX)
         if pos == -1:
@@ -209,7 +210,7 @@ def extract_markers(text_payload: str) -> List[dict[str, Any]]:
     return markers
 
 
-def summarize_marker(marker: Dict[str, Any]) -> str:
+def summarize_marker(marker: dict[str, Any]) -> str:
     event = str(marker.get("event", "UNKNOWN"))
     role = marker.get("role")
     tool = marker.get("tool")
@@ -277,7 +278,7 @@ def summarize_marker(marker: Dict[str, Any]) -> str:
             text += f" msg_idx={message_index}"
         return _append_preview(text)
     if event == "ASYNC_REGISTERED":
-        text = f"async callback registered"
+        text = "async callback registered"
         if async_id:
             text += f" (async={async_id})"
         if call_id:
@@ -286,7 +287,7 @@ def summarize_marker(marker: Dict[str, Any]) -> str:
             text += f" msg_idx={message_index}"
         return text
     if event == "ASYNC_COMPLETE":
-        text = f"async complete"
+        text = "async complete"
         if async_id:
             text += f" (async={async_id})"
         if call_id:
@@ -346,7 +347,9 @@ def format_messages_block(
 ) -> str:
     lines: list[str] = []
     if truncated:
-        lines.append("[TRUNCATED] Cloud Logging truncated this message array; showing surviving items")
+        lines.append(
+            "[TRUNCATED] Cloud Logging truncated this message array; showing surviving items"
+        )
         lines.append("")
     for message_index, message in enumerate(messages, start=1):
         role = str(message.get("role", "unknown")).upper()
@@ -365,7 +368,7 @@ def format_messages_block(
 
 def format_log_entry(
     entry_index: int,
-    entry: Dict[str, Any],
+    entry: dict[str, Any],
     width: int,
 ) -> str:
     timestamp = (
@@ -431,9 +434,7 @@ def format_log_entry(
         lines.append("protoPayload:")
         lines.append(indent_block(format_json(proto_payload)))
         handled_keys.add("protoPayload")
-    other_fields = {
-        key: value for key, value in entry.items() if key not in handled_keys
-    }
+    other_fields = {key: value for key, value in entry.items() if key not in handled_keys}
     if other_fields:
         lines.append("Other fields:")
         lines.append(indent_block(format_json(other_fields)))
@@ -442,7 +443,7 @@ def format_log_entry(
 
 def format_entry(
     entry_index: int,
-    entry: Dict[str, Any],
+    entry: dict[str, Any],
     messages: Sequence[dict[str, Any]],
     *,
     width: int,
@@ -468,13 +469,10 @@ def main() -> None:
     entries = read_log(args.input_path)
     indexed_entries = list(enumerate(entries))
 
-    def sort_key(item: Tuple[int, Dict[str, Any]]) -> Tuple[str, int]:
+    def sort_key(item: tuple[int, dict[str, Any]]) -> tuple[str, int]:
         idx, entry = item
         timestamp = (
-            entry.get("timestamp")
-            or entry.get("receiveTimestamp")
-            or entry.get("insertId")
-            or ""
+            entry.get("timestamp") or entry.get("receiveTimestamp") or entry.get("insertId") or ""
         )
         return timestamp, idx
 
