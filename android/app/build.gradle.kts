@@ -6,6 +6,7 @@ plugins {
 }
 
 import java.io.File
+import java.io.ByteArrayOutputStream
 import java.util.Properties
 import org.gradle.api.GradleException
 import org.gradle.api.tasks.Exec
@@ -267,6 +268,14 @@ tasks.register("connectedVoiceMvpAndroidTest") {
 
     doLast {
         val adbExecutable = adbExecutableProvider.get()
+        val defaultInstrumentationClasses = listOf(
+            "com.ringdown.mobile.ConnectedVoiceMvpAndroidTest",
+            "com.ringdown.mobile.ConnectedVoiceMvpAutoConnectAndroidTest",
+            "com.ringdown.mobile.HiltSmokeTest",
+            "com.ringdown.mobile.LocalModelInstallerInstrumentedTest",
+            "com.ringdown.mobile.voice.LocalVoiceSessionControllerInstrumentedTest",
+            "com.ringdown.mobile.voice.asr.SherpaOnnxAsrEngineInstrumentedTest",
+        ).joinToString(",")
 
         val serialOverride = project.findProperty("android.deviceSerial")?.toString()?.takeIf { it.isNotBlank() }
         val androidSerial = serialOverride ?: System.getenv("ANDROID_SERIAL")?.takeIf { it.isNotBlank() }
@@ -311,6 +320,28 @@ tasks.register("connectedVoiceMvpAndroidTest") {
             }
         }
 
+        fun execAdbCapturingOutput(vararg args: String): String {
+            logger.lifecycle("adb {}", args.joinToString(" "))
+            val outputBuffer = ByteArrayOutputStream()
+            val execResult = project.exec {
+                commandLine(buildAdbCommand(*args))
+                standardOutput = outputBuffer
+                errorOutput = outputBuffer
+                isIgnoreExitValue = true
+                if (adbEnv.isNotEmpty()) {
+                    environment(adbEnv as Map<String, String>)
+                }
+            }
+            val output = outputBuffer.toString(Charsets.UTF_8)
+            if (output.isNotBlank()) {
+                logger.lifecycle(output.trimEnd())
+            }
+            if (execResult.exitValue != 0) {
+                throw GradleException("adb command failed with exit code ${execResult.exitValue}")
+            }
+            return output
+        }
+
         fun File.toAdbPath(): String {
             val rawPath = absolutePath
             if (!adbExecutable.endsWith(".exe", ignoreCase = true)) {
@@ -342,6 +373,9 @@ tasks.register("connectedVoiceMvpAndroidTest") {
             .sortedBy { it.first }
 
         val instrumentationCommand = mutableListOf("shell", "am", "instrument", "-w", "-r")
+        if (instrumentationArgs.none { it.first == "class" }) {
+            instrumentationCommand += listOf("-e", "class", defaultInstrumentationClasses)
+        }
         instrumentationArgs.forEach { (name, value) ->
             instrumentationCommand += listOf("-e", name, value)
         }
@@ -351,6 +385,21 @@ tasks.register("connectedVoiceMvpAndroidTest") {
             ?: "${android.defaultConfig.applicationId}.test"
         instrumentationCommand += "$testApplicationId/$testRunner"
 
-        execAdb(*instrumentationCommand.toTypedArray())
+        val instrumentationOutput = execAdbCapturingOutput(*instrumentationCommand.toTypedArray())
+        val hasFailures = instrumentationOutput.contains("FAILURES!!!") ||
+            instrumentationOutput.contains("INSTRUMENTATION_STATUS_CODE: -2")
+        val hasSkippedTests = instrumentationOutput.contains("AssumptionViolatedException") ||
+            instrumentationOutput.contains("INSTRUMENTATION_STATUS_CODE: -4")
+        if (hasFailures || hasSkippedTests) {
+            throw GradleException(
+                "Instrumentation reported ${
+                    when {
+                        hasFailures && hasSkippedTests -> "failures and skipped tests"
+                        hasFailures -> "failures"
+                        else -> "skipped tests"
+                    }
+                }. See adb output above.",
+            )
+        }
     }
 }

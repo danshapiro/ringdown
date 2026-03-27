@@ -15,6 +15,7 @@ import com.google.common.truth.Truth.assertThat
 import com.ringdown.mobile.data.store.DeviceIdStore
 import com.ringdown.mobile.domain.RegistrationStatus
 import com.ringdown.mobile.testing.RuntimePermissionRule
+import com.ringdown.mobile.testing.TEST_LIVE_DEVICE_ID_ARGUMENT
 import com.ringdown.mobile.ui.MainUiState
 import com.ringdown.mobile.ui.MainViewModel
 import com.ringdown.mobile.voice.VoiceConnectionState
@@ -208,7 +209,11 @@ class LiveServiceReconnectAndroidTest {
     }
 
     private fun resolveDeviceId(): String {
-        return System.getenv("LIVE_TEST_MOBILE_DEVICE_ID").orEmpty().ifBlank { DEFAULT_DEVICE_ID }
+        val arguments = InstrumentationRegistry.getArguments()
+        return arguments.getString(TEST_LIVE_DEVICE_ID_ARGUMENT).orEmpty()
+            .ifBlank { System.getProperty(TEST_LIVE_DEVICE_ID_PROPERTY).orEmpty() }
+            .ifBlank { System.getenv("LIVE_TEST_MOBILE_DEVICE_ID").orEmpty() }
+            .ifBlank { DEFAULT_DEVICE_ID }
     }
 
     private fun ActivityScenario<MainActivity>.awaitConnectedState(
