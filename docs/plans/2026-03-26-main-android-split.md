@@ -4,7 +4,7 @@
 
 **Goal:** Publish a backend-only `main` that matches `origin/main`, preserve the useful backend work that currently lives only on `android-client`, and publish a rebuilt `android-client` branch that contains the full Android app plus every Android-owned backend/shared-file delta, with all required Python and Android test lanes green.
 
-**Architecture:** Treat the split as a file-ownership problem, not a wholesale branch rebase. Start from the current local `main` tip, remove the Android/mobile contract from that line, then port only the backend-only improvements from `android-client`. After `main` is green and published, create `android-client-clean` from that cleaned `main` and restore every Android-owned file plus the Android-specific versions of shared files that changed outside `android/`.
+**Architecture:** Treat the split as a file-ownership problem, not a wholesale branch rebase. Start from the current local `main` tip, remove the Android/mobile contract from that line, then port only the backend-only improvements from an immutable archive of the current `android-client` tip so other agents cannot move the source out from under the split. After `main` is green and published, create `android-client-clean` from that cleaned `main` and restore every Android-owned file plus the Android-specific versions of shared files that changed outside `android/`.
 
 **Tech Stack:** Git worktrees and archive refs, FastAPI, Python 3.12, `uv`, `pytest`, `ruff`, Kotlin/Gradle Android tests, `adb`.
 
@@ -12,8 +12,8 @@
 
 ## Strategy And Boundary Decisions
 
-1. Use dynamic refs during execution. The currently observed state is `main=80f2f5d`, `origin/main=6dd3051`, `android-client=702abb1`, `origin/android-client=702abb1`, but every archive/push step must resolve the live ref first instead of trusting hardcoded hashes.
-2. `main` becomes backend-only. After the split, `main` must not serve `/v1/mobile*`, must not require Android/mobile config, and must not contain Android-only helper scripts, smoke harness docs, or Android tests.
+1. Resolve live refs once at the start, archive them immediately, then use those archive refs as the immutable source of truth for every later `diff`, `restore`, and `force-with-lease` check. The currently observed state is `main=80f2f5d`, `origin/main=6dd3051`, `android-client=702abb1`, `origin/android-client=702abb1`, but execution must not keep reading from a live `android-client` branch that another agent could move mid-split.
+2. `main` becomes backend-only. After the split, `main` must not serve `/v1/mobile*` or `/ws/mobile*`, must not require Android/mobile config, and must not contain Android-only helper scripts, smoke harness docs, or Android tests.
 3. `android-client` remote is rebuilt from a new local branch `android-client-clean`. Do not rewrite the dirty local `android-client` worktree in `/mnt/d/Users/Dan/GoogleDrivePersonal/code/ringdown`; leave that branch and its uncommitted work untouched.
 4. Every tracked path in `git diff --name-status main..android-client` must be classified before code edits. No path is allowed to “fall through” the split implicitly.
 5. Keep the current `main` versions of `pyproject.toml`, `uv.lock`, `app/tools/change_llm.py`, and the `.worktrees/` ignore rule unless a failing test proves that the rebuilt Android branch needs an additional dependency or merge of a generic fix.
@@ -89,8 +89,10 @@ Cleaned `main` keeps the backend-only contract. `android-client-clean` restores 
 These files are not “leave off main by default.” They require hunk-level classification:
 
 - Promote the generic/backend hunks to cleaned `main`:
-  - `README.md` log-formatting guidance, but not the Android local-audio-assets section
-  - `config.example.yaml` and `tests/fixtures/config.test.yaml` Todo tool entries, but not mobile device/text config
+  - `README.md` generic architecture wording and log-formatting guidance, but not the Android local-audio-assets section
+  - `config.example.yaml` and `tests/fixtures/config.test.yaml` generic model-default updates, backup-model updates, and Todo tool entries, but not `realtime`, `mobile_devices`, or `mobile_text`
+  - `cloudrun-deploy.py` generic deploy hardening such as safer subprocess invocation and non-interactive confirmation handling if those hunks are independent of mobile smoke/deploy hooks
+  - `tests/live_test_all_functions.py` only the generic live-test harness improvements that remain meaningful without mobile smoke; keep any mobile-smoke invocation or `LIVE_TEST_MOBILE_DEVICE_ID` wiring off `main`
   - `app/logging_utils.py` console-to-stdout improvement if it passes the cleaned-main verification suite
   - `app/memory.py` schema bootstrap and optional `source` column if the cleaned-main tests still pass with them
   - `app/tools/reset.py` and `tests/test_reset_tool.py` only if the reset-marker simplification still fits the backend-only contract after tests
@@ -197,7 +199,15 @@ git ls-remote --heads origin archive/main-local-pre-split-20260326 archive/main-
 
 Expected: local and remote archive refs resolve to the captured tips.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Switch every later comparison/restore command to the archive refs**
+
+From this point onward:
+- use `archive/android-client-pre-split-20260326` instead of `android-client`
+- use `archive/main-local-pre-split-20260326` / `archive/main-remote-pre-split-20260326` when you need the frozen pre-split main baselines
+
+Expected: no later task relies on a live mutable branch ref as its source material.
+
+- [ ] **Step 7: Commit**
 
 No tracked-file commit is needed here. The archive refs are the safety boundary.
 
@@ -235,8 +245,8 @@ No tracked-file commit is needed here. The archive refs are the safety boundary.
 - [ ] **Step 1: Add failing tests for the cleaned-main contract**
 
 Update the existing tests so they prove the desired split:
-- `tests/test_app.py` must assert that no registered FastAPI route starts with `/v1/mobile`.
-- `tests/test_config_schema.py` must assert that `ConfigModel` no longer exposes `mobile_devices` / `mobileDevices`, while preserving the current permissive `extra="allow"` behavior that already exists on the model today.
+- `tests/test_app.py` must assert that no registered FastAPI route starts with `/v1/mobile` or `/ws/mobile`.
+- `tests/test_config_schema.py` must assert that `ConfigModel.model_fields` no longer defines `mobile_devices` / `mobileDevices`, while preserving the current permissive `extra="allow"` behavior by accepting config payloads that still contain those keys as unvalidated extras rather than schema-owned fields.
 
 - [ ] **Step 2: Run the contract tests and confirm they fail on the current branch**
 
@@ -324,14 +334,14 @@ uv run pytest tests/test_google_docs_tool.py tests/test_todo_tool.py tests/test_
 
 Expected: FAIL because the Todo tool, log formatter, the full Google Docs search/read improvements, and rate-limit retry logic are not yet present on cleaned `main`.
 
-- [ ] **Step 3: Restore the backend-only source-of-truth files from `android-client` and reconcile them on top of local `main`**
+- [ ] **Step 3: Restore the backend-only source-of-truth files from the archived Android snapshot and reconcile them on top of local `main`**
 
 Implementation notes:
-- Use the live file diff, not a four-commit shortlist, as the source of truth for `app/chat.py`, `app/tools/google_docs.py`, `tests/test_google_docs_tool.py`, and `tests/test_error_cases.py`.
-- Restore these paths from `android-client` first:
+- Use the archive diff, not a four-commit shortlist, as the source of truth for `app/chat.py`, `app/tools/google_docs.py`, `tests/test_google_docs_tool.py`, and `tests/test_error_cases.py`.
+- Restore these paths from `archive/android-client-pre-split-20260326` first:
 
 ```bash
-git restore --source=android-client -- app/chat.py app/tools/google_docs.py app/tools/todo.py scripts/reformat_litellm_log.py tests/test_google_docs_tool.py tests/test_error_cases.py tests/test_todo_tool.py tests/test_reformat_litellm_log.py
+git restore --source=archive/android-client-pre-split-20260326 -- app/chat.py app/tools/google_docs.py app/tools/todo.py scripts/reformat_litellm_log.py tests/test_google_docs_tool.py tests/test_error_cases.py tests/test_todo_tool.py tests/test_reformat_litellm_log.py
 ```
 
 - Then reconcile `app/chat.py` so it keeps the current local-`main` model-routing line while also preserving the backend-only logging and rate-limit work from `android-client`.
@@ -370,6 +380,7 @@ git commit -m "feat: keep backend improvements on cleaned main"
 ### Task 4: Reconcile Shared File Hunks Before Publishing `main`
 
 **Files:**
+- Modify: `.env.example` only if a generic non-mobile hunk belongs on `main`
 - Modify: `README.md`
 - Modify: `config.example.yaml`
 - Modify: `tests/fixtures/config.test.yaml`
@@ -377,6 +388,8 @@ git commit -m "feat: keep backend improvements on cleaned main"
 - Modify: `app/memory.py`
 - Modify: `app/tools/reset.py` only if the cleaned-main tests prove the simplified reset marker still belongs on `main`
 - Modify: `tests/test_reset_tool.py` only if `app/tools/reset.py` changes on `main`
+- Modify: `cloudrun-deploy.py` only if a generic non-mobile hunk belongs on `main`
+- Modify: `tests/live_test_all_functions.py` only if a generic non-mobile hunk belongs on `main`
 - Modify: `.gitignore` only if the audit proves a generic ignore improvement belongs on `main`
 - Test: git diff classification and any targeted checks needed by audit findings
 
@@ -385,7 +398,7 @@ git commit -m "feat: keep backend improvements on cleaned main"
 Run:
 
 ```bash
-git diff --name-status HEAD..android-client
+git diff --name-status HEAD..archive/android-client-pre-split-20260326
 ```
 
 Expected: only the paths named in the ownership matrix differ. If any additional tracked file appears, stop and classify it before continuing.
@@ -393,6 +406,7 @@ Expected: only the paths named in the ownership matrix differ. If any additional
 - [ ] **Step 2: Promote the generic shared-file hunks that belong on cleaned `main`**
 
 Explicitly inspect these shared files and keep the backend-safe hunks on `main`:
+- `.env.example`
 - `README.md`
 - `config.example.yaml`
 - `tests/fixtures/config.test.yaml`
@@ -400,13 +414,18 @@ Explicitly inspect these shared files and keep the backend-safe hunks on `main`:
 - `app/memory.py`
 - `app/tools/reset.py`
 - `tests/test_reset_tool.py`
+- `cloudrun-deploy.py`
+- `tests/live_test_all_functions.py`
 
 Implementation notes:
-- Keep the `README.md` log-formatting section on `main`, but do not add the Android local-audio-assets section.
-- Keep the Todo tool config entries in `config.example.yaml` and `tests/fixtures/config.test.yaml`, but do not add `mobileDevices`, `mobileText`, or mobile smoke variables.
+- Keep `.env.example` on the cleaned-main side unless you find a truly generic non-mobile env-var improvement; do not add `LIVE_TEST_MOBILE_DEVICE_ID`.
+- Keep the generic `README.md` architecture wording and log-formatting section on `main`, but do not add the Android local-audio-assets section.
+- Keep the generic model/backup-model updates and Todo tool config entries in `config.example.yaml` and `tests/fixtures/config.test.yaml`, but do not add `realtime`, `mobileDevices`, `mobileText`, or mobile smoke variables.
 - Promote the `app/logging_utils.py` stdout console-handler change if it does not break the cleaned-main suite.
 - Promote the `app/memory.py` schema bootstrap and optional `source` column if the cleaned-main suite still passes with them.
 - Only promote the `app/tools/reset.py`/`tests/test_reset_tool.py` reset-marker simplification if the backend-only contract still wants it after tests. If it exists only to satisfy the Android/live harness path, keep it off `main`.
+- Audit `cloudrun-deploy.py` for backend-generic hardening (for example safer subprocess handling) and keep only those hunks on `main`; leave mobile smoke execution, device-env wiring, and handset-specific diagnostics on the Android branch.
+- Audit `tests/live_test_all_functions.py` the same way: keep only generic live-call harness improvements that are still meaningful on backend-only `main`.
 - Leave `.env.example`, `AGENTS.md`, `app/api/__init__.py`, `app/api/websocket.py`, `app/call_state.py`, `app/config_schema.py`, `app/main.py`, `app/mobile/config_store.py`, `app/settings.py`, `cloudrun-deploy.py`, `docs/configuration_guide.md`, `live_test_call.py`, `secret-manager.yaml`, `tests/live_test_all_functions.py`, and `tests/test_websocket_interrupt_handling.py` on the cleaned-main side unless a specific generic hunk proves otherwise.
 
 - [ ] **Step 3: Run the final cleaned-main verification suite**
@@ -539,8 +558,8 @@ Expected: the new branch points at cleaned `main`, and the `android/` tree is st
 Run:
 
 ```bash
-git restore --source=android-client -- android
-git restore --source=android-client -- app/api/mobile.py app/api/mobile_text.py app/mobile/__init__.py app/mobile/smoke.py app/mobile/text_session_store.py approve_new_phone.py docs/voice-smoke-ci.md tests/test_approve_new_phone.py tests/test_auto_approve.py tests/test_mobile_registration.py tests/test_mobile_smoke.py tests/test_mobile_text_handshake.py tests/test_mobile_text_session.py tests/test_manual_voice_harness.py tests/test_run_local_voice_smoke.py tests/test_android_install_script.py todo-android-local-codex.txt todo-android-spec
+git restore --source=archive/android-client-pre-split-20260326 -- android
+git restore --source=archive/android-client-pre-split-20260326 -- app/api/mobile.py app/api/mobile_text.py app/mobile/__init__.py app/mobile/smoke.py app/mobile/text_session_store.py approve_new_phone.py docs/voice-smoke-ci.md tests/test_approve_new_phone.py tests/test_auto_approve.py tests/test_mobile_registration.py tests/test_mobile_smoke.py tests/test_mobile_text_handshake.py tests/test_mobile_text_session.py tests/test_manual_voice_harness.py tests/test_run_local_voice_smoke.py tests/test_android_install_script.py todo-android-local-codex.txt todo-android-spec
 ```
 
 Expected: Android-only files are present again, but shared files still match cleaned `main`.
@@ -602,7 +621,7 @@ git commit -m "feat: restore android-owned files"
 Run:
 
 ```bash
-git restore --source=android-client -- .env.example .gitignore AGENTS.md README.md app/api/__init__.py app/api/websocket.py app/call_state.py app/config_schema.py app/logging_utils.py app/main.py app/memory.py app/mobile/config_store.py app/settings.py app/tools/reset.py cloudrun-deploy.py config.example.yaml docs/configuration_guide.md live_test_call.py secret-manager.yaml tests/fixtures/config.test.yaml tests/live_test_all_functions.py tests/test_reset_tool.py tests/test_websocket_interrupt_handling.py
+git restore --source=archive/android-client-pre-split-20260326 -- .env.example .gitignore AGENTS.md README.md app/api/__init__.py app/api/websocket.py app/call_state.py app/config_schema.py app/logging_utils.py app/main.py app/memory.py app/mobile/config_store.py app/settings.py app/tools/reset.py cloudrun-deploy.py config.example.yaml docs/configuration_guide.md live_test_call.py secret-manager.yaml tests/fixtures/config.test.yaml tests/live_test_all_functions.py tests/test_reset_tool.py tests/test_websocket_interrupt_handling.py
 ```
 
 Expected: the Android/shared backend wiring comes back, but `pyproject.toml`, `uv.lock`, `app/tools/change_llm.py`, and `tests/test_change_llm_tool.py` still match cleaned `main`.
