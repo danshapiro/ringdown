@@ -15,6 +15,7 @@ signatures; those are covered by runtime logs / manual tests.
 
 import contextlib
 import logging
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -97,9 +98,16 @@ def test_twilml_unknown_caller():
     assert unknown_cfg["welcome_greeting"] in xml
 
 
-def test_no_mobile_routes_registered():
-    backend_only_app = app_main._create_app(include_mobile=False)
-    paths = {route.path for route in backend_only_app.routes}
+def test_rebuilt_app_registers_mobile_routes():
+    paths = {route.path for route in app_main.app.routes}
+
+    assert "/v1/mobile/devices/register" in paths
+    assert "/v1/mobile/text/session" in paths
+    assert any(path.startswith("/v1/mobile") for path in paths)
+
+
+def test_backend_only_app_excludes_mobile_routes():
+    paths = {route.path for route in app_main._create_app(include_mobile=False).routes}
 
     assert not any(path.startswith("/v1/mobile") for path in paths)
     assert not any(path.startswith("/ws/mobile") for path in paths)
@@ -189,6 +197,24 @@ def test_missing_api_keys_raise(monkeypatch):
 
     with pytest.raises(RuntimeError):
         app_settings.get_env()
+
+    app_settings.get_env.cache_clear()
+    if original_env_file is not None:
+        app_settings.EnvSettings.model_config["env_file"] = original_env_file
+
+
+def test_default_sqlite_path_uses_repo_data_dir(monkeypatch):
+    app_settings.get_env.cache_clear()
+    monkeypatch.delenv("SQLITE_PATH", raising=False)
+
+    original_env_file = app_settings.EnvSettings.model_config.get("env_file")
+    monkeypatch.setitem(app_settings.EnvSettings.model_config, "env_file", None)
+
+    env = app_settings.EnvSettings()
+
+    assert Path(env.sqlite_path) == (
+        Path(app_settings.__file__).resolve().parent.parent / "data" / "memory.db"
+    ).resolve()
 
     app_settings.get_env.cache_clear()
     if original_env_file is not None:

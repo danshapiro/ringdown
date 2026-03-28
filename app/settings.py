@@ -41,6 +41,12 @@ def build_tool_prompts_for_agent(agent_tools: list[str], tool_header: str) -> st
     return "\n\n".join(parts)
 
 
+def _default_sqlite_path() -> str:
+    """Return the repo-local SQLite path used by local runtime by default."""
+
+    return str((Path(__file__).resolve().parent.parent / "data" / "memory.db").resolve())
+
+
 class EnvSettings(BaseSettings):
     """Secrets and environment-specific values.
 
@@ -63,7 +69,7 @@ class EnvSettings(BaseSettings):
     )
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     live_test_to_number: str | None = Field(default=None, alias="LIVE_TEST_TO_NUMBER")
-    sqlite_path: str = "/data/memory.db"
+    sqlite_path: str = Field(default_factory=_default_sqlite_path)
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
     live_test_mobile_device_id: str | None = Field(default=None, alias="LIVE_TEST_MOBILE_DEVICE_ID")
 

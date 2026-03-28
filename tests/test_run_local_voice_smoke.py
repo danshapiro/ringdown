@@ -140,6 +140,38 @@ def test_verify_device_online_failure(monkeypatch):
         mod._verify_device_online("adb", "SER123")
 
 
+def test_parse_args_accepts_log_output(monkeypatch, tmp_path):
+    mod = load_module()
+    log_path = tmp_path / "voice.log"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_local_voice_smoke.py", "--log-output", str(log_path)],
+    )
+
+    args = mod.parse_args()
+
+    assert args.log_output == log_path
+
+
+def test_main_writes_result_json(monkeypatch, tmp_path):
+    mod = load_module()
+    result_path = tmp_path / "result.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_local_voice_smoke.py", "--result-json", str(result_path)],
+    )
+    monkeypatch.setattr(mod, "_run_with_taps", lambda args: 0)
+
+    exit_code = mod.main()
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["status"] == "success"
+    assert payload["logPath"] == str(result_path.with_suffix(".json.log"))
+
+
 def test_resolve_log_output_path_prefers_explicit(tmp_path):
     mod = load_module()
     log_path = tmp_path / "custom.log"

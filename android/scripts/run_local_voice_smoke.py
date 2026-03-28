@@ -101,11 +101,6 @@ def parse_args() -> argparse.Namespace:
         help=f"Harness runtime in seconds (default: {DEFAULT_DURATION})",
     )
     parser.add_argument(
-        "--log-output",
-        type=Path,
-        help="Optional path to capture harness log output",
-    )
-    parser.add_argument(
         "--reconnect-tap",
         type=_parse_coord,
         help="Screen coordinate to tap the Reconnect button (format: x,y)",
