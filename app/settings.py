@@ -153,24 +153,11 @@ def _config_path() -> Path:
 
 
 def _resolve_runtime_config_path(*, project_root: Path | None = None) -> Path:
-    """Resolve the runtime config path, seeding a local config when needed."""
+    """Resolve the runtime config path without mutating repo state."""
 
     root = project_root or Path(__file__).resolve().parent.parent
     explicit = os.getenv("RINGDOWN_CONFIG_PATH")
-    try:
-        return resolve_config_path(explicit, project_root=root)
-    except FileNotFoundError:
-        if explicit or os.getenv("K_SERVICE") or os.getenv("GAE_ENV"):
-            raise
-
-    example_path = root / "config.example.yaml"
-    local_path = root / "config.yaml"
-    if not example_path.exists():
-        raise FileNotFoundError(f"Configuration file not found at {local_path}")
-
-    local_path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
-    logger.info("Created local config.yaml from config.example.yaml for local runtime.")
-    return local_path.resolve()
+    return resolve_config_path(explicit, project_root=root)
 
 
 @lru_cache

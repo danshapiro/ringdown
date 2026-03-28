@@ -5,6 +5,7 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
+import com.ringdown.mobile.build.parseInstrumentationOutput
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.util.Properties
@@ -386,19 +387,17 @@ tasks.register("connectedVoiceMvpAndroidTest") {
         instrumentationCommand += "$testApplicationId/$testRunner"
 
         val instrumentationOutput = execAdbCapturingOutput(*instrumentationCommand.toTypedArray())
-        val hasFailures = instrumentationOutput.contains("FAILURES!!!") ||
-            instrumentationOutput.contains("INSTRUMENTATION_STATUS_CODE: -2")
-        val hasSkippedTests = instrumentationOutput.contains("AssumptionViolatedException") ||
-            instrumentationOutput.contains("INSTRUMENTATION_STATUS_CODE: -4")
-        if (hasFailures || hasSkippedTests) {
+        val instrumentationStatus = parseInstrumentationOutput(instrumentationOutput)
+        if (instrumentationStatus.hasFailures || instrumentationStatus.hasSkippedTests) {
             throw GradleException(
                 "Instrumentation reported ${
                     when {
-                        hasFailures && hasSkippedTests -> "failures and skipped tests"
-                        hasFailures -> "failures"
+                        instrumentationStatus.hasFailures && instrumentationStatus.hasSkippedTests ->
+                            "failures and skipped tests"
+                        instrumentationStatus.hasFailures -> "failures"
                         else -> "skipped tests"
                     }
-                }. See adb output above.",
+                }${instrumentationStatus.detail?.let { ": $it" } ?: ""}. See adb output above.",
             )
         }
     }

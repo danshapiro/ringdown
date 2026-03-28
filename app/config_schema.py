@@ -224,7 +224,35 @@ class BackendOnlyConfigModel(BaseModel):
 class ConfigModel(BackendOnlyConfigModel):
     """Complete Ringdown configuration schema."""
 
+    mobile_devices: dict[str, MobileDeviceConfig] = Field(
+        default_factory=dict,
+        alias="mobileDevices",
+    )
     mobile_text: MobileTextConfig = Field(alias="mobileText")
+
+    @model_validator(mode="before")
+    def _check_mobile_devices(cls, values: dict[str, Any]) -> dict[str, Any]:
+        agents = values.get("agents") or {}
+        mobile_devices = values.get("mobile_devices")
+        if mobile_devices is None:
+            mobile_devices = values.get("mobileDevices") or {}
+
+        for device_id, device_cfg in mobile_devices.items():
+            if isinstance(device_cfg, MobileDeviceConfig):
+                agent = device_cfg.agent
+            elif isinstance(device_cfg, dict):
+                agent = device_cfg.get("agent")
+            else:
+                agent = getattr(device_cfg, "agent", None)
+
+            if not agent:
+                raise ValueError(f"Mobile device '{device_id}' is missing required 'agent' field")
+            if agent not in agents:
+                raise ValueError(
+                    f"Mobile device '{device_id}' references unknown agent '{agent}'. "
+                    "Add the agent to config.yaml before assigning devices."
+                )
+        return values
 
 
 def _coerce_truthy(flag: str | None) -> bool:
