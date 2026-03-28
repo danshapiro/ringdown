@@ -1,5 +1,6 @@
 package com.ringdown.mobile
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
 import androidx.datastore.core.DataStore
@@ -16,6 +17,7 @@ import com.ringdown.mobile.data.store.DeviceIdStore
 import com.ringdown.mobile.domain.RegistrationStatus
 import com.ringdown.mobile.testing.RuntimePermissionRule
 import com.ringdown.mobile.testing.TEST_LIVE_AUTH_TOKEN_ARGUMENT
+import com.ringdown.mobile.testing.TEST_LIVE_AUTH_TOKEN_FILE
 import com.ringdown.mobile.testing.TEST_LIVE_AUTH_TOKEN_PROPERTY
 import com.ringdown.mobile.testing.TEST_LIVE_DEVICE_ID_ARGUMENT
 import com.ringdown.mobile.ui.MainUiState
@@ -232,9 +234,19 @@ class LiveServiceReconnectAndroidTest {
         val arguments = InstrumentationRegistry.getArguments()
         return arguments.getString(TEST_LIVE_AUTH_TOKEN_ARGUMENT).orEmpty()
             .ifBlank { System.getProperty(TEST_LIVE_AUTH_TOKEN_PROPERTY).orEmpty() }
+            .ifBlank { readShellFile(TEST_LIVE_AUTH_TOKEN_FILE) }
             .ifBlank { System.getenv("LIVE_TEST_MOBILE_AUTH_TOKEN").orEmpty() }
             .ifBlank { "" }
             .takeIf { it.isNotBlank() }
+    }
+
+    private fun readShellFile(path: String): String {
+        val descriptor = InstrumentationRegistry.getInstrumentation()
+            .uiAutomation
+            .executeShellCommand("cat $path 2>/dev/null")
+        return ParcelFileDescriptor.AutoCloseInputStream(descriptor)
+            .bufferedReader()
+            .use { it.readText().trim() }
     }
 
     private fun ActivityScenario<MainActivity>.awaitConnectedState(

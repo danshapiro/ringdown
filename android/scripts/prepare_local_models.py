@@ -143,8 +143,22 @@ def download_archive(url: str, dest: Path) -> None:
 
 
 def extract_tar_bz2(archive_path: Path, dest_dir: Path) -> None:
+    dest_root = dest_dir.resolve()
     with tarfile.open(archive_path, mode="r:bz2") as tar:
-        tar.extractall(path=dest_dir)
+        safe_members = []
+        for member in tar.getmembers():
+            if member.issym() or member.islnk() or member.isdev():
+                raise RuntimeError(f"unsafe tar member type: {member.name}")
+
+            target_path = (dest_dir / member.name).resolve()
+            try:
+                target_path.relative_to(dest_root)
+            except ValueError as exc:
+                raise RuntimeError(f"unsafe tar member path: {member.name}") from exc
+            safe_members.append(member)
+
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        tar.extractall(path=dest_dir, members=safe_members)
 
 
 def compute_sha256(path: Path) -> str:

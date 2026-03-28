@@ -17,6 +17,30 @@ BACKEND_URL="${RINGDOWN_BACKEND_URL:-}"
 DEFAULT_DEVICE_ID="instrumentation-device"
 DEVICE_ID_OVERRIDE="${RINGDOWN_DEVICE_ID_OVERRIDE:-${LIVE_TEST_MOBILE_DEVICE_ID:-}}"
 AUTH_TOKEN_OVERRIDE="${LIVE_TEST_MOBILE_AUTH_TOKEN:-}"
+AUTH_TOKEN_DEVICE_FILE="/data/local/tmp/ringdown-live-auth-token.txt"
+AUTH_TOKEN_DEVICE_FILE_PUSHED=0
+
+run_adb() {
+  local cmd=("${ADB_BIN}")
+  if [[ -n "${ANDROID_SERIAL:-}" ]]; then
+    cmd+=("-s" "${ANDROID_SERIAL}")
+  fi
+  cmd+=("$@")
+  "${cmd[@]}"
+}
+
+cleanup_auth_token_file() {
+  if [[ "${AUTH_TOKEN_DEVICE_FILE_PUSHED}" == "1" ]]; then
+    run_adb shell rm -f "${AUTH_TOKEN_DEVICE_FILE}" >/dev/null 2>&1 || true
+  fi
+}
+
+push_auth_token_file() {
+  printf '%s' "${AUTH_TOKEN_OVERRIDE}" | run_adb shell "cat > ${AUTH_TOKEN_DEVICE_FILE}" >/dev/null
+  AUTH_TOKEN_DEVICE_FILE_PUSHED=1
+}
+
+trap cleanup_auth_token_file EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,6 +80,30 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RESOLVED_DEVICE_ID="${DEVICE_ID_OVERRIDE:-${DEFAULT_DEVICE_ID}}"
 
+resolve_adb_bin() {
+  if [[ -n "${RINGDOWN_ADB_BIN:-}" ]]; then
+    printf '%s\n' "${RINGDOWN_ADB_BIN}"
+    return
+  fi
+
+  local sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-${REPO_ROOT}/android/.android-sdk}}"
+  local candidate="${sdk_root}/platform-tools/adb"
+  if [[ -x "${candidate}" ]]; then
+    printf '%s\n' "${candidate}"
+    return
+  fi
+
+  if command -v adb >/dev/null 2>&1; then
+    printf '%s\n' "adb"
+    return
+  fi
+
+  echo "Error: adb not found. Set RINGDOWN_ADB_BIN, ANDROID_SDK_ROOT, or add adb to PATH." >&2
+  exit 1
+}
+
+ADB_BIN="$(resolve_adb_bin)"
+
 if [[ -z "${AUTH_TOKEN_OVERRIDE}" ]]; then
   AUTH_TOKEN_OVERRIDE="$(
     cd "${REPO_ROOT}"
@@ -89,7 +137,7 @@ ARGS=(
 )
 
 if [[ -n "${AUTH_TOKEN_OVERRIDE}" ]]; then
-  ARGS+=("-Pandroid.testInstrumentationRunnerArguments.liveAuthToken=${AUTH_TOKEN_OVERRIDE}")
+  push_auth_token_file
 fi
 
 STAGING_BACKEND_BASE_URL="${BACKEND_URL}" \

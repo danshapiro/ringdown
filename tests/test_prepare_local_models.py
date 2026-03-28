@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import tarfile
 from pathlib import Path
+
+import pytest
 
 import android.scripts.prepare_local_models as prepare_local_models
 
@@ -42,3 +46,20 @@ def test_main_downloads_binary_dependencies(tmp_path: Path, monkeypatch) -> None
     assert result == 0
     assert downloads == ["https://example.test/sherpa.aar"]
     assert (third_party_root / "sherpa-onnx.aar").read_bytes() == dependency_bytes
+
+
+def test_extract_tar_bz2_rejects_path_traversal(tmp_path: Path) -> None:
+    archive_path = tmp_path / "model.tar.bz2"
+    models_dir = tmp_path / "models"
+    escaped_path = tmp_path / "escaped.txt"
+
+    with tarfile.open(archive_path, mode="w:bz2") as tar:
+        payload = b"malicious"
+        member = tarfile.TarInfo("../escaped.txt")
+        member.size = len(payload)
+        tar.addfile(member, io.BytesIO(payload))
+
+    with pytest.raises(RuntimeError, match="unsafe tar member path"):
+        prepare_local_models.extract_tar_bz2(archive_path, models_dir)
+
+    assert not escaped_path.exists()

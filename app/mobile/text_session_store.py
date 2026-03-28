@@ -150,6 +150,7 @@ class TextSessionStore:
             state.tls_pins = list(tls_pins)
             state.active = False
 
+            self._clear_session_tokens_locked(session_id)
             self._session_tokens[new_session_token] = session_id
             self._resume_index.pop(resume_token, None)
             self._resume_index[new_resume_token] = session_id
@@ -173,6 +174,9 @@ class TextSessionStore:
             if state.expires_at <= now:
                 self._delete_locked(session_id)
                 raise KeyError("session expired")
+
+            if state.active:
+                raise RuntimeError("session already active")
 
             state.active = True
             state.last_seen = now
@@ -212,13 +216,16 @@ class TextSessionStore:
         if not state:
             return
 
-        to_remove = [token for token, sid in self._session_tokens.items() if sid == session_id]
-        for token in to_remove:
-            self._session_tokens.pop(token, None)
+        self._clear_session_tokens_locked(session_id)
 
         self._resume_index = {
             token: sid for token, sid in self._resume_index.items() if sid != session_id
         }
+
+    def _clear_session_tokens_locked(self, session_id: str) -> None:
+        to_remove = [token for token, sid in self._session_tokens.items() if sid == session_id]
+        for token in to_remove:
+            self._session_tokens.pop(token, None)
 
     def _prune_expired_locked(self, now: datetime) -> None:
         expired: list[str] = []
