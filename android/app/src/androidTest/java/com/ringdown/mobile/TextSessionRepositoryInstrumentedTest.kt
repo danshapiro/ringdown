@@ -10,7 +10,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
-import org.junit.Assume
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,7 +32,9 @@ class TextSessionRepositoryInstrumentedTest {
         val arguments = InstrumentationRegistry.getArguments()
         baseUrl = arguments.getString("textSessionBaseUrl", "")
 
-        Assume.assumeTrue("textSessionBaseUrl not provided", baseUrl.isNotBlank())
+        check(baseUrl.isNotBlank()) {
+            "textSessionBaseUrl instrumentation argument is required"
+        }
 
         val context = instrumentation.targetContext
         val dataStore = DeviceIdStore.createDataStore(context)
@@ -68,11 +69,10 @@ class TextSessionRepositoryInstrumentedTest {
         val bootstrap = try {
             repository.startTextSession(agent = null)
         } catch (error: HttpException) {
-            Assume.assumeTrue(
+            throw AssertionError(
                 "Text session endpoint unavailable (${error.code()})",
-                false,
+                error,
             )
-            return@runBlocking
         }
 
         assertThat(bootstrap.sessionId).isNotEmpty()
