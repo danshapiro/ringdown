@@ -240,6 +240,7 @@ async def register_device(payload: MobileRegisterRequest) -> MobileRegisterRespo
     if created:
         logger.info("Added new mobile device %s to config.yaml (pending approval)", device_id)
 
+    settings.refresh_config_cache()
     device_cfg = settings.get_mobile_device(device_id) or entry
     device_cfg = _normalise_device_entry(device_cfg)
 

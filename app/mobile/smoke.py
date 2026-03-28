@@ -525,6 +525,34 @@ def resolve_remote_smoke_auth_token(
     return _get_configured_auth_token_from_path(config_path, device_id)
 
 
+def prepare_local_smoke_device(
+    device_id: str,
+    *,
+    agent_name: str = "unknown-caller",
+) -> str | None:
+    from app.mobile.config_store import (
+        approve_device,
+        ensure_device_entry,
+        ensure_device_security_fields,
+    )
+
+    _created, entry = ensure_device_entry(
+        device_id,
+        label=device_id,
+        metadata={"agent": agent_name},
+    )
+    resolved_agent = str(entry.get("agent") or agent_name).strip() or agent_name
+    approve_device(device_id, agent=resolved_agent)
+    secured_entry = ensure_device_security_fields(device_id)
+
+    candidate = secured_entry.get("auth_token") or secured_entry.get("authToken")
+    if not isinstance(candidate, str):
+        return None
+
+    token = candidate.strip()
+    return token or None
+
+
 def _get_configured_auth_token(device_id: str) -> str | None:
     try:
         raw_device = settings.get_mobile_device(device_id) or {}
@@ -625,6 +653,7 @@ async def _open_websocket(url: str, session_token: str, timeout: float) -> Clien
 __all__ = [
     "SmokeResult",
     "SmokeTestError",
+    "prepare_local_smoke_device",
     "run_smoke_test",
     "run_remote_smoke",
     "resolve_remote_smoke_auth_token",

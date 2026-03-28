@@ -1,5 +1,7 @@
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
@@ -7,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app import settings
 from app.main import app
+from app.mobile.text_session_store import TextSessionState
 
 
 @pytest.fixture
@@ -114,3 +117,59 @@ def test_register_device_reflects_script_approval(isolated_config: Path) -> None
     body = second_response.json()
     assert body["status"] == "APPROVED"
     assert body["agent"] == agent_name
+
+
+def test_register_refreshes_stale_cache_for_followup_text_session(isolated_config: Path) -> None:
+    data = yaml.safe_load(isolated_config.read_text(encoding="utf-8")) or {}
+    data["mobile_devices"] = {
+        "instrumentation-device": {
+            "label": "Instrumentation",
+            "agent": "unknown-caller",
+            "enabled": True,
+            "auth_token": "secret-token",
+            "session_resume_ttl_seconds": 300,
+        }
+    }
+    isolated_config.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    settings.get_mobile_devices()
+
+    now = datetime.now(UTC)
+    state = TextSessionState(
+        session_id="session-abc",
+        device_id="instrumentation-device",
+        agent_name="unknown-caller",
+        agent_config={
+            "model": "gpt-5",
+            "prompt": "You are helpful.",
+            "welcome_greeting": "Hi there!",
+        },
+        created_at=now,
+        expires_at=now + timedelta(seconds=900),
+        resume_expires_at=now + timedelta(seconds=300),
+        resume_token="resume-abc",
+        session_ttl_seconds=900,
+        resume_ttl_seconds=300,
+        heartbeat_interval_seconds=12,
+        heartbeat_timeout_seconds=30,
+        tls_pins=[],
+        messages=[],
+    )
+    store = MagicMock()
+    store.create_session = AsyncMock(return_value=(state, "session-token"))
+
+    client = TestClient(app)
+    with patch("app.api.mobile.get_text_session_store", return_value=store):
+        register_response = client.post(
+            "/v1/mobile/devices/register",
+            json={"deviceId": "instrumentation-device"},
+        )
+        text_response = client.post(
+            "/v1/mobile/text/session",
+            json={"deviceId": "instrumentation-device", "authToken": "secret-token"},
+        )
+
+    assert register_response.status_code == 200
+    assert register_response.json()["status"] == "APPROVED"
+    assert text_response.status_code == 200
+    store.create_session.assert_awaited_once()

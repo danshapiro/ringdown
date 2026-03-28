@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from app.config_schema import BackendOnlyConfigModel, ConfigModel, resolve_config_path
+import app.settings as settings_module
+from app.config_schema import ConfigModel, resolve_config_path
 
 
 def _write_example(root: Path) -> None:
@@ -55,8 +56,8 @@ def test_config_model_accepts_repository_config():
 
 
 def test_config_model_does_not_own_mobile_device_fields():
-    assert "mobile_devices" not in BackendOnlyConfigModel.model_fields
-    assert "mobileDevices" not in BackendOnlyConfigModel.model_fields
+    assert "mobile_devices" not in ConfigModel.model_fields
+    assert "mobileDevices" not in ConfigModel.model_fields
 
 
 def test_config_model_accepts_mobile_device_keys_as_extras():
@@ -79,12 +80,26 @@ def test_config_model_accepts_mobile_device_keys_as_extras():
                 "bot_name": "Unknown Caller",
             }
         },
-        "mobile_devices": {"device-1": {"agent": "unknown-caller", "label": "Primary"}},
-        "mobileDevices": {"device-2": {"agent": "unknown-caller", "label": "Secondary"}},
+        "mobile_devices": {"device-1": {"agent": "missing-agent", "label": "Primary"}},
+        "mobileDevices": {"device-2": {"agent": "missing-agent", "label": "Secondary"}},
+        "mobile_text": {"websocket_path": "/v1/mobile/text/session"},
     }
 
-    cfg = BackendOnlyConfigModel.model_validate(payload)
+    cfg = ConfigModel.model_validate(payload)
     extras = cfg.model_extra or {}
 
-    assert extras["mobile_devices"]["device-1"]["agent"] == "unknown-caller"
-    assert extras["mobileDevices"]["device-2"]["agent"] == "unknown-caller"
+    assert extras["mobile_devices"]["device-1"]["agent"] == "missing-agent"
+    assert extras["mobileDevices"]["device-2"]["agent"] == "missing-agent"
+
+
+def test_runtime_config_path_bootstraps_local_config_from_example(tmp_path, monkeypatch):
+    example_path = tmp_path / "config.example.yaml"
+    example_path.write_text("defaults: {}\n", encoding="utf-8")
+
+    monkeypatch.delenv("RINGDOWN_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("K_SERVICE", raising=False)
+
+    path = settings_module._resolve_runtime_config_path(project_root=tmp_path)
+
+    assert path == (tmp_path / "config.yaml").resolve()
+    assert path.read_text(encoding="utf-8") == example_path.read_text(encoding="utf-8")

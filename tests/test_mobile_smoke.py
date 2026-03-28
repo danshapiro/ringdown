@@ -6,9 +6,11 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 import app.mobile.smoke as smoke_module
+from app import settings as settings_module
 from app.main import app
 from app.mobile.smoke import SmokeResult, SmokeTestError, run_smoke_test
 from app.mobile.text_session_store import TextSessionStore
@@ -184,3 +186,48 @@ def test_resolve_remote_smoke_auth_token_prefers_explicit_override(
     )
 
     assert token == "explicit-token"
+
+
+def test_prepare_local_smoke_device_creates_approved_entry(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+defaults:
+  timezone: America/Los_Angeles
+  model: gpt-4o-mini
+  max_tokens: 1024
+  language: en
+  bot_name: Ringdown
+  default_email: user@example.com
+  project_name: ringdown
+  calendar_user_name: Dan
+  welcome_greeting: Hello
+  transcription_provider: openai
+  speech_model: gpt-4o-mini-transcribe
+agents:
+  unknown-caller:
+    bot_name: Unknown Caller
+mobile_devices: {}
+mobile_text:
+  websocket_path: /v1/mobile/text/session
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("RINGDOWN_CONFIG_PATH", str(config_path))
+    settings_module.refresh_config_cache()
+
+    token = smoke_module.prepare_local_smoke_device("instrumentation-device")
+
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    entry = data["mobile_devices"]["instrumentation-device"]
+
+    assert entry["enabled"] is True
+    assert entry["agent"] == "unknown-caller"
+    assert isinstance(token, str) and token == entry["auth_token"]
+
+    settings_module.refresh_config_cache()

@@ -62,13 +62,21 @@ if [[ -z "${AUTH_TOKEN_OVERRIDE}" ]]; then
     UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-.venv-wsl}" \
       uv run python - "${BACKEND_URL}" "${RESOLVED_DEVICE_ID}" <<'PY'
 import sys
+from urllib.parse import urlparse
 
-from app.mobile.smoke import resolve_remote_smoke_auth_token
+from app.mobile.smoke import prepare_local_smoke_device, resolve_remote_smoke_auth_token
 
-token = resolve_remote_smoke_auth_token(
-    base_url=sys.argv[1],
-    device_id=sys.argv[2],
-) or ""
+base_url = sys.argv[1]
+device_id = sys.argv[2]
+host = (urlparse(base_url).hostname or "").strip().lower()
+token = ""
+if host in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
+    token = prepare_local_smoke_device(device_id) or ""
+if not token:
+    token = resolve_remote_smoke_auth_token(
+        base_url=base_url,
+        device_id=device_id,
+    ) or ""
 print(token, end="")
 PY
   )"

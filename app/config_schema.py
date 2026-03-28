@@ -218,32 +218,12 @@ class BackendOnlyConfigModel(BaseModel):
                         f"{agent_name!r} and {other!r}"
                     )
                 seen[number] = agent_name
-
-        mobile_devices = values.get("mobile_devices") or {}
-        for device_id, device_cfg in mobile_devices.items():
-            if isinstance(device_cfg, MobileDeviceConfig):
-                agent = device_cfg.agent
-            elif isinstance(device_cfg, dict):
-                agent = device_cfg.get("agent")
-            else:
-                agent = getattr(device_cfg, "agent", None)
-
-            if not agent:
-                raise ValueError(f"Mobile device '{device_id}' is missing required 'agent' field")
-            if agent not in agents:
-                raise ValueError(
-                    f"Mobile device '{device_id}' references unknown agent '{agent}'. "
-                    "Add the agent to config.yaml before assigning devices."
-                )
         return values
 
 
 class ConfigModel(BackendOnlyConfigModel):
     """Complete Ringdown configuration schema."""
 
-    mobile_devices: dict[str, MobileDeviceConfig] = Field(
-        default_factory=dict, alias="mobileDevices"
-    )
     mobile_text: MobileTextConfig = Field(alias="mobileText")
 
 
