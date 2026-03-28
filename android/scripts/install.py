@@ -4,6 +4,7 @@ import argparse
 import os
 import platform
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -66,6 +67,23 @@ def _to_platform_path(path: str) -> str:
     return path.replace("\\", "/")
 
 
+def _to_host_path(path: str) -> Path:
+    raw = path.strip()
+    if not raw:
+        return Path(raw)
+
+    if not IS_WINDOWS and len(raw) >= 2 and raw[1] == ":":
+        drive = raw[0].lower()
+        remainder = raw[2:].lstrip("\\/")
+        remainder = remainder.replace("\\", "/")
+        return Path(f"/mnt/{drive}/{remainder}")
+
+    if IS_WINDOWS:
+        return Path(raw.replace("/", "\\"))
+
+    return Path(raw.replace("\\", "/"))
+
+
 def _gradle_env_and_flags() -> tuple[dict[str, str], list[str]]:
     env = os.environ.copy()
     extra_flags: list[str] = []
@@ -87,6 +105,41 @@ def _gradle_env_and_flags() -> tuple[dict[str, str], list[str]]:
             extra_flags.append(f"-Dorg.gradle.java.home={jdk_path}")
 
     return env, extra_flags
+
+
+def _resolve_adb_binary() -> str:
+    explicit = os.getenv("RINGDOWN_ADB_BIN")
+    if explicit:
+        candidate = _to_host_path(explicit)
+        if candidate.exists():
+            return str(candidate)
+
+    props = _load_local_properties()
+    sdk_candidates = [
+        os.getenv("ANDROID_SDK_ROOT"),
+        os.getenv("ANDROID_HOME"),
+        props.get("sdk.dir"),
+        str(ANDROID_DIR / ".android-sdk"),
+    ]
+
+    adb_names = ("adb.exe", "adb") if (IS_WINDOWS or IS_WSL) else ("adb", "adb.exe")
+    for sdk_dir in sdk_candidates:
+        if not sdk_dir:
+            continue
+        sdk_path = _to_host_path(sdk_dir)
+        for adb_name in adb_names:
+            candidate = sdk_path / "platform-tools" / adb_name
+            if candidate.exists():
+                return str(candidate)
+
+    resolved = shutil.which("adb")
+    if resolved:
+        return resolved
+
+    raise FileNotFoundError(
+        "adb not found. Set RINGDOWN_ADB_BIN, ANDROID_SDK_ROOT, ANDROID_HOME, "
+        "or update android/local.properties with sdk.dir."
+    )
 
 
 def _run_gradle(task_spec: str, env: dict[str, str], extra_flags: list[str]) -> None:
@@ -151,7 +204,8 @@ def main(argv: list[str] | None = None) -> None:
     if not apk_path.exists():
         raise FileNotFoundError(f"APK not found at {apk_path}")
 
-    _run(["adb", "-s", args.device, "install", "-r", str(apk_path)])
+    adb_binary = _resolve_adb_binary()
+    _run([adb_binary, "-s", args.device, "install", "-r", str(apk_path)])
 
     if not args.skip_tests:
         _run_gradle(CONNECTED_TEST_TASK, gradle_env, gradle_flags)
