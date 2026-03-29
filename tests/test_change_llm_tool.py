@@ -45,7 +45,7 @@ class TestChangeLLMTool:
         """Test changing to GPT-5 Instant."""
         result = execute_tool("change_llm", {"model_choice": "gpt-5-instant"})
 
-        assert result["new_model"] == "openai/gpt-5-instant"
+        assert result["new_model"] == "gpt-5-mini"
         assert result["model_label"] == "gpt-5-instant"
         assert result["settings"]["thinking_level"] == "low"
 

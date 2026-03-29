@@ -99,7 +99,7 @@ _MODEL_CONFIGS: dict[str, dict[str, Any]] = {
         "max_tokens": 12000,
     },
     "gpt-5-instant": {
-        "model_id": "openai/gpt-5-instant",
+        "model_id": "gpt-5-mini",
         "label": "gpt-5-instant",
         "temperature": 1.0,
         "max_tokens": 8000,
