@@ -16,6 +16,7 @@ from log_love import setup_logging
 
 from . import settings as _settings
 from . import tool_framework as tf
+from .model_capabilities import should_include_reasoning_effort
 
 # Tool orchestration
 from .tool_runner import ToolRunner  # centralised tool handling
@@ -354,18 +355,10 @@ async def stream_response(
                 messages[0]["content"] = template
 
     def _current_reasoning_effort() -> str | None:
-        value = agent.get("reasoning_effort")
+        value = agent.get("reasoning_effort") or agent.get("thinking_level")
         if not value:
             return None
         return str(value)
-
-    def _model_supports_reasoning_effort(model_name: str) -> bool:
-        lowered = model_name.lower()
-        return (
-            "gpt" in lowered
-            or lowered.startswith("openai/")
-            or lowered.startswith(("o1", "o3", "o4"))
-        )
 
     def _switch_to_backup_model() -> None:
         agent["model"] = backup_model
@@ -440,7 +433,11 @@ async def stream_response(
             "stream": True,
         }
         reasoning_effort = _current_reasoning_effort()
-        if reasoning_effort and _model_supports_reasoning_effort(agent["model"]):
+        if should_include_reasoning_effort(
+            agent["model"],
+            has_tools=bool(tools),
+            effort_level=reasoning_effort,
+        ):
             request_kwargs["reasoning_effort"] = reasoning_effort
 
         pending = acompletion(**request_kwargs)
@@ -1027,6 +1024,11 @@ async def stream_response(
                             agent["model"] = ev.data["new_model"]
                             agent["temperature"] = ev.data["settings"]["temperature"]
                             # Note: max_tokens is not changed during model switch
+                            thinking_level = ev.data["settings"].get("thinking_level")
+                            if thinking_level:
+                                agent["reasoning_effort"] = thinking_level
+                            else:
+                                agent.pop("reasoning_effort", None)
 
                             logger.info(
                                 "Agent configuration updated: model=%s, temperature=%s",

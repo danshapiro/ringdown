@@ -6,8 +6,8 @@ allowing the application to gracefully handle incompatibilities like
 reasoning_effort not being usable with function calling on certain models.
 """
 
-from dataclasses import dataclass, field
 import re
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -141,10 +141,7 @@ def should_include_reasoning_effort(model: str, has_tools: bool, effort_level: s
     if not supports_reasoning_effort(model):
         return False
 
-    if has_tools and not can_use_reasoning_effort_with_tools(model):
-        return False
-
-    return True
+    return not has_tools or can_use_reasoning_effort_with_tools(model)
 
 
 def get_max_tool_id_length(model: str) -> int | None:

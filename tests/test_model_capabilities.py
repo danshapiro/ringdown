@@ -1,15 +1,16 @@
 """Tests for model capabilities registry."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.model_capabilities import (
-    ModelCapabilities,
-    supports_reasoning_effort,
-    can_use_reasoning_effort_with_tools,
-    should_include_reasoning_effort,
-    get_max_tool_id_length,
-    _normalize_model_name,
     _find_capabilities,
+    _normalize_model_name,
+    can_use_reasoning_effort_with_tools,
+    get_max_tool_id_length,
+    should_include_reasoning_effort,
+    supports_reasoning_effort,
 )
 
 
@@ -154,7 +155,8 @@ class TestChatIntegration:
     @pytest.mark.asyncio
     async def test_gpt54_excludes_reasoning_effort_with_tools(self):
         """GPT-5.4 should NOT include reasoning_effort when tools are present."""
-        from unittest.mock import AsyncMock, patch, MagicMock
+        from unittest.mock import patch
+
         from app.chat import stream_response
 
         agent = {
@@ -162,6 +164,7 @@ class TestChatIntegration:
             "prompt": "You are helpful.",
             "temperature": 0.7,
             "max_tokens": 100,
+            "max_history": 100,
             "reasoning_effort": "medium",
             "tools": ["TavilySearch"],
         }
@@ -172,21 +175,21 @@ class TestChatIntegration:
             captured_kwargs.update(kwargs)
 
             async def gen():
-                yield MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))])
+                yield SimpleNamespace(
+                    choices=[SimpleNamespace(delta={"content": "Hello"}, finish_reason="stop")]
+                )
 
             gen.return_value = None
             return gen()
 
-        with patch("app.chat.acompletion", side_effect=mock_acompletion):
-            with patch(
-                "app.chat.tf.get_tools_for_agent",
-                return_value=[{"type": "function", "function": {"name": "test"}}],
-            ):
-                with patch("app.chat.tf.execute_tool", return_value={}):
-                    result = []
-                    async for token in stream_response("Hi", agent):
-                        if isinstance(token, str):
-                            result.append(token)
+        with patch("app.chat.acompletion", side_effect=mock_acompletion), patch(
+            "app.chat.tf.get_tools_for_agent",
+            return_value=[{"type": "function", "function": {"name": "test"}}],
+        ), patch("app.chat.tf.execute_tool", return_value={}):
+            result = []
+            async for token in stream_response("Hi", agent):
+                if isinstance(token, str):
+                    result.append(token)
 
         assert "reasoning_effort" not in captured_kwargs, (
             "reasoning_effort should NOT be included for GPT-5.4 with tools"
@@ -195,7 +198,8 @@ class TestChatIntegration:
     @pytest.mark.asyncio
     async def test_gpt54_includes_reasoning_effort_without_tools(self):
         """GPT-5.4 SHOULD include reasoning_effort when no tools are present."""
-        from unittest.mock import AsyncMock, patch, MagicMock
+        from unittest.mock import patch
+
         from app.chat import stream_response
 
         agent = {
@@ -203,6 +207,7 @@ class TestChatIntegration:
             "prompt": "You are helpful.",
             "temperature": 0.7,
             "max_tokens": 100,
+            "max_history": 100,
             "reasoning_effort": "medium",
         }
 
@@ -212,7 +217,9 @@ class TestChatIntegration:
             captured_kwargs.update(kwargs)
 
             async def gen():
-                yield MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))])
+                yield SimpleNamespace(
+                    choices=[SimpleNamespace(delta={"content": "Hello"}, finish_reason="stop")]
+                )
 
             gen.return_value = None
             return gen()
@@ -230,7 +237,8 @@ class TestChatIntegration:
     @pytest.mark.asyncio
     async def test_gpt5_includes_reasoning_effort_with_tools(self):
         """GPT-5 CAN include reasoning_effort even when tools are present."""
-        from unittest.mock import AsyncMock, patch, MagicMock
+        from unittest.mock import patch
+
         from app.chat import stream_response
 
         agent = {
@@ -238,6 +246,7 @@ class TestChatIntegration:
             "prompt": "You are helpful.",
             "temperature": 0.7,
             "max_tokens": 100,
+            "max_history": 100,
             "reasoning_effort": "high",
             "tools": ["TavilySearch"],
         }
@@ -248,21 +257,21 @@ class TestChatIntegration:
             captured_kwargs.update(kwargs)
 
             async def gen():
-                yield MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))])
+                yield SimpleNamespace(
+                    choices=[SimpleNamespace(delta={"content": "Hello"}, finish_reason="stop")]
+                )
 
             gen.return_value = None
             return gen()
 
-        with patch("app.chat.acompletion", side_effect=mock_acompletion):
-            with patch(
-                "app.chat.tf.get_tools_for_agent",
-                return_value=[{"type": "function", "function": {"name": "test"}}],
-            ):
-                with patch("app.chat.tf.execute_tool", return_value={}):
-                    result = []
-                    async for token in stream_response("Hi", agent):
-                        if isinstance(token, str):
-                            result.append(token)
+        with patch("app.chat.acompletion", side_effect=mock_acompletion), patch(
+            "app.chat.tf.get_tools_for_agent",
+            return_value=[{"type": "function", "function": {"name": "test"}}],
+        ), patch("app.chat.tf.execute_tool", return_value={}):
+            result = []
+            async for token in stream_response("Hi", agent):
+                if isinstance(token, str):
+                    result.append(token)
 
         assert captured_kwargs.get("reasoning_effort") == "high", (
             "reasoning_effort should be included for GPT-5 with tools"
@@ -271,7 +280,8 @@ class TestChatIntegration:
     @pytest.mark.asyncio
     async def test_thinking_level_alias_works(self):
         """thinking_level should work as an alias for reasoning_effort."""
-        from unittest.mock import AsyncMock, patch, MagicMock
+        from unittest.mock import patch
+
         from app.chat import stream_response
 
         agent = {
@@ -279,6 +289,7 @@ class TestChatIntegration:
             "prompt": "You are helpful.",
             "temperature": 0.7,
             "max_tokens": 100,
+            "max_history": 100,
             "thinking_level": "low",
         }
 
@@ -288,7 +299,9 @@ class TestChatIntegration:
             captured_kwargs.update(kwargs)
 
             async def gen():
-                yield MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))])
+                yield SimpleNamespace(
+                    choices=[SimpleNamespace(delta={"content": "Hello"}, finish_reason="stop")]
+                )
 
             gen.return_value = None
             return gen()
@@ -302,3 +315,143 @@ class TestChatIntegration:
         assert captured_kwargs.get("reasoning_effort") == "low", (
             "thinking_level should work as alias for reasoning_effort"
         )
+
+    @pytest.mark.asyncio
+    async def test_change_llm_applies_thinking_level_to_agent(self):
+        """change_llm should update the active agent reasoning level."""
+        from unittest.mock import patch
+
+        from app.chat import stream_response
+        from app.tool_runner import ToolEvent
+
+        agent = {
+            "model": "claude-opus-4-6",
+            "prompt": "You are helpful.",
+            "temperature": 0.7,
+            "max_tokens": 100,
+            "max_history": 100,
+            "tools": ["change_llm"],
+        }
+
+        async def mock_acompletion(**kwargs):
+            async def gen():
+                yield SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta={
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_change_model",
+                                        "function": {
+                                            "name": "change_llm",
+                                            "arguments": '{"model_choice":"gpt-5-high"}',
+                                        },
+                                    }
+                                ]
+                            },
+                            finish_reason="tool_calls",
+                        )
+                    ]
+                )
+
+            return gen()
+
+        async def fake_run(self, tool_name, call_id, args, exec_fn):
+            yield ToolEvent(
+                "result",
+                data={
+                    "action": "model_changed",
+                    "previous_model": "claude-opus-4-6",
+                    "new_model": "openai/gpt-5.2",
+                    "model_label": "gpt-5-high",
+                    "settings": {
+                        "temperature": 1.0,
+                        "max_tokens": 16000,
+                        "thinking_level": "high",
+                    },
+                    "message": "Switched to gpt-5-high.\n\n",
+                },
+            )
+
+        with patch("app.chat.acompletion", side_effect=mock_acompletion), patch(
+            "app.chat.tf.get_tools_for_agent",
+            return_value=[{"type": "function", "function": {"name": "change_llm"}}],
+        ), patch("app.chat.ToolRunner.run", new=fake_run):
+            output = []
+            async for token in stream_response("switch to gpt-5-high", agent):
+                output.append(token)
+
+        assert agent["model"] == "openai/gpt-5.2"
+        assert agent["reasoning_effort"] == "high"
+        assert any(isinstance(token, str) and "Switched to gpt-5-high" in token for token in output)
+
+    @pytest.mark.asyncio
+    async def test_change_llm_clears_reasoning_level_when_missing(self):
+        """change_llm should clear stale reasoning_effort when new model has none."""
+        from unittest.mock import patch
+
+        from app.chat import stream_response
+        from app.tool_runner import ToolEvent
+
+        agent = {
+            "model": "openai/gpt-5.2",
+            "prompt": "You are helpful.",
+            "temperature": 0.7,
+            "max_tokens": 100,
+            "max_history": 100,
+            "reasoning_effort": "high",
+            "tools": ["change_llm"],
+        }
+
+        async def mock_acompletion(**kwargs):
+            async def gen():
+                yield SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta={
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_change_model",
+                                        "function": {
+                                            "name": "change_llm",
+                                            "arguments": '{"model_choice":"sonnet"}',
+                                        },
+                                    }
+                                ]
+                            },
+                            finish_reason="tool_calls",
+                        )
+                    ]
+                )
+
+            return gen()
+
+        async def fake_run(self, tool_name, call_id, args, exec_fn):
+            yield ToolEvent(
+                "result",
+                data={
+                    "action": "model_changed",
+                    "previous_model": "openai/gpt-5.2",
+                    "new_model": "claude-sonnet-4-6",
+                    "model_label": "sonnet",
+                    "settings": {
+                        "temperature": 1.0,
+                        "max_tokens": 12000,
+                    },
+                    "message": "Switched to sonnet.\n\n",
+                },
+            )
+
+        with patch("app.chat.acompletion", side_effect=mock_acompletion), patch(
+            "app.chat.tf.get_tools_for_agent",
+            return_value=[{"type": "function", "function": {"name": "change_llm"}}],
+        ), patch("app.chat.ToolRunner.run", new=fake_run):
+            output = []
+            async for token in stream_response("switch to sonnet", agent):
+                output.append(token)
+
+        assert agent["model"] == "claude-sonnet-4-6"
+        assert "reasoning_effort" not in agent
+        assert any(isinstance(token, str) and "Switched to sonnet" in token for token in output)
