@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 
+import litellm
 import pytest
 from pydantic import ValidationError
 
+import app.chat as chat_module
 from app import memory
 from app import tool_framework as tf
 from app.chat import stream_response
@@ -146,3 +148,45 @@ async def test_stream_response_handles_tool_error(monkeypatch):
     # We should have streamed both the pre-tool content and the final apology.
     assert any("Searching" in t for t in token_list)
     assert any("Sorry" in t for t in token_list)
+
+
+@pytest.mark.asyncio
+async def test_stream_response_applies_backup_reasoning_effort(monkeypatch):
+    """Fallback retries should carry the configured reasoning effort."""
+
+    calls = []
+
+    async def fake_acompletion(*args, **kwargs):
+        calls.append(kwargs.copy())
+        if len(calls) == 1:
+            raise RuntimeError("primary model failed")
+
+        async def _gen():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(message={"role": "assistant", "content": "fallback ok"})]
+            )
+
+        return _gen()
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion, raising=True)
+    monkeypatch.setattr(chat_module, "acompletion", fake_acompletion, raising=True)
+
+    agent_cfg = {
+        "model": "claude-opus-4-6",
+        "temperature": 0.1,
+        "max_tokens": 16,
+        "max_history": 1000,
+        "tools": [],
+        "backup_model": "openai/gpt-5.4",
+        "backup_reasoning_effort": "medium",
+    }
+
+    token_list = []
+    async for tok in stream_response("hello", agent_cfg, []):
+        token_list.append(tok)
+
+    assert calls[0]["model"] == "claude-opus-4-6"
+    assert "reasoning_effort" not in calls[0]
+    assert calls[1]["model"] == "openai/gpt-5.4"
+    assert calls[1]["reasoning_effort"] == "medium"
+    assert any(isinstance(t, str) and "fallback ok" in t for t in token_list)

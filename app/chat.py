@@ -261,6 +261,7 @@ async def stream_response(
     # The agent config may specify an explicit backup model to use
     # when the primary model errors **or** yields zero tokens.
     backup_model: str | None = agent.get("backup_model")
+    backup_reasoning_effort: str | None = agent.get("backup_reasoning_effort")
 
     # Flag so we only fallback once at most.
     used_backup: bool = False
@@ -352,6 +353,29 @@ async def stream_response(
             else:
                 messages[0]["content"] = template
 
+    def _current_reasoning_effort() -> str | None:
+        value = agent.get("reasoning_effort")
+        if not value:
+            return None
+        return str(value)
+
+    def _model_supports_reasoning_effort(model_name: str) -> bool:
+        lowered = model_name.lower()
+        return (
+            "gpt" in lowered
+            or lowered.startswith("openai/")
+            or lowered.startswith(("o1", "o3", "o4"))
+        )
+
+    def _switch_to_backup_model() -> None:
+        agent["model"] = backup_model
+        if "backup_temperature" in agent:
+            agent["temperature"] = agent["backup_temperature"]
+        if "backup_max_tokens" in agent:
+            agent["max_tokens"] = agent["backup_max_tokens"]
+        if backup_reasoning_effort:
+            agent["reasoning_effort"] = backup_reasoning_effort
+
     # Trim very old context to mitigate runaway prompt growth. We retain the
     # system prompt plus the *n* most recent messages, which is sufficient for
     # the short voice-call sessions this app handles.
@@ -404,17 +428,22 @@ async def stream_response(
             else msgs
         )
 
-        pending = acompletion(
-            model=agent["model"],
-            messages=send_msgs,
-            temperature=agent["temperature"],
-            max_tokens=agent["max_tokens"],
-            num_retries=3,
-            fallbacks=agent.get("fallback_models", []),
-            tools=tools if tools else None,
-            tool_choice=choice,
-            stream=True,
-        )
+        request_kwargs = {
+            "model": agent["model"],
+            "messages": send_msgs,
+            "temperature": agent["temperature"],
+            "max_tokens": agent["max_tokens"],
+            "num_retries": 3,
+            "fallbacks": agent.get("fallback_models", []),
+            "tools": tools if tools else None,
+            "tool_choice": choice,
+            "stream": True,
+        }
+        reasoning_effort = _current_reasoning_effort()
+        if reasoning_effort and _model_supports_reasoning_effort(agent["model"]):
+            request_kwargs["reasoning_effort"] = reasoning_effort
+
+        pending = acompletion(**request_kwargs)
 
         resp: Any = await pending if inspect.isawaitable(pending) else pending
 
@@ -643,11 +672,7 @@ async def stream_response(
             )
             if not used_backup and backup_model and backup_model != agent["model"]:
                 logger.warning("Falling back to backup model: %s", backup_model)
-                agent["model"] = backup_model
-                if "backup_temperature" in agent:
-                    agent["temperature"] = agent["backup_temperature"]
-                if "backup_max_tokens" in agent:
-                    agent["max_tokens"] = agent["backup_max_tokens"]
+                _switch_to_backup_model()
                 used_backup = True
                 announce_prefix = f"{backup_model} says:\n"
                 continue
@@ -663,11 +688,7 @@ async def stream_response(
                 logger.warning("Retrying with backup model: %s", backup_model)
 
                 # Switch to backup model and apply optional overrides.
-                agent["model"] = backup_model
-                if "backup_temperature" in agent:
-                    agent["temperature"] = agent["backup_temperature"]
-                if "backup_max_tokens" in agent:
-                    agent["max_tokens"] = agent["backup_max_tokens"]
+                _switch_to_backup_model()
                 used_backup = True
                 announce_prefix = f"{backup_model} says:\n"
                 continue  # restart outer loop with backup model
@@ -774,11 +795,7 @@ async def stream_response(
                 logger.warning("Retrying with backup model: %s", backup_model)
 
                 # Switch to backup model and apply optional overrides.
-                agent["model"] = backup_model
-                if "backup_temperature" in agent:
-                    agent["temperature"] = agent["backup_temperature"]
-                if "backup_max_tokens" in agent:
-                    agent["max_tokens"] = agent["backup_max_tokens"]
+                _switch_to_backup_model()
                 used_backup = True
                 announce_prefix = f"{backup_model} says:\n"
                 continue  # restart outer loop with backup model
@@ -818,11 +835,7 @@ async def stream_response(
                 )
 
                 # Switch to backup model and apply optional overrides.
-                agent["model"] = backup_model
-                if "backup_temperature" in agent:
-                    agent["temperature"] = agent["backup_temperature"]
-                if "backup_max_tokens" in agent:
-                    agent["max_tokens"] = agent["backup_max_tokens"]
+                _switch_to_backup_model()
                 used_backup = True
                 announce_prefix = f"{backup_model} says:\n"
                 continue  # restart outer loop with backup model
