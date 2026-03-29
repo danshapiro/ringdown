@@ -149,6 +149,7 @@ async def twiml(
     # Allow barge-in between assistant turns (long responses)
     attrs["preemptible"] = "true"
     attrs["interruptible"] = "speech"
+    attrs["interruptSensitivity"] = "high"
 
     # Optional STT hints (comma-separated) – improve recognition of domain terms
     if hints := agent.get("hints"):

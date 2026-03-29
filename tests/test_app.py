@@ -83,6 +83,7 @@ def test_twilml_agent_selection():
     # Voice tag from defaults in config.yaml
     if DEFAULT_VOICE:
         assert DEFAULT_VOICE in xml
+    assert 'interruptSensitivity="high"' in xml
 
 
 def test_twilml_unknown_caller():
