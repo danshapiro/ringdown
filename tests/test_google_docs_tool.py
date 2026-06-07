@@ -237,6 +237,124 @@ def test_read_document_mock():
         assert result["content"] == "This is test content."
 
 
+def _doc_with_text(text: str) -> dict:
+    """Build a minimal Docs API response whose body contains a single text run."""
+    return {
+        "documentId": "test_doc_123",
+        "title": "Long Doc",
+        "body": {"content": [{"paragraph": {"elements": [{"textRun": {"content": text}}]}}]},
+    }
+
+
+def test_read_document_windowing_and_metadata():
+    """ReadGoogleDoc should return a bounded window with navigation metadata."""
+    mock_docs_service = MagicMock()
+    mock_drive_service = MagicMock()
+    full_text = "".join(f"line {i}\n" for i in range(2000))  # well over the window
+    mock_docs_service.documents().get().execute.return_value = _doc_with_text(full_text)
+
+    with patch(
+        "app.tools.google_docs._get_services", return_value=(mock_docs_service, mock_drive_service)
+    ):
+        result = tf.execute_tool(
+            "ReadGoogleDoc", {"document_id_or_url": "test_doc_123", "max_chars": 100}
+        )
+
+    assert result["success"] is True
+    assert result["total_chars"] == len(full_text)
+    assert result["offset"] == 0
+    assert result["returned_chars"] == 100
+    assert result["content"] == full_text[:100]
+    assert result["has_more"] is True
+    assert result["next_offset"] == 100
+
+
+def test_read_document_negative_offset_reads_from_end():
+    """A negative offset should return the tail of the document."""
+    mock_docs_service = MagicMock()
+    mock_drive_service = MagicMock()
+    full_text = "abcdefghij" * 100  # 1000 chars
+    mock_docs_service.documents().get().execute.return_value = _doc_with_text(full_text)
+
+    with patch(
+        "app.tools.google_docs._get_services", return_value=(mock_docs_service, mock_drive_service)
+    ):
+        result = tf.execute_tool(
+            "ReadGoogleDoc",
+            {"document_id_or_url": "test_doc_123", "offset": -50, "max_chars": 50000},
+        )
+
+    assert result["offset"] == 950
+    assert result["content"] == full_text[-50:]
+    assert result["has_more"] is False
+    assert result["next_offset"] is None
+
+
+def test_read_document_find_returns_match_windows():
+    """ReadGoogleDoc with 'find' should return context windows around matches."""
+    mock_docs_service = MagicMock()
+    mock_drive_service = MagicMock()
+    full_text = ("filler " * 500) + "the MUSEUM adventure begins" + (" filler" * 500)
+    mock_docs_service.documents().get().execute.return_value = _doc_with_text(full_text)
+
+    with patch(
+        "app.tools.google_docs._get_services", return_value=(mock_docs_service, mock_drive_service)
+    ):
+        result = tf.execute_tool(
+            "ReadGoogleDoc", {"document_id_or_url": "test_doc_123", "find": "museum"}
+        )
+
+    assert result["success"] is True
+    assert result["match_count"] == 1
+    match = result["matches"][0]
+    assert match["match_offset"] == full_text.lower().index("museum")
+    assert "museum adventure begins" in match["snippet"].lower()
+    assert result["more_matches"] is False
+
+
+def test_read_document_formatting_window_clips_runs():
+    """Formatted reads should clip runs to the requested window."""
+    mock_docs_service = MagicMock()
+    mock_drive_service = MagicMock()
+    doc = {
+        "documentId": "test_doc_123",
+        "title": "Styled",
+        "body": {
+            "content": [
+                {
+                    "paragraph": {
+                        "elements": [
+                            {"textRun": {"content": "AAAAA", "textStyle": {"bold": True}}},
+                            {"textRun": {"content": "BBBBB", "textStyle": {"italic": True}}},
+                        ]
+                    }
+                }
+            ]
+        },
+    }
+    mock_docs_service.documents().get().execute.return_value = doc
+
+    with patch(
+        "app.tools.google_docs._get_services", return_value=(mock_docs_service, mock_drive_service)
+    ):
+        result = tf.execute_tool(
+            "ReadGoogleDoc",
+            {
+                "document_id_or_url": "test_doc_123",
+                "include_formatting": True,
+                "offset": 3,
+                "max_chars": 4,
+            },
+        )
+
+    # Window covers chars [3,7): last 2 of run A ("AA") and first 2 of run B ("BB")
+    texts = [entry["text"] for entry in result["content"]]
+    assert texts == ["AA", "BB"]
+    assert result["content"][0]["style"] == {"bold": True}
+    assert result["content"][1]["style"] == {"italic": True}
+    assert result["total_chars"] == 10
+
+
 def test_update_document_mock():
     """Test document updating with mocked Google API - now async execution."""
     # Set agent context

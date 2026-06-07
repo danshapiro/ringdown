@@ -69,6 +69,110 @@ def _collect_plain_text(doc: dict[str, Any]) -> str:
     return "".join(run.get("content", "") for run in _iter_text_runs(doc))
 
 
+def _format_run_entry(text_run: dict[str, Any]) -> dict[str, Any]:
+    """Build a formatted-content entry (text + optional style) for a text run."""
+    entry: dict[str, Any] = {"text": text_run.get("content", "")}
+    style = text_run.get("textStyle", {})
+    if style:
+        entry["style"] = style
+    return entry
+
+
+# Default size of the content window returned by ReadGoogleDoc, in characters.
+# Comfortably under the framework's 200k response cap so a window is never
+# silently truncated, while staying small enough to be context-friendly.
+DEFAULT_READ_WINDOW = 50000
+
+# Characters of surrounding context returned on each side of a `find` match.
+FIND_CONTEXT_CHARS = 1000
+
+# Maximum number of `find` matches returned in a single ReadGoogleDoc call.
+FIND_MAX_MATCHES = 20
+
+
+def _normalize_offset(offset: int, total: int) -> int:
+    """Clamp an offset into [0, total]. Negative offsets count from the end."""
+    if offset < 0:
+        return max(0, total + offset)
+    return min(offset, total)
+
+
+def _window_text(text: str, offset: int, max_chars: int) -> dict[str, Any]:
+    """Return a character window of ``text`` plus navigation metadata."""
+    total = len(text)
+    start = _normalize_offset(offset, total)
+    end = min(start + max_chars, total)
+    chunk = text[start:end]
+    has_more = end < total
+    return {
+        "content": chunk,
+        "total_chars": total,
+        "offset": start,
+        "returned_chars": len(chunk),
+        "has_more": has_more,
+        "next_offset": end if has_more else None,
+    }
+
+
+def _window_runs(
+    runs: list[tuple[str, dict[str, Any]]], start: int, end: int
+) -> list[dict[str, Any]]:
+    """Return formatted run entries overlapping the character span [start, end)."""
+    selected: list[dict[str, Any]] = []
+    pos = 0
+    for text, entry in runs:
+        run_start = pos
+        run_end = pos + len(text)
+        pos = run_end
+        if run_end <= start:
+            continue
+        if run_start >= end:
+            break
+        clip_start = max(start, run_start) - run_start
+        clip_end = min(end, run_end) - run_start
+        clipped = dict(entry)
+        clipped["text"] = text[clip_start:clip_end]
+        selected.append(clipped)
+    return selected
+
+
+def _find_in_text(text: str, needle: str, *, max_chars: int) -> dict[str, Any]:
+    """Return context windows around each (case-insensitive) match of ``needle``."""
+    total = len(text)
+    haystack = text.lower()
+    target = needle.lower()
+    matches: list[dict[str, Any]] = []
+    search_from = 0
+    while len(matches) < FIND_MAX_MATCHES:
+        idx = haystack.find(target, search_from)
+        if idx == -1:
+            break
+        win_start = max(0, idx - FIND_CONTEXT_CHARS)
+        win_end = min(total, idx + len(needle) + FIND_CONTEXT_CHARS)
+        snippet = text[win_start:win_end]
+        if max_chars and len(snippet) > max_chars:
+            snippet = snippet[:max_chars]
+            win_end = win_start + max_chars
+        matches.append(
+            {
+                "match_offset": idx,
+                "window_start": win_start,
+                "window_end": win_end,
+                "snippet": snippet,
+            }
+        )
+        search_from = idx + len(needle)
+
+    more = haystack.find(target, search_from) != -1 if matches else False
+    return {
+        "total_chars": total,
+        "find": needle,
+        "match_count": len(matches),
+        "matches": matches,
+        "more_matches": more,
+    }
+
+
 def set_agent_context(agent_config: dict[str, Any] | None) -> None:
     """Set the current agent configuration in thread-local storage."""
     logger.debug(f"Google Docs: set_agent_context called with config: {agent_config}")
@@ -659,15 +763,44 @@ def search_google_drive(args: SearchDriveArgs) -> dict[str, Any]:
 class ReadDocArgs(BaseModel):
     document_id_or_url: str = Field(..., description="Document ID or Google Docs URL")
     include_formatting: bool = Field(False, description="Include formatting information")
+    offset: int = Field(
+        0,
+        description=(
+            "Character offset to start reading from. Negative values read from the "
+            "end of the document (e.g. -50000 returns the final 50000 characters). "
+            "Use with the 'next_offset'/'total_chars' fields in the response to page "
+            "through long documents."
+        ),
+    )
+    max_chars: int = Field(
+        DEFAULT_READ_WINDOW,
+        gt=0,
+        description=(
+            "Maximum number of characters to return in this call. Large documents are "
+            "returned one window at a time; check 'has_more' and 'next_offset' to continue."
+        ),
+    )
+    find: str | None = Field(
+        None,
+        description=(
+            "Optional text to locate within the document. When set, returns context "
+            "windows (with character offsets) around each match instead of a contiguous "
+            "slice, so you can jump straight to the relevant section of a long document."
+        ),
+    )
 
 
 @register_tool(
     name="ReadGoogleDoc",
-    description="Read the content of a Google Doc or Markdown file",
+    description=(
+        "Read the content of a Google Doc or Markdown file. Supports windowed reads of "
+        "long documents via 'offset'/'max_chars' (negative offset reads from the end) and "
+        "locating text with 'find'."
+    ),
     param_model=ReadDocArgs,
 )
 def read_google_doc(args: ReadDocArgs) -> dict[str, Any]:
-    """Read document content."""
+    """Read document content, with windowing and search for long documents."""
     try:
         docs_service, drive_service = _get_services()
         doc_id = _extract_doc_id(args.document_id_or_url)
@@ -696,38 +829,54 @@ def read_google_doc(args: ReadDocArgs) -> dict[str, Any]:
                 while not done:
                     _, done = downloader.next_chunk()
                 buffer.seek(0)
-                content = buffer.read().decode("utf-8")
+                full_text = buffer.read().decode("utf-8")
 
-                return {
+                base = {
                     "success": True,
                     "document_id": doc_id,
                     "title": title,
-                    "content": content,
                     "url": f"https://drive.google.com/file/d/{doc_id}/view",
                 }
+                if args.find is not None:
+                    return {**base, **_find_in_text(full_text, args.find, max_chars=args.max_chars)}
+                return {**base, **_window_text(full_text, args.offset, args.max_chars)}
 
             raise doc_exc
 
-        if args.include_formatting:
-            content_parts: list[dict[str, Any]] = []
-            for text_run in _iter_text_runs(doc):
-                entry: dict[str, Any] = {"text": text_run.get("content", "")}
-                style = text_run.get("textStyle", {})
-                if style:
-                    entry["style"] = style
-                content_parts.append(entry)
-            content = content_parts
-        else:
-            content = _collect_plain_text(doc)
         title = doc.get("title", "Untitled")
         url = f"https://docs.google.com/document/d/{doc_id}/edit"
-
-        return {
+        base = {
             "success": True,
             "document_id": doc_id,
             "title": title,
-            "content": content,
             "url": url,
+        }
+
+        full_text = _collect_plain_text(doc)
+
+        if args.find is not None:
+            return {**base, **_find_in_text(full_text, args.find, max_chars=args.max_chars)}
+
+        window = _window_text(full_text, args.offset, args.max_chars)
+
+        if args.include_formatting:
+            runs = [
+                (run.get("content", ""), _format_run_entry(run)) for run in _iter_text_runs(doc)
+            ]
+            win_start = window["offset"]
+            win_end = win_start + len(window["content"])
+            content: Any = _window_runs(runs, win_start, win_end)
+        else:
+            content = window["content"]
+
+        return {
+            **base,
+            "content": content,
+            "total_chars": window["total_chars"],
+            "offset": window["offset"],
+            "returned_chars": window["returned_chars"],
+            "has_more": window["has_more"],
+            "next_offset": window["next_offset"],
         }
 
     except Exception as e:
