@@ -3,7 +3,8 @@
 Available tools:
 - CreateGoogleDoc: Create a new Google Doc from markdown content.
 - SearchGoogleDrive: Search Google Drive by title or content.
-- ReadGoogleDoc: Read the content of a Google Doc or Markdown file.
+- ReadGoogleDoc: Read a Google Doc or Markdown file in character windows
+  (offset/max_chars, negative offset reads from the end) or search it with `find`.
 - AppendGoogleDoc: Append content to a Google Doc in the default folder.
 
 Authentication uses the same delegated service-account credential as the Gmail tool.
@@ -79,9 +80,13 @@ def _format_run_entry(text_run: dict[str, Any]) -> dict[str, Any]:
 
 
 # Default size of the content window returned by ReadGoogleDoc, in characters.
-# Comfortably under the framework's 200k response cap so a window is never
-# silently truncated, while staying small enough to be context-friendly.
-DEFAULT_READ_WINDOW = 50000
+# A few pages of prose (~3000 chars/page) -- enough to be useful in one call
+# without flooding the context. Callers can request up to MAX_READ_WINDOW.
+DEFAULT_READ_WINDOW = 12000
+
+# Hard ceiling on a single ReadGoogleDoc window. Matches the tool framework's
+# 200k-character response cap so a requested window is never silently truncated.
+MAX_READ_WINDOW = 200000
 
 # Characters of surrounding context returned on each side of a `find` match.
 FIND_CONTEXT_CHARS = 1000
@@ -767,7 +772,7 @@ class ReadDocArgs(BaseModel):
         0,
         description=(
             "Character offset to start reading from. Negative values read from the "
-            "end of the document (e.g. -50000 returns the final 50000 characters). "
+            "end of the document (e.g. -12000 returns the final 12000 characters). "
             "Use with the 'next_offset'/'total_chars' fields in the response to page "
             "through long documents."
         ),
@@ -775,9 +780,12 @@ class ReadDocArgs(BaseModel):
     max_chars: int = Field(
         DEFAULT_READ_WINDOW,
         gt=0,
+        le=MAX_READ_WINDOW,
         description=(
-            "Maximum number of characters to return in this call. Large documents are "
-            "returned one window at a time; check 'has_more' and 'next_offset' to continue."
+            f"Maximum number of characters to return in this call. Defaults to "
+            f"{DEFAULT_READ_WINDOW} (a few pages of text) and may be raised up to "
+            f"{MAX_READ_WINDOW}. Large documents are returned one window at a time; "
+            "check 'has_more' and 'next_offset' to continue paging."
         ),
     )
     find: str | None = Field(
@@ -793,9 +801,11 @@ class ReadDocArgs(BaseModel):
 @register_tool(
     name="ReadGoogleDoc",
     description=(
-        "Read the content of a Google Doc or Markdown file. Supports windowed reads of "
-        "long documents via 'offset'/'max_chars' (negative offset reads from the end) and "
-        "locating text with 'find'."
+        "Read the content of a Google Doc or Markdown file. By default returns the first "
+        f"{DEFAULT_READ_WINDOW} characters (a few pages); raise 'max_chars' up to "
+        f"{MAX_READ_WINDOW} for more. Page through long documents with 'offset' (a negative "
+        "offset reads from the end) together with the 'next_offset'/'total_chars'/'has_more' "
+        "fields in the response, or jump straight to a section with 'find'."
     ),
     param_model=ReadDocArgs,
 )

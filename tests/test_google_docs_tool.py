@@ -312,6 +312,34 @@ def test_read_document_find_returns_match_windows():
     assert result["more_matches"] is False
 
 
+def test_read_document_default_window_size():
+    """ReadGoogleDoc should default to the configured few-pages window."""
+    mock_docs_service = MagicMock()
+    mock_drive_service = MagicMock()
+    full_text = "x" * (google_docs.DEFAULT_READ_WINDOW + 5000)
+    mock_docs_service.documents().get().execute.return_value = _doc_with_text(full_text)
+
+    with patch(
+        "app.tools.google_docs._get_services", return_value=(mock_docs_service, mock_drive_service)
+    ):
+        result = tf.execute_tool("ReadGoogleDoc", {"document_id_or_url": "test_doc_123"})
+
+    assert result["returned_chars"] == google_docs.DEFAULT_READ_WINDOW
+    assert result["has_more"] is True
+    assert result["next_offset"] == google_docs.DEFAULT_READ_WINDOW
+
+
+def test_read_document_max_chars_capped_at_limit():
+    """max_chars above the 200k ceiling should be rejected by validation."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        tf.execute_tool(
+            "ReadGoogleDoc",
+            {"document_id_or_url": "test_doc_123", "max_chars": google_docs.MAX_READ_WINDOW + 1},
+        )
+
+
 def test_read_document_formatting_window_clips_runs():
     """Formatted reads should clip runs to the requested window."""
     mock_docs_service = MagicMock()
